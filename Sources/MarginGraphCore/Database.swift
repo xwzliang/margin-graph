@@ -217,18 +217,26 @@ public final class Database: @unchecked Sendable {
         )
     }
 
-    public func insertTopic(_ topic: Topic) throws { try writeTopic(topic, replace: false) }
-    public func updateTopic(_ topic: Topic) throws { try writeTopic(topic, replace: true) }
-
-    private func writeTopic(_ topic: Topic, replace: Bool) throws {
-        let verb = replace ? "INSERT OR REPLACE" : "INSERT"
+    public func insertTopic(_ topic: Topic) throws {
         let books = try jsonString(topic.bookMD5List)
-        try withStatement("\(verb) INTO topics(id,title,book_md5_list,created_at,updated_at) VALUES(?,?,?,?,?)") { statement in
+        try withStatement("INSERT INTO topics(id,title,book_md5_list,created_at,updated_at) VALUES(?,?,?,?,?)") { statement in
             bind(topic.id.uuidString, to: 1, in: statement)
             bind(topic.title, to: 2, in: statement)
             bind(books, to: 3, in: statement)
             bind(topic.createdAt.timeIntervalSince1970, to: 4, in: statement)
             bind(topic.updatedAt.timeIntervalSince1970, to: 5, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    public func updateTopic(_ topic: Topic) throws {
+        let books = try jsonString(topic.bookMD5List)
+        try withStatement("UPDATE topics SET title=?,book_md5_list=?,created_at=?,updated_at=? WHERE id=?") { statement in
+            bind(topic.title, to: 1, in: statement)
+            bind(books, to: 2, in: statement)
+            bind(topic.createdAt.timeIntervalSince1970, to: 3, in: statement)
+            bind(topic.updatedAt.timeIntervalSince1970, to: 4, in: statement)
+            bind(topic.id.uuidString, to: 5, in: statement)
             try requireDone(statement)
         }
     }

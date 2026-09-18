@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 public struct OutlineSidebarView: View {
     public var cards: [NoteCard]
@@ -90,6 +91,11 @@ public struct OutlineSidebarView: View {
 
                             Button("Move to End") {
                                 onReorderBefore(row.card.id, nil)
+                            }
+
+                            Button("Copy Deep Link") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(row.card.deepLinkURL.absoluteString, forType: .string)
                             }
 
                             Divider()
