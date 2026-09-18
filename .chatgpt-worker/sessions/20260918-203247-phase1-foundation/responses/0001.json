@@ -1,0 +1,21 @@
+{
+  "protocol_version": 1,
+  "request_id": "0001",
+  "status": "completed",
+  "implementation_commit": "2801f9618d13eafcd7577fe7d4683376dd9f53e1",
+  "summary": "Established the SwiftPM project foundation with core models, thread-safe SQLite storage, SM-2 spaced repetition, a MarginNote 3 SQLite importer, a minimal SwiftUI app shell, and unit tests.",
+  "files_changed": [
+    "Package.swift",
+    "Sources/MarginGraphCore/Models.swift",
+    "Sources/MarginGraphCore/Database.swift",
+    "Sources/MarginGraphCore/SRSEngine.swift",
+    "Sources/MarginGraphCore/MarginNoteImporter.swift",
+    "Sources/MarginGraphApp/MarginGraphApp.swift",
+    "Tests/MarginGraphCoreTests/DatabaseTests.swift",
+    "Tests/MarginGraphCoreTests/SRSEngineTests.swift",
+    "Tests/MarginGraphCoreTests/MarginNoteImporterTests.swift"
+  ],
+  "notes": [
+    "The available execution host is Linux while this package targets macOS and imports CoreGraphics/SwiftUI, so swift test and swift build were not executed locally; the orchestrator should run the requested validation commands on macOS."
+  ]
+}
