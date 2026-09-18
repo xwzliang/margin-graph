@@ -90,9 +90,11 @@ public struct CardEditorSheet: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
 
-                        TextField("Card Title", text: $title)
+                        TextField("Card Title", text: $title, axis: .vertical)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 13))
+                            .lineLimit(2...6)
+                            .padding(.vertical, 2)
                     }
 
                     // Excerpt (Read-only preview from PDF)
@@ -202,7 +204,7 @@ public struct CardEditorSheet: View {
 
     private func saveAndDismiss() {
         var updated = card
-        updated.title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        updated.title = title
         updated.notesText = notesText
         updated.colorIndex = colorIndex
         updated.tags = tags

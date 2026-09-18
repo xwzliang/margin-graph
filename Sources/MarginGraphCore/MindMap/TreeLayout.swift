@@ -7,7 +7,7 @@ public struct TreeLayoutConfiguration: Sendable {
     public var verticalSpacing: CGFloat
 
     public init(
-        nodeSize: CGSize = CGSize(width: 240, height: 120),
+        nodeSize: CGSize = CGSize(width: 220, height: 120),
         horizontalSpacing: CGFloat = 80,
         verticalSpacing: CGFloat = 28
     ) {

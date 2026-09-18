@@ -99,7 +99,8 @@ public struct CardNodeView: View {
                 }
             }
             .padding(9)
-            .frame(minWidth: 220, maxWidth: 220, minHeight: 70, alignment: .topLeading)
+            .frame(width: 220, height: 120, alignment: .topLeading)
+            .clipped()
             .background(cardColors.background)
             .clipShape(RoundedRectangle(cornerRadius: 5))
             .overlay(
@@ -111,7 +112,7 @@ public struct CardNodeView: View {
                 selectionOverlay
             )
             .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1.5)
-            .contentShape(Rectangle())
+            .contentShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
         .contextMenu {

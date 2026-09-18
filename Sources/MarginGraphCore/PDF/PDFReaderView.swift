@@ -27,6 +27,81 @@ public struct PDFJumpTarget: Equatable, Sendable {
     }
 }
 
+public enum PDFHighlightResolver {
+    public static func lineRects(for card: NoteCard, in document: PDFDocument) -> [HighlightRect] {
+        let stored = card.highlightRects.filter {
+            $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
+        }
+        if !stored.isEmpty { return stored }
+
+        if !card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let matches = document.findString(card.highlightText, withOptions: [.caseInsensitive])
+            let expectedPage = card.startPage
+            let preferred = expectedPage.map { expected in
+                matches.filter { selection in
+                    selection.pages.contains { document.index(for: $0) == expected }
+                }
+            } ?? matches
+
+            let candidates = preferred.isEmpty ? matches : preferred
+            let resolved = candidates.flatMap { selection in
+                rects(from: selection, document: document)
+            }
+            if !resolved.isEmpty { return resolved }
+        }
+
+        if let pageIndex = card.startPage,
+           pageIndex >= 0,
+           pageIndex < document.pageCount,
+           let page = document.page(at: pageIndex),
+           let start = card.startPos,
+           let end = card.endPos {
+            let bounds = CGRect(
+                x: min(start.x, end.x),
+                y: min(start.y, end.y),
+                width: abs(end.x - start.x),
+                height: abs(end.y - start.y)
+            )
+            if bounds.width > 0, bounds.height > 0 {
+                if let selection = page.selection(for: bounds) {
+                    let resolved = rects(from: selection, document: document)
+                    if !resolved.isEmpty { return resolved }
+                }
+                return [HighlightRect(
+                    page: pageIndex,
+                    x: bounds.minX,
+                    y: bounds.minY,
+                    width: bounds.width,
+                    height: bounds.height
+                )]
+            }
+        }
+
+        return []
+    }
+
+    private static func rects(from selection: PDFSelection, document: PDFDocument) -> [HighlightRect] {
+        var result: [HighlightRect] = []
+        let lines = selection.selectionsByLine()
+        for line in lines {
+            for page in line.pages {
+                let pageIndex = document.index(for: page)
+                guard pageIndex != NSNotFound else { continue }
+                let bounds = line.bounds(for: page)
+                guard bounds.width > 0, bounds.height > 0 else { continue }
+                result.append(HighlightRect(
+                    page: pageIndex,
+                    x: bounds.minX,
+                    y: bounds.minY,
+                    width: bounds.width,
+                    height: bounds.height
+                ))
+            }
+        }
+        return result
+    }
+}
+
 public struct PDFReaderView: NSViewRepresentable {
     public var manager: PDFDocumentManager
     public var displayMode: PDFReaderDisplayMode
@@ -119,7 +194,9 @@ public struct PDFReaderView: NSViewRepresentable {
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }
             for annotation in page.annotations
-            where annotation.contents == "MarginGraph-card-highlight" || annotation.contents == "MarginGraph-jump" {
+            where annotation.contents == "MarginGraph-card-highlight"
+                || annotation.contents == "MarginGraph-active-highlight"
+                || annotation.contents == "MarginGraph-jump" {
                 page.removeAnnotation(annotation)
             }
         }
@@ -127,25 +204,52 @@ public struct PDFReaderView: NSViewRepresentable {
         for card in cards {
             let matchesBook = card.bookMD5 == manager.md5 ||
                 (card.bookMD5 != nil && (card.bookMD5!.hasPrefix(manager.md5) || manager.md5.hasPrefix(card.bookMD5!)))
-            guard matchesBook,
-                  let pageIndex = card.startPage,
-                  let start = card.startPos,
-                  let end = card.endPos,
-                  let page = document.page(at: pageIndex) else { continue }
+            guard matchesBook else { continue }
 
-            let rect = CGRect(
-                x: min(start.x, end.x),
-                y: min(start.y, end.y),
-                width: abs(end.x - start.x),
-                height: abs(end.y - start.y)
-            )
-            guard rect.width > 0, rect.height > 0 else { continue }
+            let lineRects = PDFHighlightResolver.lineRects(for: card, in: document)
+            guard !lineRects.isEmpty else { continue }
 
-            let annotation = PDFAnnotation(bounds: rect, forType: .square, withProperties: nil)
-            annotation.color = highlightColor.withAlphaComponent(0.35)
-            annotation.contents = "MarginGraph-card-highlight"
-            page.addAnnotation(annotation)
+            let accent = NSColor(MarginNoteTheme.cardColors(for: card.colorIndex).accent)
+            for line in lineRects {
+                guard let page = document.page(at: line.page) else { continue }
+                let rect = CGRect(x: line.x, y: line.y, width: line.width, height: line.height)
+                let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
+                annotation.color = accent.withAlphaComponent(0.40)
+                annotation.contents = "MarginGraph-card-highlight"
+                page.addAnnotation(annotation)
+            }
+
+            if isActive(card: card), let pageIndex = card.startPage,
+               let page = document.page(at: pageIndex) {
+                let pageRects = lineRects
+                    .filter { $0.page == pageIndex }
+                    .map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+                if let first = pageRects.first {
+                    let union = pageRects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -2, dy: -2)
+                    let active = PDFAnnotation(bounds: union, forType: .square, withProperties: nil)
+                    active.color = accent.withAlphaComponent(0.95)
+                    let border = PDFBorder()
+                    border.lineWidth = 1.5
+                    active.border = border
+                    active.contents = "MarginGraph-active-highlight"
+                    page.addAnnotation(active)
+                }
+            }
         }
+    }
+
+    private func isActive(card: NoteCard) -> Bool {
+        guard let jumpTarget, card.startPage == jumpTarget.pageIndex else { return false }
+        guard let start = card.startPos, let end = card.endPos else {
+            return !card.highlightText.isEmpty
+        }
+        let cardBounds = CGRect(
+            x: min(start.x, end.x),
+            y: min(start.y, end.y),
+            width: abs(end.x - start.x),
+            height: abs(end.y - start.y)
+        )
+        return cardBounds.intersects(jumpTarget.bounds) || jumpTarget.bounds.width <= 2
     }
 
     private func jump(_ view: PDFView, to target: PDFJumpTarget) {
@@ -158,13 +262,9 @@ public struct PDFReaderView: NSViewRepresentable {
             destinationPoint = CGPoint(x: pageBounds.midX, y: pageBounds.maxY - 100)
         }
         let destination = PDFDestination(page: page, at: destinationPoint)
-        view.go(to: destination)
-
-        if target.bounds.width > 2 && target.bounds.height > 2 {
-            let annotation = PDFAnnotation(bounds: target.bounds, forType: .square, withProperties: nil)
-            annotation.color = highlightColor
-            annotation.contents = "MarginGraph-jump"
-            page.addAnnotation(annotation)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            view.go(to: destination)
         }
     }
 

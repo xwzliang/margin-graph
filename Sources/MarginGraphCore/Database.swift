@@ -74,6 +74,7 @@ public final class Database: @unchecked Sendable {
             start_page INTEGER, end_page INTEGER, start_x REAL, start_y REAL, end_x REAL, end_y REAL,
             color_index INTEGER NOT NULL, tags TEXT NOT NULL, highlight_pic_hash TEXT,
             created_at REAL NOT NULL, updated_at REAL NOT NULL,
+            highlight_rects TEXT NOT NULL DEFAULT '[]',
             FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_cards_topic ON cards(topic_id);
@@ -90,6 +91,18 @@ public final class Database: @unchecked Sendable {
         );
         CREATE INDEX IF NOT EXISTS idx_review_due ON review_items(due_date);
         """)
+        if try !hasColumn("highlight_rects", in: "cards") {
+            try execute("ALTER TABLE cards ADD COLUMN highlight_rects TEXT NOT NULL DEFAULT '[]';")
+        }
+    }
+
+    private func hasColumn(_ column: String, in table: String) throws -> Bool {
+        try withStatement("PRAGMA table_info(\(table))") { statement in
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if text(statement, 1) == column { return true }
+            }
+            return false
+        }
     }
 
     private func execute(_ sql: String) throws {
@@ -282,10 +295,11 @@ public final class Database: @unchecked Sendable {
     private func writeCard(_ card: NoteCard, replace: Bool) throws {
         let links = try jsonString(card.mindLinks.map(\.uuidString))
         let tags = try jsonString(card.tags)
+        let highlightRects = try jsonString(card.highlightRects)
         let verb = replace ? "INSERT OR REPLACE" : "INSERT"
         let sql = """
-        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at,highlight_rects)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         try withStatement(sql) { statement in
             bind(card.id.uuidString, to: 1, in: statement)
@@ -310,6 +324,7 @@ public final class Database: @unchecked Sendable {
             bind(card.highlightPicHash, to: 20, in: statement)
             bind(card.createdAt.timeIntervalSince1970, to: 21, in: statement)
             bind(card.updatedAt.timeIntervalSince1970, to: 22, in: statement)
+            bind(highlightRects, to: 23, in: statement)
             try requireDone(statement)
         }
     }
@@ -372,6 +387,7 @@ public final class Database: @unchecked Sendable {
 
         let linkStrings = (try? decodeJSON([String].self, text(statement, 9))) ?? []
         let tags = (try? decodeJSON([String].self, text(statement, 18))) ?? []
+        let highlightRects = (try? decodeJSON([HighlightRect].self, text(statement, 22))) ?? []
 
         return NoteCard(
             id: id,
@@ -391,6 +407,7 @@ public final class Database: @unchecked Sendable {
             colorIndex: int(statement, 17) ?? 0,
             tags: tags,
             highlightPicHash: text(statement, 19),
+            highlightRects: highlightRects,
             createdAt: Date(timeIntervalSince1970: double(statement, 20) ?? 0),
             updatedAt: Date(timeIntervalSince1970: double(statement, 21) ?? 0)
         )
