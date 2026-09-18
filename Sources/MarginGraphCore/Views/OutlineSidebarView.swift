@@ -186,7 +186,7 @@ public struct OutlineSidebarView: View {
         return siblings[index - 1]
     }
 
-    private func sortCards(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
+    nonisolated private func sortCards(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
         let ly = lhs.mindPos?.y ?? CGFloat(lhs.createdAt.timeIntervalSince1970)
         let ry = rhs.mindPos?.y ?? CGFloat(rhs.createdAt.timeIntervalSince1970)
         return ly < ry
