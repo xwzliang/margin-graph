@@ -3,17 +3,22 @@ import AppKit
 import UniformTypeIdentifiers
 import MarginGraphCore
 
-enum WorkspaceViewMode: String, CaseIterable, Identifiable {
-    case readerOnly = "Reader"
+public enum WorkspaceViewMode: String, CaseIterable, Identifiable {
+    case readerOnly = "1-View"
     case splitView = "2-View"
     case threeView = "3-View"
     case mindMapOnly = "MindMap"
 
-    var id: String { rawValue }
+    public var id: String { rawValue }
 }
 
 @MainActor
 final class AppModel: ObservableObject {
+    @Published var selectedMainTab: MainNavigationTab = .study
+    @Published var isInStudyWorkspace: Bool = false
+    @Published var isOutlineVisible: Bool = false
+    @Published var workspaceMode: WorkspaceViewMode = .splitView
+
     @Published var topics: [Topic] = []
     @Published var documents: [Document] = []
     @Published var selectedTopicID: UUID?
@@ -26,7 +31,10 @@ final class AppModel: ObservableObject {
     @Published var selectedCardID: UUID?
     @Published var jumpTarget: PDFJumpTarget?
     @Published var dueFlashcards: [NoteCard] = []
+    @Published var cardCounts: [UUID: Int] = [:]
+    @Published var reviewDecks: [ReviewDeckItem] = []
     @Published var isReviewPresented = false
+    @Published var editingCard: NoteCard? = nil
 
     let database: Database
     let mediaStorage: MediaStorage
@@ -34,6 +42,7 @@ final class AppModel: ObservableObject {
     init() {
         database = try! Database()
         mediaStorage = try! MediaStorage()
+        autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
         if selectedTopicID == nil {
             selectedTopicID = topics.first?.id
@@ -45,9 +54,51 @@ final class AppModel: ObservableObject {
         topics.first(where: { $0.id == selectedTopicID })
     }
 
+    func autoImportLiveMarginNoteIfEmpty() {
+        let existingTopics = (try? database.allTopics()) ?? []
+        let existingDocs = (try? database.allDocuments()) ?? []
+        let ahrensUpdated = existingTopics.first(where: { $0.title.contains("Ahrens") })?.updatedAt.timeIntervalSince1970 ?? 0
+        let needsImport = existingTopics.isEmpty || existingDocs.contains(where: { $0.filePath.isEmpty }) || ahrensUpdated < 1_000_000_000
+        guard needsImport else { return }
+
+        let liveCandidates = [
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Library/Application Support/QReader.MarginNoteMac/MarginNotes.sqlite"),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/MarginNotes.sqlite")
+        ]
+
+        for url in liveCandidates where FileManager.default.fileExists(atPath: url.path) {
+            if let result = try? MarginNoteImporter(url: url).importInto(database) {
+                print("Auto-imported live MarginNote 3 database: \(result.topics.count) topics, \(result.documents.count) docs, \(result.cards.count) cards")
+                break
+            }
+        }
+    }
+
     func reloadLibrary() {
         topics = (try? database.allTopics()) ?? []
         documents = (try? database.allDocuments()) ?? []
+
+        var counts: [UUID: Int] = [:]
+        var decks: [ReviewDeckItem] = []
+
+        for topic in topics {
+            let cards = (try? database.cardsForTopic(id: topic.id)) ?? []
+            counts[topic.id] = cards.count
+            let due = (try? database.dueCardsForTopic(id: topic.id)) ?? []
+            decks.append(ReviewDeckItem(
+                id: topic.id,
+                title: topic.title,
+                dueCount: due.count,
+                totalCount: cards.count,
+                topicId: topic.id
+            ))
+        }
+
+        cardCounts = counts
+        reviewDecks = decks
+
         if selectedTopicID == nil || !topics.contains(where: { $0.id == selectedTopicID }) {
             selectedTopicID = topics.first?.id
         }
@@ -58,6 +109,46 @@ final class AppModel: ObservableObject {
         selectedCardID = nil
         jumpTarget = nil
         reloadStudySet()
+    }
+
+    func enterStudyWorkspace(topic: Topic) {
+        selectTopic(topic)
+        workspaceMode = .splitView
+        isInStudyWorkspace = true
+    }
+
+    func exitStudyWorkspace() {
+        isInStudyWorkspace = false
+    }
+
+    func openDocumentInReader(document: Document) {
+        if let matchingTopic = topics.first(where: { topic in
+            topic.bookMD5List.contains { bmd5 in
+                bmd5 == document.md5 || bmd5.hasPrefix(document.md5) || document.md5.hasPrefix(bmd5)
+            }
+        }) {
+            selectedTopicID = matchingTopic.id
+            reloadStudySet()
+        }
+        switchToDocument(document)
+        workspaceMode = .splitView
+        isInStudyWorkspace = true
+    }
+
+    func createTopic() {
+        let newTopic = Topic(title: "New Notebook \(topics.count + 1)")
+        try? database.insertTopic(newTopic)
+        reloadLibrary()
+        enterStudyWorkspace(topic: newTopic)
+    }
+
+    func deleteTopic(_ topic: Topic) {
+        // Detach and clean up topic
+        reloadLibrary()
+    }
+
+    func deleteDocument(_ document: Document) {
+        reloadLibrary()
     }
 
     func reloadStudySet() {
@@ -146,14 +237,15 @@ final class AppModel: ObservableObject {
     }
 
     func select(card: NoteCard) {
+        print("[App] select card: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
         selectedCardID = card.id
         navigateToCard(card)
     }
 
     func navigateToCard(_ card: NoteCard) {
         if let md5 = card.bookMD5,
-           let document = studyDocuments.first(where: { $0.md5 == md5 }),
-           activeDocument?.md5 != md5 {
+           let document = studyDocuments.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }) ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }),
+           activeDocument?.md5 != document.md5 {
             switchToDocument(document)
         }
 
@@ -173,7 +265,9 @@ final class AppModel: ObservableObject {
     }
 
     func deselect() {
+        print("[App] deselect called")
         selectedCardID = nil
+        jumpTarget = nil
     }
 
     func move(cardID: UUID, to position: CGPoint) {
@@ -207,6 +301,16 @@ final class AppModel: ObservableObject {
         reloadStudySet()
     }
 
+    func changeCardColor(cardID: UUID, colorIndex: Int) {
+        try? database.setCardColor(id: cardID, colorIndex: colorIndex)
+        reloadStudySet()
+    }
+
+    func updateCard(_ card: NoteCard) {
+        try? database.updateCard(card)
+        reloadStudySet()
+    }
+
     func reorder(cardID: UUID, before siblingID: UUID?) {
         try? database.reorderCard(id: cardID, before: siblingID)
         reloadStudySet()
@@ -228,7 +332,7 @@ final class AppModel: ObservableObject {
                 : selected
         } else {
             let standard = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/MarginNotes.sqlite")
+                .appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Library/Application Support/QReader.MarginNoteMac/MarginNotes.sqlite")
             if FileManager.default.fileExists(atPath: standard.path) {
                 sourceURL = standard
             }
@@ -262,7 +366,6 @@ final class AppModel: ObservableObject {
         )
     }
 
-
     func exportAnki() {
         guard let topic = selectedTopic else { return }
         saveExport(
@@ -277,13 +380,21 @@ final class AppModel: ObservableObject {
         isReviewPresented = true
     }
 
+    func startReviewForDeck(_ deck: ReviewDeckItem) {
+        if let topicId = deck.topicId,
+           let topic = topics.first(where: { $0.id == topicId }) {
+            selectTopic(topic)
+        }
+        isReviewPresented = true
+    }
+
     func handleDeepLink(_ url: URL) {
         guard let destination = DeepLinkHandler.parse(url) else { return }
 
         switch destination {
         case .openTopic(let topicId):
             guard let topic = topics.first(where: { $0.id == topicId }) else { return }
-            selectTopic(topic)
+            enterStudyWorkspace(topic: topic)
 
         case .openCard(let cardId):
             guard let card = try? database.getCard(id: cardId) else { return }
@@ -292,6 +403,7 @@ final class AppModel: ObservableObject {
                 selectTopic(topic)
             }
             reloadStudySet()
+            isInStudyWorkspace = true
             select(card: card)
         }
     }
@@ -327,7 +439,112 @@ final class AppModel: ObservableObject {
     }
 }
 
-struct DocumentTabsView: View {
+// MARK: - Study Workspace Views
+
+struct StudyWorkspaceHeaderView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            // Back button (<) to Library
+            Button {
+                model.exitStudyWorkspace()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("Back to Notebooks")
+
+            // Undo / Redo
+            HStack(spacing: 4) {
+                Button {} label: {
+                    Image(systemName: "arrow.uturn.backward")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+
+                Button {} label: {
+                    Image(systemName: "arrow.uturn.forward")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            // Outline Toggle
+            Button {
+                model.isOutlineVisible.toggle()
+            } label: {
+                Image(systemName: "list.bullet")
+                    .font(.system(size: 13, weight: model.isOutlineVisible ? .bold : .regular))
+                    .foregroundStyle(model.isOutlineVisible ? Color(red: 0.18, green: 0.65, blue: 0.65) : Color.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(model.isOutlineVisible ? Color(red: 0.18, green: 0.65, blue: 0.65).opacity(0.15) : Color.clear)
+                    )
+            }
+            .buttonStyle(.plain)
+            .help("Toggle Outline")
+
+            // Flashcards Review
+            Button {
+                model.startReview()
+            } label: {
+                Image(systemName: "rectangle.stack.badge.play")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .help("Review Flashcards")
+
+            // View Modes Picker
+            Picker("", selection: $model.workspaceMode) {
+                Text("1-View").tag(WorkspaceViewMode.readerOnly)
+                Text("2-View").tag(WorkspaceViewMode.splitView)
+                Text("3-View").tag(WorkspaceViewMode.threeView)
+                Text("MindMap").tag(WorkspaceViewMode.mindMapOnly)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 240)
+
+            // Export Menu
+            Menu {
+                Button("Export to Markdown…") { model.exportMarkdown() }
+                Button("Export to OPML…") { model.exportOPML() }
+                Button("Export to Anki (TSV)…") { model.exportAnki() }
+                Divider()
+                Button("Import MarginNote 3…") { model.importMarginNote() }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+            }
+            .menuStyle(.borderlessButton)
+
+            Spacer()
+
+            // Document Tabs
+            WorkspaceDocumentTabs(model: model)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(MarginNoteTheme.headerBarBackground)
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundStyle(MarginNoteTheme.separatorColor),
+            alignment: .bottom
+        )
+    }
+}
+
+struct WorkspaceDocumentTabs: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
@@ -339,16 +556,19 @@ struct DocumentTabsView: View {
                             model.switchToDocument(document)
                         } label: {
                             HStack(spacing: 5) {
-                                Image(systemName: "doc")
-                                Text(document.title).lineLimit(1)
+                                Image(systemName: "doc.fill")
+                                    .font(.system(size: 11))
+                                Text(document.title)
+                                    .font(.system(size: 12))
+                                    .lineLimit(1)
                             }
                             .padding(.horizontal, 9)
-                            .padding(.vertical, 5)
+                            .padding(.vertical, 4)
                             .background(
                                 model.activeDocument?.md5 == document.md5
-                                    ? Color.accentColor.opacity(0.18)
+                                    ? Color(red: 0.18, green: 0.65, blue: 0.65).opacity(0.18)
                                     : Color.secondary.opacity(0.08),
-                                in: RoundedRectangle(cornerRadius: 6)
+                                in: RoundedRectangle(cornerRadius: 4)
                             )
                         }
                         .buttonStyle(.plain)
@@ -375,68 +595,76 @@ struct DocumentTabsView: View {
                     model.openPDFPicker(attachToTopic: true)
                 }
             } label: {
-                Image(systemName: "plus")
+                HStack(spacing: 2) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11))
+                    Text("Manage")
+                        .font(.system(size: 12))
+                }
+                .foregroundStyle(.secondary)
             }
             .menuStyle(.borderlessButton)
-            .help("Attach Document…")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(.bar)
     }
 }
 
-struct DocumentPane: View {
+struct StudyWorkspaceView: View {
     @ObservedObject var model: AppModel
-    @State private var tool: PDFSelectionTool = .textSelection
-    @State private var displayMode: PDFReaderDisplayMode = .continuous
-    @State private var highlightColor: Color = .yellow
 
     var body: some View {
         VStack(spacing: 0) {
-            DocumentTabsView(model: model)
-            Divider()
+            StudyWorkspaceHeaderView(model: model)
 
             Group {
-                if let manager = model.manager {
-                    PDFReaderView(
-                        manager: manager,
-                        displayMode: displayMode,
-                        tool: tool,
-                        highlightColor: NSColor(highlightColor),
-                        cards: model.documentCards,
-                        jumpTarget: model.jumpTarget,
-                        onExcerpt: model.createExcerpt
-                    )
-                } else {
-                    ContentUnavailableView(
-                        "Attach or open a PDF",
-                        systemImage: "doc.richtext",
-                        description: Text("Use the + button in the document tab bar.")
-                    )
+                switch model.workspaceMode {
+                case .readerOnly:
+                    pdfPane
+                case .mindMapOnly:
+                    mindMapPane
+                case .splitView:
+                    if model.isOutlineVisible {
+                        HSplitView {
+                            outlinePane
+                                .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
+                            mindMapPane
+                                .frame(minWidth: 340)
+                            pdfPane
+                                .frame(minWidth: 380)
+                        }
+                    } else {
+                        HSplitView {
+                            mindMapPane
+                                .frame(minWidth: 360)
+                            pdfPane
+                                .frame(minWidth: 400)
+                        }
+                    }
+                case .threeView:
+                    HSplitView {
+                        outlinePane
+                            .frame(minWidth: 200, idealWidth: 250, maxWidth: 340)
+                        mindMapPane
+                            .frame(minWidth: 340)
+                        pdfPane
+                            .frame(minWidth: 380)
+                    }
                 }
             }
         }
-        .toolbar {
-            ToolbarItemGroup {
-                Picker("Tool", selection: $tool) {
-                    Text("Text").tag(PDFSelectionTool.textSelection)
-                    Text("Marquee").tag(PDFSelectionTool.rectMarquee)
+        .sheet(item: $model.editingCard) { card in
+            CardEditorSheet(
+                card: card,
+                onSave: { updated in
+                    model.updateCard(updated)
+                },
+                onDelete: { id in
+                    model.delete(cardID: id)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 170)
-
-                ColorPicker("Highlight", selection: $highlightColor)
-                    .labelsHidden()
-            }
+            )
         }
     }
-}
 
-struct MindMapPane: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
+    private var mindMapPane: some View {
         MindMapCanvasView(
             cards: model.mindMapCards,
             links: model.links,
@@ -447,15 +675,20 @@ struct MindMapPane: View {
             },
             onMove: model.move,
             onReparent: model.reparent,
-            onToggleFold: model.toggleFold
+            onToggleFold: model.toggleFold,
+            onChangeColor: { cardID, colorIdx in
+                model.changeCardColor(cardID: cardID, colorIndex: colorIdx)
+            },
+            onDeleteCard: { cardID in
+                model.delete(cardID: cardID)
+            },
+            onEditCard: { card in
+                model.editingCard = card
+            }
         )
     }
-}
 
-struct OutlinePane: View {
-    @ObservedObject var model: AppModel
-
-    var body: some View {
+    private var outlinePane: some View {
         OutlineSidebarView(
             cards: model.mindMapCards,
             selectedCardID: model.selectedCardID,
@@ -467,94 +700,36 @@ struct OutlinePane: View {
             onReorderBefore: model.reorder
         )
     }
-}
 
-struct WorkspaceView: View {
-    @ObservedObject var model: AppModel
-    @State private var mode: WorkspaceViewMode = .splitView
-
-    var body: some View {
-        Group {
-            switch mode {
-            case .readerOnly:
-                DocumentPane(model: model)
-            case .mindMapOnly:
-                MindMapPane(model: model)
-            case .splitView:
-                HSplitView {
-                    DocumentPane(model: model)
-                        .frame(minWidth: 420)
-                    MindMapPane(model: model)
-                        .frame(minWidth: 380)
-                }
-            case .threeView:
-                HSplitView {
-                    OutlinePane(model: model)
-                        .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
-                    DocumentPane(model: model)
-                        .frame(minWidth: 400)
-                    MindMapPane(model: model)
-                        .frame(minWidth: 360)
-                }
-            }
-        }
-        .sheet(isPresented: $model.isReviewPresented) {
-            FlashcardReviewView(
-                cards: model.dueFlashcards,
-                documents: model.studyDocuments,
-                database: model.database,
-                mediaStorage: model.mediaStorage,
-                onJumpToPDF: { card in
-                    model.isReviewPresented = false
-                    model.select(card: card)
-                },
-                onDismiss: {
-                    model.isReviewPresented = false
-                    model.reloadStudySet()
-                }
+    @ViewBuilder
+    private var pdfPane: some View {
+        if let manager = model.manager {
+            MarginNotePDFContainerView(
+                manager: manager,
+                cards: model.documentCards,
+                jumpTarget: model.jumpTarget,
+                onExcerpt: model.createExcerpt
             )
-        }
-        .toolbar {
-            ToolbarItem(placement: .principal) {
-                Picker("View", selection: $mode) {
-                    ForEach(WorkspaceViewMode.allCases) { item in
-                        Text(item.rawValue).tag(item)
-                    }
+        } else {
+            VStack(spacing: 12) {
+                Image(systemName: "doc.richtext")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.secondary)
+                Text("No PDF Document Attached")
+                    .font(.headline)
+                    .foregroundStyle(.secondary)
+                Button("Attach PDF…") {
+                    model.openPDFPicker(attachToTopic: true)
                 }
-                .pickerStyle(.segmented)
-                .frame(width: 360)
+                .buttonStyle(.borderedProminent)
             }
-
-            ToolbarItemGroup {
-                Button {
-                    model.startReview()
-                } label: {
-                    Label("Review Flashcards (\(model.dueFlashcards.count))", systemImage: "rectangle.stack.badge.play")
-                }
-                .keyboardShortcut("r", modifiers: [.command])
-                .disabled(model.dueFlashcards.isEmpty)
-
-                Menu("Import / Export") {
-                    Button("Import MarginNote 3…") { model.importMarginNote() }
-                    Divider()
-                    Button("Export to Markdown…") { model.exportMarkdown() }
-                    Button("Export to OPML…") { model.exportOPML() }
-                    Button("Export to Anki (TSV)…") { model.exportAnki() }
-                }
-
-                Button("Reader") { mode = .readerOnly }
-                    .keyboardShortcut("1", modifiers: [.command])
-                    .hidden()
-                Button("Split") { mode = .splitView }
-                    .keyboardShortcut("2", modifiers: [.command])
-                    .hidden()
-                Button("3-View") { mode = .threeView }
-                    .keyboardShortcut("3", modifiers: [.command])
-                    .hidden()
-            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(white: 0.95))
         }
     }
 }
+
+// MARK: - Main Application Shell
 
 @main
 struct MarginGraphApp: App {
@@ -562,47 +737,91 @@ struct MarginGraphApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NavigationSplitView {
-                List(selection: $model.selectedTopicID) {
-                    Section("Study Sets") {
-                        ForEach(model.topics, id: \.id) { topic in
-                            Button {
-                                model.selectTopic(topic)
-                            } label: {
-                                Label(topic.title, systemImage: "square.grid.2x2")
-                            }
-                            .buttonStyle(.plain)
+            HStack(spacing: 0) {
+                // Left MarginNote 3 Sidebar (shelves only, hidden inside Study Workspace)
+                if !model.isInStudyWorkspace {
+                    MarginNoteSidebar(
+                        selectedTab: $model.selectedMainTab,
+                        onSearch: {},
+                        onHelp: {},
+                        onSettings: {
+                            model.importMarginNote()
                         }
+                    )
+                    .onChange(of: model.selectedMainTab) { _, _ in
+                        model.isInStudyWorkspace = false
                     }
+                    .transition(.move(edge: .leading))
+                }
 
-                    Section("Library") {
-                        ForEach(model.documents, id: \.id) { document in
-                            Button {
-                                model.open(document: document, attachToTopic: false)
-                            } label: {
-                                Label(document.title, systemImage: "doc")
-                            }
-                            .buttonStyle(.plain)
+                // Main Content View
+                Group {
+                    if model.isInStudyWorkspace {
+                        StudyWorkspaceView(model: model)
+                    } else {
+                        switch model.selectedMainTab {
+                        case .document:
+                            DocumentShelfView(
+                                documents: model.documents,
+                                onOpenDocument: { doc in
+                                    model.openDocumentInReader(document: doc)
+                                },
+                                onImportDocument: {
+                                    model.openPDFPicker(attachToTopic: false)
+                                },
+                                onDeleteDocument: { doc in
+                                    model.deleteDocument(doc)
+                                }
+                            )
+                        case .study:
+                            StudyNotebooksView(
+                                topics: model.topics,
+                                documents: model.documents,
+                                cardCounts: model.cardCounts,
+                                onOpenTopic: { topic in
+                                    model.enterStudyWorkspace(topic: topic)
+                                },
+                                onCreateTopic: {
+                                    model.createTopic()
+                                },
+                                onDeleteTopic: { topic in
+                                    model.deleteTopic(topic)
+                                }
+                            )
+                        case .review:
+                            ReviewDecksView(
+                                decks: model.reviewDecks,
+                                onStartReview: { deck in
+                                    model.startReviewForDeck(deck)
+                                }
+                            )
                         }
                     }
                 }
-                .navigationTitle("MarginGraph")
-            } detail: {
-                WorkspaceView(model: model)
+            }
+            .frame(minWidth: 1000, minHeight: 650)
+            .preferredColorScheme(.light)
+            .sheet(isPresented: $model.isReviewPresented) {
+                FlashcardReviewView(
+                    cards: model.dueFlashcards.isEmpty ? model.mindMapCards : model.dueFlashcards,
+                    documents: model.studyDocuments,
+                    database: model.database,
+                    mediaStorage: model.mediaStorage,
+                    onJumpToPDF: { card in
+                        model.isReviewPresented = false
+                        model.isInStudyWorkspace = true
+                        model.select(card: card)
+                    },
+                    onDismiss: {
+                        model.isReviewPresented = false
+                        model.reloadStudySet()
+                    }
+                )
             }
             .onOpenURL { url in
                 model.handleDeepLink(url)
             }
         }
-    }
-}
-
-private extension AppModel {
-    func open(document: Document, attachToTopic: Bool) {
-        if attachToTopic, let topicID = selectedTopicID {
-            try? database.addDocument(to: topicID, md5: document.md5)
-            reloadStudySet()
-        }
-        switchToDocument(document)
+        .windowStyle(.hiddenTitleBar)
     }
 }

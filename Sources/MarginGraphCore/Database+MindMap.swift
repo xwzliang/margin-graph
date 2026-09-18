@@ -65,4 +65,11 @@ public extension Database {
         card.updatedAt = Date()
         try updateCard(card)
     }
+
+    func setCardColor(id: UUID, colorIndex: Int) throws {
+        guard var card = try getCard(id: id) else { return }
+        card.colorIndex = colorIndex
+        card.updatedAt = Date()
+        try updateCard(card)
+    }
 }

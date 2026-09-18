@@ -219,7 +219,7 @@ public final class Database: @unchecked Sendable {
 
     public func insertTopic(_ topic: Topic) throws {
         let books = try jsonString(topic.bookMD5List)
-        try withStatement("INSERT INTO topics(id,title,book_md5_list,created_at,updated_at) VALUES(?,?,?,?,?)") { statement in
+        try withStatement("INSERT OR REPLACE INTO topics(id,title,book_md5_list,created_at,updated_at) VALUES(?,?,?,?,?)") { statement in
             bind(topic.id.uuidString, to: 1, in: statement)
             bind(topic.title, to: 2, in: statement)
             bind(books, to: 3, in: statement)

@@ -34,6 +34,7 @@ public struct PDFReaderView: NSViewRepresentable {
     public var highlightColor: NSColor
     public var cards: [NoteCard]
     public var jumpTarget: PDFJumpTarget?
+    @Binding public var currentPageIndex: Int
     public var onExcerpt: ((PDFExcerpt) -> Void)?
 
     public init(
@@ -43,6 +44,7 @@ public struct PDFReaderView: NSViewRepresentable {
         highlightColor: NSColor = .systemYellow,
         cards: [NoteCard] = [],
         jumpTarget: PDFJumpTarget? = nil,
+        currentPageIndex: Binding<Int> = .constant(0),
         onExcerpt: ((PDFExcerpt) -> Void)? = nil
     ) {
         self.manager = manager
@@ -51,11 +53,12 @@ public struct PDFReaderView: NSViewRepresentable {
         self.highlightColor = highlightColor
         self.cards = cards
         self.jumpTarget = jumpTarget
+        self._currentPageIndex = currentPageIndex
         self.onExcerpt = onExcerpt
     }
 
     public func makeCoordinator() -> Coordinator {
-        Coordinator()
+        Coordinator(self)
     }
 
     public func makeNSView(context: Context) -> InteractivePDFView {
@@ -64,18 +67,28 @@ public struct PDFReaderView: NSViewRepresentable {
         view.displaysPageBreaks = true
         view.document = manager.document
         configure(view)
+        context.coordinator.setupObserver(for: view)
         return view
     }
 
     public func updateNSView(_ view: InteractivePDFView, context: Context) {
+        context.coordinator.parent = self
         if view.document !== manager.document {
             view.document = manager.document
+            context.coordinator.setupObserver(for: view)
         }
 
         view.displayMode = displayMode == .continuous ? .singlePageContinuous : .singlePage
         view.autoScales = true
         configure(view)
         applyCardHighlights(to: view)
+
+        if context.coordinator.lastPageIndex != currentPageIndex {
+            context.coordinator.lastPageIndex = currentPageIndex
+            if let page = view.document?.page(at: currentPageIndex) {
+                view.go(to: page)
+            }
+        }
 
         if context.coordinator.lastJump != jumpTarget, let jumpTarget {
             context.coordinator.lastJump = jumpTarget
@@ -112,7 +125,9 @@ public struct PDFReaderView: NSViewRepresentable {
         }
 
         for card in cards {
-            guard card.bookMD5 == manager.md5,
+            let matchesBook = card.bookMD5 == manager.md5 ||
+                (card.bookMD5 != nil && (card.bookMD5!.hasPrefix(manager.md5) || manager.md5.hasPrefix(card.bookMD5!)))
+            guard matchesBook,
                   let pageIndex = card.startPage,
                   let start = card.startPos,
                   let end = card.endPos,
@@ -135,20 +150,62 @@ public struct PDFReaderView: NSViewRepresentable {
 
     private func jump(_ view: PDFView, to target: PDFJumpTarget) {
         guard let page = view.document?.page(at: target.pageIndex) else { return }
-        let destination = PDFDestination(
-            page: page,
-            at: CGPoint(x: target.bounds.midX, y: target.bounds.midY)
-        )
+        let pageBounds = page.bounds(for: .cropBox)
+        let destinationPoint: CGPoint
+        if target.bounds.width > 2 && target.bounds.height > 2 {
+            destinationPoint = CGPoint(x: target.bounds.midX, y: target.bounds.midY)
+        } else {
+            destinationPoint = CGPoint(x: pageBounds.midX, y: pageBounds.maxY - 100)
+        }
+        let destination = PDFDestination(page: page, at: destinationPoint)
         view.go(to: destination)
 
-        let annotation = PDFAnnotation(bounds: target.bounds, forType: .square, withProperties: nil)
-        annotation.color = highlightColor
-        annotation.contents = "MarginGraph-jump"
-        page.addAnnotation(annotation)
+        if target.bounds.width > 2 && target.bounds.height > 2 {
+            let annotation = PDFAnnotation(bounds: target.bounds, forType: .square, withProperties: nil)
+            annotation.color = highlightColor
+            annotation.contents = "MarginGraph-jump"
+            page.addAnnotation(annotation)
+        }
     }
 
-    public final class Coordinator {
+    @MainActor
+    public final class Coordinator: NSObject {
+        var parent: PDFReaderView
         var lastJump: PDFJumpTarget?
+        var lastPageIndex: Int = 0
+        var observer: NSObjectProtocol?
+
+        init(_ parent: PDFReaderView) {
+            self.parent = parent
+            self.lastPageIndex = 0
+        }
+
+        func setupObserver(for view: InteractivePDFView) {
+            if let observer {
+                NotificationCenter.default.removeObserver(observer)
+            }
+            observer = NotificationCenter.default.addObserver(
+                forName: .PDFViewPageChanged,
+                object: view,
+                queue: .main
+            ) { [weak self, weak view] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let view, let doc = view.document, let current = view.currentPage else { return }
+                    let idx = doc.index(for: current)
+                    if idx != NSNotFound && self.parent.currentPageIndex != idx {
+                        self.lastPageIndex = idx
+                        self.parent.currentPageIndex = idx
+                    }
+                }
+            }
+        }
+    }
+
+    public static func dismantleNSView(_ nsView: InteractivePDFView, coordinator: Coordinator) {
+        if let observer = coordinator.observer {
+            NotificationCenter.default.removeObserver(observer)
+            coordinator.observer = nil
+        }
     }
 }
 

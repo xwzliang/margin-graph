@@ -9,6 +9,9 @@ commands = [
   "swift build",
 ]
 
+[browser]
+transport = "native"
+
 [communication]
 runtime_dir = ".chatgpt-worker"
 retain_on_merge = false

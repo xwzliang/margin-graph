@@ -36,25 +36,42 @@ public struct OutlineSidebarView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
+            // Search Bar
             HStack(spacing: 8) {
-                TextField("Search or #tag", text: $query)
-                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    TextField("Search notes or #tag", text: $query)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 5))
+                .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color(red: 0.85, green: 0.82, blue: 0.77), lineWidth: 0.8))
 
                 Menu {
                     Button("All Colors") { colorFilter = nil }
-                    ForEach(0..<7, id: \.self) { index in
+                    ForEach(0..<6, id: \.self) { index in
                         Button("Color \(index)") { colorFilter = index }
                     }
                 } label: {
                     Image(systemName: colorFilter == nil
                           ? "line.3.horizontal.decrease.circle"
                           : "paintpalette.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(.secondary)
                 }
+                .menuStyle(.borderlessButton)
             }
-            .padding(8)
+            .padding(10)
+            .background(Color(white: 0.97))
 
             Divider()
+                .background(MarginNoteTheme.separatorColor)
 
+            // Rows List
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(flattenedRows, id: \.card.id) { row in
@@ -110,6 +127,7 @@ public struct OutlineSidebarView: View {
             }
         }
         .frame(minWidth: 220)
+        .background(MarginNoteTheme.shelfBackground)
     }
 
     private var filteredCards: [NoteCard] {
@@ -219,12 +237,13 @@ private struct OutlineRow: View {
             if hasChildren {
                 Button(action: onToggleFold) {
                     Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
-                        .font(.caption)
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.secondary)
                 }
                 .buttonStyle(.plain)
-                .frame(width: 18)
+                .frame(width: 16)
             } else {
-                Color.clear.frame(width: 18)
+                Color.clear.frame(width: 16)
             }
 
             Circle()
@@ -232,13 +251,14 @@ private struct OutlineRow: View {
                 .frame(width: 7, height: 7)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(card.title.isEmpty ? "Excerpt" : card.title)
-                    .font(.callout)
+                Text(card.title.isEmpty ? (card.highlightText.isEmpty ? "Note" : card.highlightText) : card.title)
+                    .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                if !card.highlightText.isEmpty {
+                if !card.title.isEmpty && !card.highlightText.isEmpty {
                     Text(card.highlightText)
-                        .font(.caption2)
+                        .font(.system(size: 10))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -246,15 +266,14 @@ private struct OutlineRow: View {
 
             Spacer(minLength: 4)
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 8)
         .padding(.vertical, 5)
-        .background(isSelected ? Color.accentColor.opacity(0.16) : Color.clear)
+        .background(isSelected ? Color(red: 0.18, green: 0.65, blue: 0.65).opacity(0.18) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
     }
 
     private var accentColor: Color {
-        let colors: [Color] = [.yellow, .red, .orange, .green, .blue, .purple, .pink]
-        return colors[abs(card.colorIndex) % colors.count]
+        MarginNoteTheme.cardColors(for: card.colorIndex).accent
     }
 }

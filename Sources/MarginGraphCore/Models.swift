@@ -1,7 +1,7 @@
 import Foundation
 import CoreGraphics
 
-public struct Document: Codable, Hashable, Sendable {
+public struct Document: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var title: String
     public var filePath: String
@@ -19,7 +19,7 @@ public struct Document: Codable, Hashable, Sendable {
     }
 }
 
-public struct Topic: Codable, Hashable, Sendable {
+public struct Topic: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var title: String
     public var bookMD5List: [String]
@@ -51,7 +51,7 @@ public struct HighlightRect: Codable, Hashable, Sendable {
     }
 }
 
-public struct NoteCard: Codable, Hashable, Sendable {
+public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var topicId: UUID
     public var bookMD5: String?

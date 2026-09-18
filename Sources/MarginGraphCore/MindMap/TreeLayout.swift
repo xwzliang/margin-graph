@@ -48,12 +48,14 @@ public enum TreeLayout {
 
         var frames: [UUID: CGRect] = [:]
         var visible = Set<UUID>()
-        var nextY: CGFloat = 0
+        var columnStartX: CGFloat = 40
+        var nextY: CGFloat = 40
+        let maxColumnHeight: CGFloat = 720
 
         @discardableResult
-        func place(_ card: NoteCard, depth: Int) -> CGRect {
+        func place(_ card: NoteCard, depth: Int, baseX: CGFloat) -> CGRect {
             let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
-            let x = CGFloat(depth) * (configuration.nodeSize.width + configuration.horizontalSpacing)
+            let x = baseX + CGFloat(depth) * (configuration.nodeSize.width + configuration.horizontalSpacing)
 
             if card.isFolded || cardChildren.isEmpty {
                 let frame = CGRect(origin: CGPoint(x: x, y: nextY), size: configuration.nodeSize)
@@ -66,7 +68,7 @@ public enum TreeLayout {
             let subtreeStartY = nextY
             var childFrames: [CGRect] = []
             for child in cardChildren where cardByID[child.id] != nil {
-                childFrames.append(place(child, depth: depth + 1))
+                childFrames.append(place(child, depth: depth + 1, baseX: baseX))
             }
 
             let childCenterY: CGFloat
@@ -84,7 +86,11 @@ public enum TreeLayout {
         }
 
         for root in roots {
-            _ = place(root, depth: 0)
+            if nextY >= maxColumnHeight {
+                columnStartX += configuration.nodeSize.width + configuration.horizontalSpacing
+                nextY = 40
+            }
+            _ = place(root, depth: 0, baseX: columnStartX)
         }
 
         return TreeLayoutResult(frames: frames, visibleCardIDs: visible)
@@ -115,6 +121,9 @@ public enum TreeLayout {
     }
 
     private static func cardOrder(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
+        if lhs.startPage != rhs.startPage {
+            return (lhs.startPage ?? 0) < (rhs.startPage ?? 0)
+        }
         if lhs.mindPos?.y != rhs.mindPos?.y {
             return (lhs.mindPos?.y ?? .greatestFiniteMagnitude) < (rhs.mindPos?.y ?? .greatestFiniteMagnitude)
         }
@@ -130,7 +139,7 @@ public struct CanvasViewport: Equatable, Sendable {
     public var viewportSize: CGSize
 
     public init(
-        panOffset: CGPoint = .zero,
+        panOffset: CGPoint = CGPoint(x: 40, y: 40),
         zoomScale: CGFloat = 1,
         viewportSize: CGSize = CGSize(width: 1000, height: 700)
     ) {
@@ -156,7 +165,7 @@ public struct CanvasViewport: Equatable, Sendable {
     public mutating func zoomToFit(nodes: [CGRect], padding: CGFloat = 48) {
         guard let first = nodes.first else {
             zoomScale = 1
-            panOffset = .zero
+            panOffset = CGPoint(x: 40, y: 40)
             return
         }
         let bounds = nodes.dropFirst().reduce(first) { $0.union($1) }
@@ -164,10 +173,23 @@ public struct CanvasViewport: Equatable, Sendable {
         let availableHeight = max(1, viewportSize.height - padding * 2)
         let scaleX = availableWidth / max(1, bounds.width)
         let scaleY = availableHeight / max(1, bounds.height)
-        zoomScale = min(3.0, max(0.1, min(scaleX, scaleY)))
+        let naturalScale = min(scaleX, scaleY)
+        if nodes.count > 15 {
+            zoomScale = min(1.0, max(0.85, naturalScale))
+            panOffset = CGPoint(x: padding, y: padding + 20)
+        } else {
+            zoomScale = min(1.5, max(0.6, naturalScale))
+            panOffset = CGPoint(
+                x: viewportSize.width / 2 - bounds.midX * zoomScale,
+                y: viewportSize.height / 2 - bounds.midY * zoomScale
+            )
+        }
+    }
+
+    public mutating func center(on frame: CGRect) {
         panOffset = CGPoint(
-            x: viewportSize.width / 2 - bounds.midX * zoomScale,
-            y: viewportSize.height / 2 - bounds.midY * zoomScale
+            x: viewportSize.width / 2 - frame.midX * zoomScale,
+            y: viewportSize.height / 2 - frame.midY * zoomScale
         )
     }
 }

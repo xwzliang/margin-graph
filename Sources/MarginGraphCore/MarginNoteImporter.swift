@@ -1,6 +1,7 @@
 import Foundation
 import CoreGraphics
 import SQLite3
+import PDFKit
 
 public struct MarginNoteImportResult: Sendable {
     public var topics: [Topic]
@@ -30,15 +31,77 @@ public final class MarginNoteImporter {
         }
         defer { sqlite3_close(source) }
 
+        let noteRows = try rows(in: source, table: "ZBOOKNOTE")
+        var noteKeyMap: [String: UUID] = [:]
+        var topicToBookMD5s: [String: Set<String>] = [:]
+        for row in noteRows {
+            let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
+            noteKeyMap[key] = stableUUID(key)
+            if let topicKey = first(row, ["ZTOPICID", "ZTOPIC", "ZTOPIC_PK"]),
+               let bookMD5 = first(row, ["ZBOOKMD5", "ZMD5"]) {
+                topicToBookMD5s[topicKey, default: []].insert(bookMD5)
+            }
+        }
+
+        let documentSearchPaths: [URL] = [
+            url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Documents"),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Documents"),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/Documents")
+        ]
+
+        let documents = try rows(in: source, table: "ZBOOK").map { row in
+            let rawKey = first(row, ["ZBOOKID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
+            let rawTitle = first(row, ["ZFILE", "ZTITLE", "ZNAME"]) ?? "Untitled Document"
+            let cleanTitle = rawTitle.hasSuffix(".pdf") ? String(rawTitle.dropLast(4)) : rawTitle
+            var filePath = first(row, ["ZFILEPATH", "ZPATH", "ZLOCALPATH"]) ?? ""
+
+            if filePath.isEmpty || !FileManager.default.fileExists(atPath: filePath) {
+                let fileName = first(row, ["ZFILE", "ZPATH"]) ?? ""
+                if !fileName.isEmpty {
+                    for dir in documentSearchPaths {
+                        let candidate = dir.appendingPathComponent(fileName).path
+                        if FileManager.default.fileExists(atPath: candidate) {
+                            filePath = candidate
+                            break
+                        }
+                    }
+                }
+            }
+
+            let md5 = first(row, ["ZMD5LONG", "ZMD5", "ZBOOKMD5", "ZMD5STRING"]) ?? rawKey
+            var totalPages = Int(first(row, ["ZTOTALPAGES", "ZPAGECOUNT"]) ?? "0") ?? 0
+            if totalPages <= 0, !filePath.isEmpty, let doc = PDFKit.PDFDocument(url: URL(fileURLWithPath: filePath)) {
+                totalPages = doc.pageCount
+            }
+
+            return Document(
+                id: stableUUID(rawKey),
+                title: cleanTitle,
+                filePath: filePath,
+                md5: md5,
+                totalPages: totalPages,
+                lastVisited: parseDate(first(row, ["ZLASTVISITED", "ZLASTOPENDATE"]))
+            )
+        }
+
         let topicRows = try rows(in: source, table: "ZTOPIC")
         var topicKeyMap: [String: UUID] = [:]
         var topics: [Topic] = topicRows.map { row in
             let rawKey = first(row, ["ZTOPICID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let id = stableUUID(rawKey)
             topicKeyMap[rawKey] = id
-            let books = parseStringList(first(row, ["ZBOOKMD5LIST", "ZBOOKLIST", "ZBOOKMD5S"]))
-            let created = parseDate(first(row, ["ZCREATEDAT", "ZCREATEDATE", "ZCREATED"])) ?? Date()
-            let updated = parseDate(first(row, ["ZUPDATEDAT", "ZMODIFIEDDATE", "ZUPDATED"])) ?? created
+            var books = parseStringList(first(row, ["ZBOOKMD5LIST", "ZBOOKLIST", "ZBOOKMD5S"]))
+                .map { $0.replacingOccurrences(of: "BREAK_", with: "") }
+            if let localMD5 = first(row, ["ZLOCALBOOKMD5"]), !localMD5.isEmpty, !books.contains(localMD5) {
+                books.append(localMD5)
+            }
+            if let noteBooks = topicToBookMD5s[rawKey] {
+                for nb in noteBooks where !books.contains(nb) {
+                    books.append(nb)
+                }
+            }
+            let created = parseDate(first(row, ["ZDATE", "ZCREATEDAT", "ZCREATEDATE", "ZCREATED"])) ?? Date()
+            let updated = parseDate(first(row, ["ZLASTVISIT", "ZHISTORYDATE", "ZUPDATEDAT", "ZMODIFIEDDATE", "ZUPDATED"])) ?? created
             return Topic(
                 id: id,
                 title: first(row, ["ZTITLE", "ZNAME"]) ?? "Untitled Notebook",
@@ -48,29 +111,10 @@ public final class MarginNoteImporter {
             )
         }
 
-        let documents = try rows(in: source, table: "ZBOOK").map { row in
-            let rawKey = first(row, ["ZBOOKID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
-            return Document(
-                id: stableUUID(rawKey),
-                title: first(row, ["ZTITLE", "ZNAME"]) ?? "Untitled Document",
-                filePath: first(row, ["ZFILEPATH", "ZPATH", "ZLOCALPATH"]) ?? "",
-                md5: first(row, ["ZMD5", "ZBOOKMD5", "ZMD5STRING"]) ?? rawKey,
-                totalPages: Int(first(row, ["ZTOTALPAGES", "ZPAGECOUNT"]) ?? "0") ?? 0,
-                lastVisited: parseDate(first(row, ["ZLASTVISITED", "ZLASTOPENDATE"]))
-            )
-        }
-
         if topics.isEmpty {
             topics = [Topic(title: "Imported Notes")]
         }
         let fallbackTopic = topics[0].id
-
-        let noteRows = try rows(in: source, table: "ZBOOKNOTE")
-        var noteKeyMap: [String: UUID] = [:]
-        for row in noteRows {
-            let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
-            noteKeyMap[key] = stableUUID(key)
-        }
 
         var cards: [NoteCard] = []
         for row in noteRows {
@@ -179,7 +223,7 @@ public final class MarginNoteImporter {
 
     private func parseDate(_ raw: String?) -> Date? {
         guard let raw, let value = Double(raw) else { return nil }
-        if value > 100_000_000 {
+        if value > 1_200_000_000 {
             return Date(timeIntervalSince1970: value)
         }
         return Date(timeIntervalSinceReferenceDate: value)
