@@ -1,0 +1,19 @@
+{
+  "protocol_version": 1,
+  "request_id": "0001",
+  "status": "completed",
+  "finished": true,
+  "implementation_commit": "7325a65b015f16304a54a54c56c51bebaaf51409",
+  "finish_message": "Phase 4 multi-document study sets, workspace tabs, synchronized navigation, MarginNote import action, and Markdown/OPML exporters are complete and pushed.",
+  "summary": "Added topic document attach/detach/query APIs, Markdown and OPML hierarchy exporters, selected-study-set state, multi-document PDF tabs with attach/detach controls, automatic card-driven document switching and PDF jumps, workspace mode controls with keyboard shortcuts, MarginNote 3 import and Markdown/OPML export actions, and StudySet tests.",
+  "files_changed": [
+    "Sources/MarginGraphCore/Database+StudySet.swift",
+    "Sources/MarginGraphCore/Export/MarkdownExporter.swift",
+    "Sources/MarginGraphCore/Export/OPMLExporter.swift",
+    "Sources/MarginGraphApp/MarginGraphApp.swift",
+    "Tests/MarginGraphCoreTests/StudySetTests.swift"
+  ],
+  "notes": [
+    "The implementation targets macOS SwiftUI/AppKit/PDFKit. The available execution environment here does not provide the macOS SDK, so swift test and swift build were not run locally; the orchestrator should run both validation commands on macOS."
+  ]
+}
