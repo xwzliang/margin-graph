@@ -82,6 +82,12 @@ public struct CardNodeView: View {
         .shadow(color: .black.opacity(0.08), radius: 5, y: 2)
         .contentShape(Rectangle())
         .onTapGesture(perform: onSelect)
+        .contextMenu {
+            Button("Copy Deep Link") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(card.deepLinkURL.absoluteString, forType: .string)
+            }
+        }
     }
 
     private var accentColor: some View {
