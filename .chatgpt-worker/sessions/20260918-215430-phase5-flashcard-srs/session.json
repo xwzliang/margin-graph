@@ -1,0 +1,10 @@
+{
+  "protocol_version": 1,
+  "session_id": "20260918-215430-phase5-flashcard-srs",
+  "repository": "xwzliang/margin-graph",
+  "task_branch": "chatgpt-worker/phase5-flashcard-srs",
+  "status": "waiting_for_worker",
+  "current_request": 1,
+  "last_tested_commit": null,
+  "max_iterations": 5
+}
