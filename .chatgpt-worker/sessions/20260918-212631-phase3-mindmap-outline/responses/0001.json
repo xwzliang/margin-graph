@@ -1,0 +1,21 @@
+{
+  "protocol_version": 1,
+  "request_id": "0001",
+  "status": "completed",
+  "finished": true,
+  "implementation_commit": "ad29fc17d08c07e9117b565731c7b7b6324b02df",
+  "finish_message": "Phase 3 MindMap canvas, synchronized outline, and multi-pane workspace implementation is complete and pushed.",
+  "summary": "Added hierarchical tree layout and viewport geometry, an interactive pannable/zoomable MindMap canvas with card nodes, mini-map, folding, persisted movement/reparenting and relation links, a synchronized outline with filtering and hierarchy actions, unified selection across PDF/MindMap/Outline, multi-pane workspace modes, and unit tests for layout, folding, viewport transforms, and database tree mutations.",
+  "files_changed": [
+    "Sources/MarginGraphCore/MindMap/TreeLayout.swift",
+    "Sources/MarginGraphCore/Database+MindMap.swift",
+    "Sources/MarginGraphCore/MindMap/CardNodeView.swift",
+    "Sources/MarginGraphCore/MindMap/MindMapCanvasView.swift",
+    "Sources/MarginGraphCore/Views/OutlineSidebarView.swift",
+    "Sources/MarginGraphApp/MarginGraphApp.swift",
+    "Tests/MarginGraphCoreTests/MindMapTests.swift"
+  ],
+  "notes": [
+    "The implementation targets macOS SwiftUI/AppKit/CoreGraphics. The available execution environment here does not provide the macOS SDK, so swift test and swift build were not run locally; the orchestrator should run both validation commands on macOS."
+  ]
+}
