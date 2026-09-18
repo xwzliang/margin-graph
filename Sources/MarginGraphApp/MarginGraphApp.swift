@@ -3,11 +3,11 @@ import AppKit
 import UniformTypeIdentifiers
 import MarginGraphCore
 
-enum WorkspaceMode: String, CaseIterable, Identifiable {
-    case document = "Document"
-    case mindMap = "MindMap"
-    case split = "2-View"
-    case triple = "3-View"
+enum WorkspaceViewMode: String, CaseIterable, Identifiable {
+    case readerOnly = "Reader"
+    case splitView = "2-View"
+    case threeView = "3-View"
+    case mindMapOnly = "MindMap"
 
     var id: String { rawValue }
 }
@@ -16,6 +16,8 @@ enum WorkspaceMode: String, CaseIterable, Identifiable {
 final class AppModel: ObservableObject {
     @Published var topics: [Topic] = []
     @Published var documents: [Document] = []
+    @Published var selectedTopicID: UUID?
+    @Published var studyDocuments: [Document] = []
     @Published var activeDocument: Document?
     @Published var manager: PDFDocumentManager?
     @Published var documentCards: [NoteCard] = []
@@ -31,40 +33,66 @@ final class AppModel: ObservableObject {
         database = try! Database()
         mediaStorage = try! MediaStorage()
         reloadLibrary()
-        reloadMindMap()
+        if selectedTopicID == nil {
+            selectedTopicID = topics.first?.id
+        }
+        reloadStudySet()
+    }
+
+    var selectedTopic: Topic? {
+        topics.first(where: { $0.id == selectedTopicID })
     }
 
     func reloadLibrary() {
         topics = (try? database.allTopics()) ?? []
         documents = (try? database.allDocuments()) ?? []
+        if selectedTopicID == nil || !topics.contains(where: { $0.id == selectedTopicID }) {
+            selectedTopicID = topics.first?.id
+        }
     }
 
-    func reloadMindMap() {
-        guard let topic = topics.first else {
+    func selectTopic(_ topic: Topic) {
+        selectedTopicID = topic.id
+        selectedCardID = nil
+        jumpTarget = nil
+        reloadStudySet()
+    }
+
+    func reloadStudySet() {
+        guard let topicID = selectedTopicID else {
+            studyDocuments = []
             mindMapCards = []
             links = []
             return
         }
-        mindMapCards = (try? database.cardsForTopic(id: topic.id)) ?? []
-        links = (try? database.linksForTopic(id: topic.id)) ?? []
+        studyDocuments = (try? database.documentsForTopic(id: topicID)) ?? []
+        mindMapCards = (try? database.cardsForTopic(id: topicID)) ?? []
+        links = (try? database.linksForTopic(id: topicID)) ?? []
+
+        if let activeDocument, studyDocuments.contains(where: { $0.md5 == activeDocument.md5 }) {
+            reloadDocumentCards()
+        } else if let first = studyDocuments.first {
+            switchToDocument(first)
+        } else {
+            activeDocument = nil
+            manager = nil
+            documentCards = []
+        }
     }
 
-    func openPDFPicker() {
+    func openPDFPicker(attachToTopic: Bool = true) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.pdf]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        openPDF(url: url)
+        openPDF(url: url, attachToTopic: attachToTopic)
     }
 
-    func open(document: Document) {
-        openPDF(url: URL(fileURLWithPath: document.filePath))
-    }
-
-    func openPDF(url: URL) {
+    func openPDF(url: URL, attachToTopic: Bool = true) {
         guard let manager = try? PDFDocumentManager(url: url) else { return }
-        let document = Document(
+        let existing = try? database.getDocumentByMD5(md5: manager.md5)
+        let document = existing ?? Document(
             title: manager.title,
             filePath: url.path,
             md5: manager.md5,
@@ -72,10 +100,36 @@ final class AppModel: ObservableObject {
             lastVisited: Date()
         )
         try? database.insertDocument(document)
-        activeDocument = document
-        self.manager = manager
-        reloadDocumentCards()
+
+        if attachToTopic, let topicID = selectedTopicID {
+            try? database.addDocument(to: topicID, md5: document.md5)
+        }
+
         reloadLibrary()
+        reloadStudySet()
+        switchToDocument(document)
+    }
+
+    func switchToDocument(_ document: Document) {
+        guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath)) else { return }
+        activeDocument = document
+        manager = loaded
+        reloadDocumentCards()
+    }
+
+    func attachExistingDocument(_ document: Document) {
+        guard let topicID = selectedTopicID else { return }
+        try? database.addDocument(to: topicID, md5: document.md5)
+        reloadLibrary()
+        reloadStudySet()
+        switchToDocument(document)
+    }
+
+    func detachDocument(_ document: Document) {
+        guard let topicID = selectedTopicID else { return }
+        try? database.removeDocument(from: topicID, md5: document.md5)
+        reloadLibrary()
+        reloadStudySet()
     }
 
     func createExcerpt(_ excerpt: PDFExcerpt) {
@@ -83,24 +137,35 @@ final class AppModel: ObservableObject {
         let coordinator = ExcerptCoordinator(database: database, mediaStorage: mediaStorage)
         guard let card = try? coordinator.createCard(from: excerpt, topicId: topic.id) else { return }
         selectedCardID = card.id
-        reloadDocumentCards()
-        reloadMindMap()
+        reloadStudySet()
+        navigateToCard(card)
     }
 
     func select(card: NoteCard) {
         selectedCardID = card.id
-        guard let page = card.startPage,
-              let start = card.startPos,
-              let end = card.endPos else { return }
-        jumpTarget = PDFJumpTarget(
-            pageIndex: page,
-            bounds: CGRect(
+        navigateToCard(card)
+    }
+
+    func navigateToCard(_ card: NoteCard) {
+        if let md5 = card.bookMD5,
+           let document = studyDocuments.first(where: { $0.md5 == md5 }),
+           activeDocument?.md5 != md5 {
+            switchToDocument(document)
+        }
+
+        guard let page = card.startPage else { return }
+        let bounds: CGRect
+        if let start = card.startPos, let end = card.endPos {
+            bounds = CGRect(
                 x: min(start.x, end.x),
                 y: min(start.y, end.y),
                 width: abs(end.x - start.x),
                 height: abs(end.y - start.y)
             )
-        )
+        } else {
+            bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+        }
+        jumpTarget = PDFJumpTarget(pageIndex: page, bounds: bounds)
     }
 
     func deselect() {
@@ -109,47 +174,109 @@ final class AppModel: ObservableObject {
 
     func move(cardID: UUID, to position: CGPoint) {
         try? database.moveCard(id: cardID, to: position)
-        reloadMindMap()
+        reloadStudySet()
     }
 
     func reparent(cardID: UUID, to parentID: UUID?) {
         try? database.reparentCard(id: cardID, to: parentID)
-        reloadMindMap()
+        reloadStudySet()
     }
 
     func toggleFold(cardID: UUID, folded: Bool) {
         try? database.setCardFolded(id: cardID, folded: folded)
-        reloadMindMap()
+        reloadStudySet()
     }
 
     func indent(cardID: UUID, under siblingID: UUID) {
         try? database.indentCard(id: cardID, under: siblingID)
-        reloadMindMap()
+        reloadStudySet()
     }
 
     func outdent(cardID: UUID) {
         try? database.outdentCard(id: cardID)
-        reloadMindMap()
+        reloadStudySet()
     }
 
     func delete(cardID: UUID) {
         try? database.deleteCard(id: cardID)
         if selectedCardID == cardID { selectedCardID = nil }
-        reloadDocumentCards()
-        reloadMindMap()
+        reloadStudySet()
     }
 
     func reorder(cardID: UUID, before siblingID: UUID?) {
         try? database.reorderCard(id: cardID, before: siblingID)
-        reloadMindMap()
+        reloadStudySet()
+    }
+
+    func importMarginNote() {
+        let panel = NSOpenPanel()
+        panel.allowedFileTypes = ["sqlite"]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+
+        var sourceURL: URL?
+        if panel.runModal() == .OK, let selected = panel.url {
+            var isDirectory: ObjCBool = false
+            FileManager.default.fileExists(atPath: selected.path, isDirectory: &isDirectory)
+            sourceURL = isDirectory.boolValue
+                ? selected.appendingPathComponent("MarginNotes.sqlite")
+                : selected
+        } else {
+            let standard = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/MarginNotes.sqlite")
+            if FileManager.default.fileExists(atPath: standard.path) {
+                sourceURL = standard
+            }
+        }
+
+        guard let sourceURL,
+              let result = try? MarginNoteImporter(url: sourceURL).importInto(database) else { return }
+
+        reloadLibrary()
+        if let first = result.topics.first {
+            selectedTopicID = first.id
+        }
+        reloadStudySet()
+    }
+
+    func exportMarkdown() {
+        guard let topic = selectedTopic else { return }
+        saveExport(
+            content: MarkdownExporter.export(topic: topic, cards: mindMapCards),
+            suggestedName: "\(safeFilename(topic.title)).md",
+            type: UTType(filenameExtension: "md") ?? .plainText
+        )
+    }
+
+    func exportOPML() {
+        guard let topic = selectedTopic else { return }
+        saveExport(
+            content: OPMLExporter.export(topic: topic, cards: mindMapCards),
+            suggestedName: "\(safeFilename(topic.title)).opml",
+            type: UTType(filenameExtension: "opml") ?? .xml
+        )
+    }
+
+    private func saveExport(content: String, suggestedName: String, type: UTType) {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [type]
+        panel.nameFieldStringValue = suggestedName
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        try? content.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func safeFilename(_ value: String) -> String {
+        value.replacingOccurrences(of: "/", with: "-")
     }
 
     private func ensureTopic() -> Topic {
-        if let topic = topics.first { return topic }
+        if let topic = selectedTopic { return topic }
         let topic = Topic(title: "Inbox")
         try? database.insertTopic(topic)
         reloadLibrary()
-        reloadMindMap()
+        selectedTopicID = topic.id
+        reloadStudySet()
         return topic
     }
 
@@ -162,6 +289,65 @@ final class AppModel: ObservableObject {
     }
 }
 
+struct DocumentTabsView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    ForEach(model.studyDocuments, id: \.id) { document in
+                        Button {
+                            model.switchToDocument(document)
+                        } label: {
+                            HStack(spacing: 5) {
+                                Image(systemName: "doc")
+                                Text(document.title).lineLimit(1)
+                            }
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                model.activeDocument?.md5 == document.md5
+                                    ? Color.accentColor.opacity(0.18)
+                                    : Color.secondary.opacity(0.08),
+                                in: RoundedRectangle(cornerRadius: 6)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .contextMenu {
+                            Button("Detach from Study Set") {
+                                model.detachDocument(document)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Menu {
+                if !model.documents.isEmpty {
+                    Section("Existing Documents") {
+                        ForEach(model.documents, id: \.id) { document in
+                            Button(document.title) {
+                                model.attachExistingDocument(document)
+                            }
+                        }
+                    }
+                }
+                Button("Open New PDF…") {
+                    model.openPDFPicker(attachToTopic: true)
+                }
+            } label: {
+                Image(systemName: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .help("Attach Document…")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+}
+
 struct DocumentPane: View {
     @ObservedObject var model: AppModel
     @State private var tool: PDFSelectionTool = .textSelection
@@ -169,36 +355,41 @@ struct DocumentPane: View {
     @State private var highlightColor: Color = .yellow
 
     var body: some View {
-        Group {
-            if let manager = model.manager {
-                PDFReaderView(
-                    manager: manager,
-                    displayMode: displayMode,
-                    tool: tool,
-                    highlightColor: NSColor(highlightColor),
-                    cards: model.documentCards,
-                    jumpTarget: model.jumpTarget,
-                    onExcerpt: model.createExcerpt
-                )
-                .toolbar {
-                    ToolbarItemGroup {
-                        Picker("Tool", selection: $tool) {
-                            Text("Text").tag(PDFSelectionTool.textSelection)
-                            Text("Marquee").tag(PDFSelectionTool.rectMarquee)
-                        }
-                        .pickerStyle(.segmented)
-                        .frame(width: 170)
+        VStack(spacing: 0) {
+            DocumentTabsView(model: model)
+            Divider()
 
-                        ColorPicker("Highlight", selection: $highlightColor)
-                            .labelsHidden()
-                    }
+            Group {
+                if let manager = model.manager {
+                    PDFReaderView(
+                        manager: manager,
+                        displayMode: displayMode,
+                        tool: tool,
+                        highlightColor: NSColor(highlightColor),
+                        cards: model.documentCards,
+                        jumpTarget: model.jumpTarget,
+                        onExcerpt: model.createExcerpt
+                    )
+                } else {
+                    ContentUnavailableView(
+                        "Attach or open a PDF",
+                        systemImage: "doc.richtext",
+                        description: Text("Use the + button in the document tab bar.")
+                    )
                 }
-            } else {
-                ContentUnavailableView(
-                    "Open a PDF to start reading",
-                    systemImage: "doc.richtext",
-                    description: Text("Use Open PDF in the library sidebar.")
-                )
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup {
+                Picker("Tool", selection: $tool) {
+                    Text("Text").tag(PDFSelectionTool.textSelection)
+                    Text("Marquee").tag(PDFSelectionTool.rectMarquee)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 170)
+
+                ColorPicker("Highlight", selection: $highlightColor)
+                    .labelsHidden()
             }
         }
     }
@@ -242,23 +433,23 @@ struct OutlinePane: View {
 
 struct WorkspaceView: View {
     @ObservedObject var model: AppModel
-    @State private var mode: WorkspaceMode = .split
+    @State private var mode: WorkspaceViewMode = .splitView
 
     var body: some View {
         Group {
             switch mode {
-            case .document:
+            case .readerOnly:
                 DocumentPane(model: model)
-            case .mindMap:
+            case .mindMapOnly:
                 MindMapPane(model: model)
-            case .split:
+            case .splitView:
                 HSplitView {
                     DocumentPane(model: model)
                         .frame(minWidth: 420)
                     MindMapPane(model: model)
                         .frame(minWidth: 380)
                 }
-            case .triple:
+            case .threeView:
                 HSplitView {
                     OutlinePane(model: model)
                         .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
@@ -272,12 +463,31 @@ struct WorkspaceView: View {
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("View", selection: $mode) {
-                    ForEach(WorkspaceMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+                    ForEach(WorkspaceViewMode.allCases) { item in
+                        Text(item.rawValue).tag(item)
                     }
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 330)
+                .frame(width: 360)
+            }
+
+            ToolbarItemGroup {
+                Menu("Import / Export") {
+                    Button("Import MarginNote 3…") { model.importMarginNote() }
+                    Divider()
+                    Button("Export to Markdown…") { model.exportMarkdown() }
+                    Button("Export to OPML…") { model.exportOPML() }
+                }
+
+                Button("Reader") { mode = .readerOnly }
+                    .keyboardShortcut("1", modifiers: [.command])
+                    .hidden()
+                Button("Split") { mode = .splitView }
+                    .keyboardShortcut("2", modifiers: [.command])
+                    .hidden()
+                Button("3-View") { mode = .threeView }
+                    .keyboardShortcut("3", modifiers: [.command])
+                    .hidden()
             }
         }
     }
@@ -290,23 +500,22 @@ struct MarginGraphApp: App {
     var body: some Scene {
         WindowGroup {
             NavigationSplitView {
-                List {
-                    Button {
-                        model.openPDFPicker()
-                    } label: {
-                        Label("Open PDF…", systemImage: "folder")
-                    }
-
-                    Section("Notebooks") {
+                List(selection: $model.selectedTopicID) {
+                    Section("Study Sets") {
                         ForEach(model.topics, id: \.id) { topic in
-                            Label(topic.title, systemImage: "square.grid.2x2")
+                            Button {
+                                model.selectTopic(topic)
+                            } label: {
+                                Label(topic.title, systemImage: "square.grid.2x2")
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
 
-                    Section("Documents") {
+                    Section("Library") {
                         ForEach(model.documents, id: \.id) { document in
                             Button {
-                                model.open(document: document)
+                                model.open(document: document, attachToTopic: false)
                             } label: {
                                 Label(document.title, systemImage: "doc")
                             }
@@ -319,5 +528,15 @@ struct MarginGraphApp: App {
                 WorkspaceView(model: model)
             }
         }
+    }
+}
+
+private extension AppModel {
+    func open(document: Document, attachToTopic: Bool) {
+        if attachToTopic, let topicID = selectedTopicID {
+            try? database.addDocument(to: topicID, md5: document.md5)
+            reloadStudySet()
+        }
+        switchToDocument(document)
     }
 }
