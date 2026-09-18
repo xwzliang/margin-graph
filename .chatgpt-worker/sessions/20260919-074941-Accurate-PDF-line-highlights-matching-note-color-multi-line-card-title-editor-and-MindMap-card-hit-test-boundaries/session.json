@@ -1,0 +1,10 @@
+{
+  "protocol_version": 1,
+  "session_id": "20260919-074941-Accurate-PDF-line-highlights-matching-note-color-multi-line-card-title-editor-and-MindMap-card-hit-test-boundaries",
+  "repository": "xwzliang/margin-graph",
+  "task_branch": "chatgpt-worker/Accurate-PDF-line-highlights-matching-note-color-multi-line-card-title-editor-and-MindMap-card-hit-test-boundaries",
+  "status": "waiting_for_worker",
+  "current_request": 1,
+  "last_tested_commit": null,
+  "max_iterations": 5
+}
