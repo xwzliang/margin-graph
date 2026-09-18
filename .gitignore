@@ -4,4 +4,3 @@ Packages/
 *.xcodeproj
 *.xcworkspace
 DerivedData/
-.chatgpt-worker/
