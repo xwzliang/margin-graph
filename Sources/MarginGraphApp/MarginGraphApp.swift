@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published var links: [CardLink] = []
     @Published var selectedCardID: UUID?
     @Published var jumpTarget: PDFJumpTarget?
+    @Published var dueFlashcards: [NoteCard] = []
+    @Published var isReviewPresented = false
 
     let database: Database
     let mediaStorage: MediaStorage
@@ -63,11 +65,13 @@ final class AppModel: ObservableObject {
             studyDocuments = []
             mindMapCards = []
             links = []
+            dueFlashcards = []
             return
         }
         studyDocuments = (try? database.documentsForTopic(id: topicID)) ?? []
         mindMapCards = (try? database.cardsForTopic(id: topicID)) ?? []
         links = (try? database.linksForTopic(id: topicID)) ?? []
+        dueFlashcards = (try? database.dueCardsForTopic(id: topicID)) ?? []
 
         if let activeDocument, studyDocuments.contains(where: { $0.md5 == activeDocument.md5 }) {
             reloadDocumentCards()
@@ -256,6 +260,41 @@ final class AppModel: ObservableObject {
             suggestedName: "\(safeFilename(topic.title)).opml",
             type: UTType(filenameExtension: "opml") ?? .xml
         )
+    }
+
+
+    func exportAnki() {
+        guard let topic = selectedTopic else { return }
+        saveExport(
+            content: AnkiExporter.export(topic: topic, cards: mindMapCards),
+            suggestedName: "\(safeFilename(topic.title))-anki.tsv",
+            type: .tabSeparatedText
+        )
+    }
+
+    func startReview() {
+        guard !dueFlashcards.isEmpty else { return }
+        isReviewPresented = true
+    }
+
+    func handleDeepLink(_ url: URL) {
+        guard let destination = DeepLinkHandler.parse(url) else { return }
+
+        switch destination {
+        case .openTopic(let topicId):
+            guard let topic = topics.first(where: { $0.id == topicId }) else { return }
+            selectTopic(topic)
+
+        case .openCard(let cardId):
+            guard let card = try? database.getCard(id: cardId),
+                  let card else { return }
+            if selectedTopicID != card.topicId,
+               let topic = topics.first(where: { $0.id == card.topicId }) {
+                selectTopic(topic)
+            }
+            reloadStudySet()
+            select(card: card)
+        }
     }
 
     private func saveExport(content: String, suggestedName: String, type: UTType) {
@@ -460,6 +499,22 @@ struct WorkspaceView: View {
                 }
             }
         }
+        .sheet(isPresented: $model.isReviewPresented) {
+            FlashcardReviewView(
+                cards: model.dueFlashcards,
+                documents: model.studyDocuments,
+                database: model.database,
+                mediaStorage: model.mediaStorage,
+                onJumpToPDF: { card in
+                    model.isReviewPresented = false
+                    model.select(card: card)
+                },
+                onDismiss: {
+                    model.isReviewPresented = false
+                    model.reloadStudySet()
+                }
+            )
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("View", selection: $mode) {
@@ -472,11 +527,20 @@ struct WorkspaceView: View {
             }
 
             ToolbarItemGroup {
+                Button {
+                    model.startReview()
+                } label: {
+                    Label("Review Flashcards (\(model.dueFlashcards.count))", systemImage: "rectangle.stack.badge.play")
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+                .disabled(model.dueFlashcards.isEmpty)
+
                 Menu("Import / Export") {
                     Button("Import MarginNote 3…") { model.importMarginNote() }
                     Divider()
                     Button("Export to Markdown…") { model.exportMarkdown() }
                     Button("Export to OPML…") { model.exportOPML() }
+                    Button("Export to Anki (TSV)…") { model.exportAnki() }
                 }
 
                 Button("Reader") { mode = .readerOnly }
@@ -526,6 +590,9 @@ struct MarginGraphApp: App {
                 .navigationTitle("MarginGraph")
             } detail: {
                 WorkspaceView(model: model)
+            }
+            .onOpenURL { url in
+                model.handleDeepLink(url)
             }
         }
     }
