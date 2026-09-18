@@ -3,18 +3,17 @@ import Foundation
 public enum ClozeParser {
     public static func masked(_ text: String) -> String {
         var result = replacing(
-            pattern: #"{{cd+::(.*?)}}"#,
+            pattern: #"\{\{c\d+::(.*?)\}\}"#,
             in: text,
             template: "[...]"
         )
         result = replacing(
-            pattern: #"{{(.*?)}}"#,
+            pattern: #"\{\{(.*?)\}\}"#,
             in: result,
             template: "[...]"
         )
         result = replacing(
-            pattern: #"[[^]
-]+]"#,
+            pattern: #"\[([^\r\n\[\]]+)\]"#,
             in: result,
             template: "[...]"
         )
@@ -23,18 +22,17 @@ public enum ClozeParser {
 
     public static func revealed(_ text: String) -> String {
         var result = replacing(
-            pattern: #"{{cd+::(.*?)}}"#,
+            pattern: #"\{\{c\d+::(.*?)\}\}"#,
             in: text,
             template: "$1"
         )
         result = replacing(
-            pattern: #"{{(.*?)}}"#,
+            pattern: #"\{\{(.*?)\}\}"#,
             in: result,
             template: "$1"
         )
         result = replacing(
-            pattern: #"[([^]
-]+)]"#,
+            pattern: #"\[([^\r\n\[\]]+)\]"#,
             in: result,
             template: "$1"
         )

@@ -286,8 +286,7 @@ final class AppModel: ObservableObject {
             selectTopic(topic)
 
         case .openCard(let cardId):
-            guard let card = try? database.getCard(id: cardId),
-                  let card else { return }
+            guard let card = try? database.getCard(id: cardId) else { return }
             if selectedTopicID != card.topicId,
                let topic = topics.first(where: { $0.id == card.topicId }) {
                 selectTopic(topic)
