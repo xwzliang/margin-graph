@@ -1,0 +1,14 @@
+execution = "local"
+
+branch_prefix = "chatgpt-worker/"
+max_iterations = 5
+
+[validation]
+commands = [
+  "swift test",
+  "swift build",
+]
+
+[communication]
+runtime_dir = ".chatgpt-worker"
+retain_on_merge = false
