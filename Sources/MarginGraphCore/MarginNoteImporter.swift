@@ -138,13 +138,14 @@ public final class MarginNoteImporter {
                 mindPos: parsePoint(first(row, ["ZMINDPOS"])),
                 mindLinks: mindLinks,
                 isFolded: (Int(first(row, ["ZISFOLDED", "ZFOLDED"]) ?? "0") ?? 0) != 0,
-                startPage: Int(first(row, ["ZSTARTPAGE"]) ?? ""),
-                endPage: Int(first(row, ["ZENDPAGE"]) ?? ""),
+                startPage: zeroBasedPage(first(row, ["ZSTARTPAGE"])),
+                endPage: zeroBasedPage(first(row, ["ZENDPAGE"])),
                 startPos: parsePoint(first(row, ["ZSTARTPOS"])),
                 endPos: parsePoint(first(row, ["ZENDPOS"])),
                 colorIndex: Int(first(row, ["ZCOLORINDEX", "ZCOLOR"]) ?? "0") ?? 0,
                 tags: parseStringList(first(row, ["ZTAGS"])),
                 highlightPicHash: first(row, ["ZHIGHLIGHTPICHASH"]),
+                highlightRects: parseHighlightRects(first(row, ["ZHIGHLIGHTS"])),
                 createdAt: created,
                 updatedAt: updated
             ))
@@ -174,8 +175,14 @@ public final class MarginNoteImporter {
             var row: [String: String?] = [:]
             for index in 0..<sqlite3_column_count(statement) {
                 let name = String(cString: sqlite3_column_name(statement, index)).uppercased()
-                if sqlite3_column_type(statement, index) == SQLITE_NULL {
+                let type = sqlite3_column_type(statement, index)
+                if type == SQLITE_NULL {
                     row[name] = nil
+                } else if type == SQLITE_BLOB,
+                          let bytes = sqlite3_column_blob(statement, index) {
+                    let count = Int(sqlite3_column_bytes(statement, index))
+                    let data = Data(bytes: bytes, count: count)
+                    row[name] = "base64:" + data.base64EncodedString()
                 } else if let text = sqlite3_column_text(statement, index) {
                     row[name] = String(cString: text)
                 } else {
@@ -219,6 +226,65 @@ public final class MarginNoteImporter {
             .compactMap { Double($0) }
         guard values.count >= 2 else { return nil }
         return CGPoint(x: values[0], y: values[1])
+    }
+
+    private func zeroBasedPage(_ raw: String?) -> Int? {
+        guard let raw, let page = Int(raw) else { return nil }
+        return max(0, page - 1)
+    }
+
+    private func parseHighlightRects(_ raw: String?) -> [HighlightRect] {
+        guard let raw, raw.hasPrefix("base64:"),
+              let data = Data(base64Encoded: String(raw.dropFirst("base64:".count))),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+        else { return [] }
+
+        var result: [HighlightRect] = []
+
+        func walk(_ value: Any) {
+            if let dict = value as? [String: Any] {
+                if let pageValue = dict["pageNo"],
+                   let rectValue = dict["rect"] as? String,
+                   let rect = parseRect(rectValue) {
+                    let page: Int?
+                    if let number = pageValue as? NSNumber {
+                        page = number.intValue
+                    } else if let string = pageValue as? String {
+                        page = Int(string)
+                    } else {
+                        page = nil
+                    }
+                    if let page {
+                        result.append(HighlightRect(
+                            page: max(0, page - 1),
+                            x: rect.origin.x,
+                            y: rect.origin.y,
+                            width: rect.size.width,
+                            height: rect.size.height
+                        ))
+                    }
+                }
+                for child in dict.values {
+                    walk(child)
+                }
+            } else if let array = value as? [Any] {
+                for child in array { walk(child) }
+            }
+        }
+
+        walk(plist)
+        return result
+    }
+
+    private func parseRect(_ raw: String) -> CGRect? {
+        let regex = try? NSRegularExpression(pattern: #"-?\d+(?:\.\d+)?"#)
+        let nsRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        let values = regex?.matches(in: raw, range: nsRange).compactMap { match -> Double? in
+            guard let range = Range(match.range, in: raw) else { return nil }
+            return Double(raw[range])
+        } ?? []
+        guard values.count >= 4 else { return nil }
+        return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
     }
 
     private func parseDate(_ raw: String?) -> Date? {

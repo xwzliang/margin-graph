@@ -69,6 +69,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var colorIndex: Int
     public var tags: [String]
     public var highlightPicHash: String?
+    public var highlightRects: [HighlightRect]
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -90,6 +91,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         colorIndex: Int = 0,
         tags: [String] = [],
         highlightPicHash: String? = nil,
+        highlightRects: [HighlightRect] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -110,6 +112,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         self.colorIndex = colorIndex
         self.tags = tags
         self.highlightPicHash = highlightPicHash
+        self.highlightRects = highlightRects
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

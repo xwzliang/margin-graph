@@ -62,6 +62,37 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(try database.cardsForDocument(md5: "deadbeef").map(\.id), [card.id])
     }
 
+    func testHighlightResolverUsesStoredRectsAndPDFTextLines() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-highlight-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeSyntheticPDF(at: url)
+        let manager = try PDFDocumentManager(url: url)
+        let topicID = UUID()
+
+        let stored = [
+            HighlightRect(page: 0, x: 60, y: 90, width: 100, height: 20),
+            HighlightRect(page: 0, x: 60, y: 65, width: 120, height: 20)
+        ]
+        let importedCard = NoteCard(
+            topicId: topicID,
+            highlightText: "MarginGraph synthetic PDF",
+            startPage: 0,
+            highlightRects: stored
+        )
+        XCTAssertEqual(PDFHighlightResolver.lineRects(for: importedCard, in: manager.document), stored)
+
+        let textCard = NoteCard(
+            topicId: topicID,
+            highlightText: "MarginGraph synthetic PDF",
+            startPage: 0
+        )
+        let resolved = PDFHighlightResolver.lineRects(for: textCard, in: manager.document)
+        XCTAssertFalse(resolved.isEmpty)
+        XCTAssertTrue(resolved.allSatisfy { $0.page == 0 && $0.width > 0 && $0.height > 0 })
+    }
+
     private func makeSyntheticPDF(at url: URL) throws {
         guard let consumer = CGDataConsumer(url: url as CFURL) else {
             throw CocoaError(.fileWriteUnknown)
