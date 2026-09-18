@@ -1,0 +1,21 @@
+{
+  "protocol_version": 1,
+  "request_id": "0001",
+  "status": "completed",
+  "finished": true,
+  "implementation_commit": "bca517e9d45da67693b943f237c8dfe713b98009",
+  "finish_message": "Phase 2 PDF reader and excerpt engine implementation is complete and pushed.",
+  "summary": "Added media storage, PDF loading/MD5/outline/thumbnail/cropping, excerpt-to-card coordination, a PDFKit-backed SwiftUI reader with text and marquee selection, card overlays and jump navigation, app integration for opening PDFs and browsing excerpts, and PDF-focused unit tests.",
+  "files_changed": [
+    "Sources/MarginGraphCore/MediaStorage.swift",
+    "Sources/MarginGraphCore/Database+PDF.swift",
+    "Sources/MarginGraphCore/PDF/PDFExcerpt.swift",
+    "Sources/MarginGraphCore/PDF/PDFDocumentManager.swift",
+    "Sources/MarginGraphCore/PDF/PDFReaderView.swift",
+    "Sources/MarginGraphApp/MarginGraphApp.swift",
+    "Tests/MarginGraphCoreTests/PDFTests.swift"
+  ],
+  "notes": [
+    "The implementation targets macOS PDFKit/AppKit/SwiftUI. The available execution environment here does not provide the macOS SDK, so swift test and swift build were not run locally; the orchestrator should run both validation commands on macOS."
+  ]
+}
