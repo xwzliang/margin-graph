@@ -1,0 +1,24 @@
+{
+  "protocol_version": 1,
+  "request_id": "0001",
+  "status": "completed",
+  "finished": true,
+  "implementation_commit": "de3a25cd3dfc87135c6a78620c0366ed662e164f",
+  "finish_message": "Phase 5 flashcard SRS review mode, deep linking, card link copying, and Anki TSV export are complete and pushed.",
+  "summary": "Added cloze masking/reveal parsing, SRS due-card queries and review recording, a full flashcard review UI with grading shortcuts and session summary, margin-graph deep-link parsing/generation and app routing, copy-deep-link actions on MindMap/Outline cards, Anki TSV export, due-card toolbar integration, and automated Phase 5 tests. Also changed topic updates to SQL UPDATE so attaching study-set documents does not cascade-delete existing cards.",
+  "files_changed": [
+    "Sources/MarginGraphCore/SRS/ClozeParser.swift",
+    "Sources/MarginGraphCore/Database+SRS.swift",
+    "Sources/MarginGraphCore/DeepLink/DeepLinkHandler.swift",
+    "Sources/MarginGraphCore/Export/AnkiExporter.swift",
+    "Sources/MarginGraphCore/Views/FlashcardReviewView.swift",
+    "Sources/MarginGraphCore/MindMap/CardNodeView.swift",
+    "Sources/MarginGraphCore/Views/OutlineSidebarView.swift",
+    "Sources/MarginGraphCore/Database.swift",
+    "Sources/MarginGraphApp/MarginGraphApp.swift",
+    "Tests/MarginGraphCoreTests/FlashcardReviewTests.swift"
+  ],
+  "notes": [
+    "The implementation targets macOS SwiftUI/AppKit/PDFKit. The available execution environment here does not provide the macOS SDK, so swift test and swift build were not run locally; the orchestrator should run both validation commands on macOS."
+  ]
+}
