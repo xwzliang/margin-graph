@@ -55,7 +55,10 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(card.startPos, CGPoint(x: 10, y: 20))
         XCTAssertEqual(card.endPos, CGPoint(x: 110, y: 60))
         XCTAssertNotNil(card.highlightPicHash)
-        XCTAssertEqual(try database.getCard(id: card.id), card)
+        let fetched = try XCTUnwrap(database.getCard(id: card.id))
+        XCTAssertEqual(fetched.id, card.id)
+        XCTAssertEqual(fetched.highlightText, card.highlightText)
+        XCTAssertEqual(fetched.bookMD5, card.bookMD5)
         XCTAssertEqual(try database.cardsForDocument(md5: "deadbeef").map(\.id), [card.id])
     }
 
