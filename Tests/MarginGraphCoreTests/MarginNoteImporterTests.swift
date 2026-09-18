@@ -68,4 +68,18 @@ final class MarginNoteImporterTests: XCTestCase {
             )
         }
     }
+
+    func testLiveMarginNoteDatabaseImportIfExists() throws {
+        let livePath = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Library/Application Support/QReader.MarginNoteMac/MarginNotes.sqlite")
+        guard FileManager.default.fileExists(atPath: livePath.path) else {
+            print("Live MarginNotes.sqlite not found, skipping live test.")
+            return
+        }
+        let destination = try Database(inMemory: true)
+        let result = try MarginNoteImporter(url: livePath).importInto(destination)
+        print("Live import result: \(result.topics.count) topics, \(result.documents.count) books, \(result.cards.count) cards")
+        XCTAssertGreaterThan(result.topics.count, 0)
+        XCTAssertGreaterThan(result.cards.count, 0)
+    }
 }
