@@ -166,6 +166,16 @@ public struct CardNodeView: View {
                 onEdit?()
             }
             Divider()
+            Button("Copy Title") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(card.title, forType: .string)
+            }
+            Button("Copy Note Content") {
+                NSPasteboard.general.clearContents()
+                let content = !card.highlightText.isEmpty ? card.highlightText : (!card.notesText.isEmpty ? card.notesText : card.title)
+                NSPasteboard.general.setString(content, forType: .string)
+            }
+            Divider()
             Button("Copy Deep Link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(card.deepLinkURL.absoluteString, forType: .string)

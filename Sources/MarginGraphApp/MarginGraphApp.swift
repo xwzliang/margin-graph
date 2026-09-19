@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     @Published var mindMapCards: [NoteCard] = []
     @Published var links: [CardLink] = []
     @Published var selectedCardID: UUID?
+    @Published var activeToolbarOwner: ToolbarOwner = .none
     @Published var jumpTarget: PDFJumpTarget?
     @Published var dueFlashcards: [NoteCard] = []
     @Published var cardCounts: [UUID: Int] = [:]
@@ -134,6 +135,7 @@ final class AppModel: ObservableObject {
     func selectTopic(_ topic: Topic) {
         selectedTopicID = topic.id
         selectedCardID = nil
+        activeToolbarOwner = .none
         jumpTarget = nil
         reloadStudySet()
     }
@@ -259,6 +261,7 @@ final class AppModel: ObservableObject {
         let coordinator = ExcerptCoordinator(database: database, mediaStorage: mediaStorage)
         guard let card = try? coordinator.createCard(from: excerpt, topicId: topic.id, colorIndex: colorIndex) else { return }
         selectedCardID = card.id
+        activeToolbarOwner = .pdf
         reloadStudySet()
         navigateToCard(card)
     }
@@ -266,6 +269,7 @@ final class AppModel: ObservableObject {
     func select(card: NoteCard) {
         print("[App] select card: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
         selectedCardID = card.id
+        activeToolbarOwner = .mindMap
         navigateToCard(card)
     }
 
@@ -281,6 +285,7 @@ final class AppModel: ObservableObject {
         guard let cardID else {
             Swift.print("[App] selectCardFromPDF: deselected")
             selectedCardID = nil
+            activeToolbarOwner = .none
             jumpTarget = nil
             return
         }
@@ -289,6 +294,7 @@ final class AppModel: ObservableObject {
             ?? (try? database.getCard(id: cardID)) {
             Swift.print("[App] selectCardFromPDF: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
             selectedCardID = card.id
+            activeToolbarOwner = .pdf
         }
     }
 
@@ -311,6 +317,7 @@ final class AppModel: ObservableObject {
         try? database.updateCard(cardToRestore)
         reloadStudySet()
         selectedCardID = cardToRestore.id
+        activeToolbarOwner = .mindMap
         navigateToCard(cardToRestore)
         objectWillChange.send()
     }
@@ -325,6 +332,7 @@ final class AppModel: ObservableObject {
         try? database.insertCard(card)
         reloadStudySet()
         selectedCardID = card.id
+        activeToolbarOwner = .mindMap
         navigateToCard(card)
         objectWillChange.send()
     }
@@ -350,6 +358,7 @@ final class AppModel: ObservableObject {
         try? database.updateCard(card)
         reloadStudySet()
         selectedCardID = cardID
+        activeToolbarOwner = .pdf
         objectWillChange.send()
         Swift.print("[App] updateHighlight completed cardID=\(cardID) newTitle='\(card.title.prefix(30))...' newTextLength=\(card.highlightText.count) rects=\(rects.count)")
     }
@@ -388,6 +397,7 @@ final class AppModel: ObservableObject {
     func deselect() {
         print("[App] deselect called")
         selectedCardID = nil
+        activeToolbarOwner = .none
         jumpTarget = nil
     }
 
@@ -435,7 +445,10 @@ final class AppModel: ObservableObject {
             undoManager.setActionName("Delete Note")
         }
         try? database.deleteCard(id: cardID)
-        if selectedCardID == cardID { selectedCardID = nil }
+        if selectedCardID == cardID {
+            selectedCardID = nil
+            activeToolbarOwner = .none
+        }
         reloadStudySet()
         objectWillChange.send()
     }
@@ -458,6 +471,7 @@ final class AppModel: ObservableObject {
         try? database.updateCard(card)
         reloadStudySet()
         selectedCardID = card.id
+        activeToolbarOwner = .mindMap
         objectWillChange.send()
     }
 
@@ -829,6 +843,7 @@ struct StudyWorkspaceView: View {
             cards: model.mindMapCards,
             links: model.links,
             selectedCardID: model.selectedCardID,
+            activeToolbarOwner: model.activeToolbarOwner,
             mediaStorage: model.mediaStorage,
             onSelect: { card in
                 if let card { model.select(card: card) } else { model.deselect() }
@@ -868,6 +883,7 @@ struct StudyWorkspaceView: View {
                 manager: manager,
                 cards: model.documentCards.isEmpty ? model.mindMapCards : model.documentCards,
                 selectedCardID: model.selectedCardID,
+                activeToolbarOwner: model.activeToolbarOwner,
                 jumpTarget: model.jumpTarget,
                 onExcerpt: { excerpt in
                     model.createExcerpt(excerpt)

@@ -40,6 +40,138 @@ public enum PDFHighlightResolver {
         return result
     }
 
+    public struct PhysicalLine {
+        public var text: String
+        public var bounds: CGRect
+        public var page: PDFPage
+
+        public init(text: String, bounds: CGRect, page: PDFPage) {
+            self.text = text
+            self.bounds = bounds
+            self.page = page
+        }
+    }
+
+    public static func groupPhysicalLines(_ selections: [PDFSelection]) -> [PhysicalLine] {
+        var rawChunks: [(page: PDFPage, bounds: CGRect, text: String)] = []
+        for sel in selections {
+            guard let p = sel.pages.first, let t = sel.string else { continue }
+            let b = sel.bounds(for: p)
+            rawChunks.append((page: p, bounds: b, text: t))
+        }
+
+        var lines: [PhysicalLine] = []
+        for chunk in rawChunks {
+            if let idx = lines.lastIndex(where: {
+                $0.page === chunk.page && abs($0.bounds.midY - chunk.bounds.midY) < 3.0
+            }) {
+                var line = lines[idx]
+                let leftToRight = line.bounds.minX <= chunk.bounds.minX
+                let firstText = leftToRight ? line.text : chunk.text
+                let secondText = leftToRight ? chunk.text : line.text
+
+                let joinedText: String
+                if firstText.hasSuffix("-") && !firstText.hasSuffix("--") {
+                    joinedText = firstText + secondText
+                } else if firstText.hasSuffix(" ") || secondText.hasPrefix(" ") {
+                    joinedText = firstText + secondText
+                } else {
+                    joinedText = firstText + " " + secondText
+                }
+
+                line.text = joinedText
+                line.bounds = line.bounds.union(chunk.bounds)
+                lines[idx] = line
+            } else {
+                lines.append(PhysicalLine(text: chunk.text, bounds: chunk.bounds, page: chunk.page))
+            }
+        }
+        return lines
+    }
+
+    public static func buildParagraphs(from lines: [PhysicalLine], fallbackRaw: String) -> String {
+        guard !lines.isEmpty else { return normalizeExcerptParagraphs(fallbackRaw) }
+
+        let minXs = lines.map { $0.bounds.minX }.sorted()
+        let baseMinX = minXs[Int(Double(minXs.count) * 0.2)]
+        let maxXs = lines.map { $0.bounds.maxX }.sorted()
+        let baseMaxX = maxXs[Int(Double(maxXs.count) * 0.8)]
+
+        var dyList: [CGFloat] = []
+        for i in 1..<lines.count {
+            if lines[i].page === lines[i-1].page {
+                let dy = lines[i-1].bounds.midY - lines[i].bounds.midY
+                if dy > 5 && dy < 60 {
+                    dyList.append(dy)
+                }
+            }
+        }
+        let normalDy = dyList.sorted().isEmpty ? 18.0 : dyList.sorted()[dyList.count / 2]
+
+        var paragraphs: [String] = []
+        var currentLines: [String] = []
+
+        func flush() {
+            if !currentLines.isEmpty {
+                paragraphs.append(currentLines.joined(separator: " "))
+                currentLines.removeAll()
+            }
+        }
+
+        for i in 0..<lines.count {
+            let line = lines[i]
+            let raw = line.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if raw.isEmpty {
+                flush()
+                continue
+            }
+
+            if i > 0 {
+                let prev = lines[i - 1]
+                let prevText = prev.text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+                var isNewParagraph = false
+
+                // 1. Check vertical gap
+                if line.page === prev.page {
+                    let dy = prev.bounds.midY - line.bounds.midY
+                    if dy > normalDy * 1.42 {
+                        isNewParagraph = true
+                    }
+                }
+
+                // 2. Check bullet / numbered list
+                let isBullet = raw.hasPrefix("- ") || raw.hasPrefix("* ") || raw.hasPrefix("• ") || raw.hasPrefix("· ")
+                let isNumbered = raw.range(of: #"^\d+[\.\)]\s"#, options: .regularExpression) != nil
+                if isBullet || isNumbered {
+                    isNewParagraph = true
+                }
+
+                // 3. Check indent + short previous line + sentence end
+                let prevEndsWithPunct = prevText.hasSuffix(".") || prevText.hasSuffix("!") || prevText.hasSuffix("?") || prevText.hasSuffix("”") || prevText.hasSuffix("\"")
+                let prevEndedShort = prev.bounds.maxX < baseMaxX - 22.0
+                let currIndented = line.bounds.minX > baseMinX + 10.0
+
+                if prevEndsWithPunct && prevEndedShort && currIndented {
+                    isNewParagraph = true
+                }
+
+                if isNewParagraph {
+                    flush()
+                }
+            }
+
+            if let last = currentLines.last, last.hasSuffix("-") && !last.hasSuffix("--") {
+                currentLines[currentLines.count - 1] = String(last.dropLast()) + raw
+            } else {
+                currentLines.append(raw)
+            }
+        }
+        flush()
+
+        return paragraphs.joined(separator: "\n\n")
+    }
+
     public static func normalizeExcerptParagraphs(_ selection: PDFSelection) -> String {
         let lines = selection.selectionsByLine()
         let rawText = selection.string ?? ""
@@ -48,24 +180,8 @@ public enum PDFHighlightResolver {
             return normalizeExcerptParagraphs(rawText)
         }
 
-        var lineItems: [(text: String, bounds: CGRect)] = []
-        for line in lines {
-            guard let page = line.pages.first else { continue }
-            let text = line.string ?? ""
-            let b = line.bounds(for: page)
-            lineItems.append((text: text, bounds: b))
-        }
-
-        let fromLines = normalizeLineItems(lineItems)
-        let fromRaw = normalizeExcerptParagraphs(rawText)
-
-        let linesParaCount = fromLines.components(separatedBy: "\n\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
-        let rawParaCount = fromRaw.components(separatedBy: "\n\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }.count
-
-        if rawParaCount > linesParaCount {
-            return fromRaw
-        }
-        return fromLines
+        let physicalLines = groupPhysicalLines(lines)
+        return buildParagraphs(from: physicalLines, fallbackRaw: rawText)
     }
 
     public static func normalizeExcerptParagraphs(_ rawText: String) -> String {
@@ -97,66 +213,6 @@ public enum PDFHighlightResolver {
             }
         }
         return normalizedBlocks.joined(separator: "\n\n")
-    }
-
-    private static func normalizeLineItems(_ lines: [(text: String, bounds: CGRect)]) -> String {
-        var paragraphs: [String] = []
-        var current: [String] = []
-
-        let widths = lines.map { $0.bounds.width }.sorted()
-        let maxWidth = widths.isEmpty ? 100 : widths[Int(Double(widths.count) * 0.8)]
-        let minXs = lines.map { $0.bounds.minX }.sorted()
-        let baseMinX = minXs.isEmpty ? 0 : minXs[Int(Double(minXs.count) * 0.2)]
-
-        var prevBounds: CGRect?
-
-        for lineItem in lines {
-            let raw = lineItem.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if raw.isEmpty {
-                if !current.isEmpty {
-                    paragraphs.append(current.joined(separator: " "))
-                    current.removeAll()
-                }
-                prevBounds = nil
-                continue
-            }
-            let b = lineItem.bounds
-
-            var hasVerticalGap = false
-            if let prev = prevBounds {
-                let lineHeight = max(10, prev.height)
-                if (prev.midY - b.midY) > lineHeight * 1.35 {
-                    hasVerticalGap = true
-                }
-            }
-            prevBounds = b
-
-            let isBullet = raw.hasPrefix("- ") || raw.hasPrefix("* ") || raw.hasPrefix("• ") || raw.hasPrefix("· ")
-            let isNumbered = raw.range(of: #"^\d+[\.\)]\s"#, options: .regularExpression) != nil
-            let isIndented = b.minX > baseMinX + 7.0
-
-            if (isBullet || isNumbered || isIndented || hasVerticalGap) && !current.isEmpty {
-                paragraphs.append(current.joined(separator: " "))
-                current.removeAll()
-            }
-
-            if let last = current.last, last.hasSuffix("-") {
-                current[current.count - 1] = String(last.dropLast()) + raw
-            } else {
-                current.append(raw)
-            }
-
-            let isPunctuation = [".", "!", "?", "\"", "”", "’", ";"].contains(where: { raw.hasSuffix($0) })
-            let isShort = b.width < maxWidth * 0.85
-            if isShort && isPunctuation {
-                paragraphs.append(current.joined(separator: " "))
-                current.removeAll()
-            }
-        }
-        if !current.isEmpty {
-            paragraphs.append(current.joined(separator: " "))
-        }
-        return paragraphs.joined(separator: "\n\n")
     }
 
     public static func lineRects(for card: NoteCard, in document: PDFDocument) -> [HighlightRect] {
@@ -247,6 +303,7 @@ public struct PDFReaderView: NSViewRepresentable {
     public var highlightColor: NSColor
     public var cards: [NoteCard]
     public var selectedCardID: UUID?
+    public var activeToolbarOwner: ToolbarOwner
     public var jumpTarget: PDFJumpTarget?
     @Binding public var currentPageIndex: Int
     public var onExcerpt: ((PDFExcerpt) -> Void)?
@@ -264,6 +321,7 @@ public struct PDFReaderView: NSViewRepresentable {
         highlightColor: NSColor = .systemYellow,
         cards: [NoteCard] = [],
         selectedCardID: UUID? = nil,
+        activeToolbarOwner: ToolbarOwner = .none,
         jumpTarget: PDFJumpTarget? = nil,
         currentPageIndex: Binding<Int> = .constant(0),
         onExcerpt: ((PDFExcerpt) -> Void)? = nil,
@@ -280,6 +338,7 @@ public struct PDFReaderView: NSViewRepresentable {
         self.highlightColor = highlightColor
         self.cards = cards
         self.selectedCardID = selectedCardID
+        self.activeToolbarOwner = activeToolbarOwner
         self.jumpTarget = jumpTarget
         self._currentPageIndex = currentPageIndex
         self.onExcerpt = onExcerpt
@@ -322,15 +381,18 @@ public struct PDFReaderView: NSViewRepresentable {
         let cardsChanged = context.coordinator.lastCards != cards ||
                            context.coordinator.lastDocument !== view.document
         let selectionChanged = context.coordinator.lastSelectedCardID != selectedCardID
+        let toolbarOwnerChanged = context.coordinator.lastToolbarOwner != activeToolbarOwner
 
         if cardsChanged {
             context.coordinator.lastCards = cards
             context.coordinator.lastDocument = view.document
             context.coordinator.lastSelectedCardID = selectedCardID
+            context.coordinator.lastToolbarOwner = activeToolbarOwner
             applyBaseHighlights(to: view)
             applyActiveSelection(to: view)
-        } else if selectionChanged {
+        } else if selectionChanged || toolbarOwnerChanged {
             context.coordinator.lastSelectedCardID = selectedCardID
+            context.coordinator.lastToolbarOwner = activeToolbarOwner
             applyActiveSelection(to: view)
         }
 
@@ -352,6 +414,7 @@ public struct PDFReaderView: NSViewRepresentable {
         view.marqueeColor = highlightColor
         view.cards = cards
         view.selectedCardID = selectedCardID
+        view.activeToolbarOwner = activeToolbarOwner
         view.bookMD5 = manager.md5
         view.excerptHandler = { excerpt in
             onExcerpt?(excerpt)
@@ -431,7 +494,11 @@ public struct PDFReaderView: NSViewRepresentable {
             let lineRects = PDFHighlightResolver.lineRects(for: selected, in: document)
             let accent = NSColor(MarginNoteTheme.cardColors(for: selected.colorIndex).accent)
             view.installHandleAnnotations(for: selected, lineRects: lineRects, accent: accent)
-            view.updateToolbarPosition()
+            if activeToolbarOwner == .pdf {
+                view.updateToolbarPosition()
+            } else {
+                view.hideToolbar()
+            }
         } else if view.hasPendingSelection {
             view.updateToolbarPosition()
         } else {
@@ -468,6 +535,7 @@ public struct PDFReaderView: NSViewRepresentable {
         var lastPageIndex: Int = 0
         var lastCards: [NoteCard] = []
         var lastSelectedCardID: UUID?
+        var lastToolbarOwner: ToolbarOwner = .none
         weak var lastDocument: PDFDocument?
         var observer: NSObjectProtocol?
 
@@ -517,8 +585,19 @@ public final class InteractivePDFView: PDFView {
     var deleteCardHandler: ((UUID) -> Void)?
     var cards: [NoteCard] = []
     var selectedCardID: UUID?
+    var activeToolbarOwner: ToolbarOwner = .none
     var selectCardHandler: ((UUID?) -> Void)?
     var updateCardHighlightHandler: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)?
+
+    private struct HoldTracker {
+        let cardID: UUID
+        let page: PDFPage
+        let pagePoint: CGPoint
+        let viewPoint: CGPoint
+        var timer: Timer?
+        var didTrigger: Bool = false
+    }
+    private var holdTracker: HoldTracker?
 
     private var dragStart: (page: PDFPage, point: CGPoint)?
     private var dragLayer: CAShapeLayer?
@@ -605,7 +684,8 @@ public final class InteractivePDFView: PDFView {
             } else {
                 hideToolbar()
             }
-        } else if let cardID = selectedCardID,
+        } else if activeToolbarOwner == .pdf,
+                  let cardID = selectedCardID,
                   let card = cards.first(where: { $0.id == cardID }),
                   let doc = document {
             let rects = PDFHighlightResolver.lineRects(for: card, in: doc)
@@ -683,7 +763,8 @@ public final class InteractivePDFView: PDFView {
             hideToolbar()
         } else if let cardID = selectedCardID, let card = cards.first(where: { $0.id == cardID }) {
             NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(card.highlightText, forType: .string)
+            let content = !card.highlightText.isEmpty ? card.highlightText : (!card.notesText.isEmpty ? card.notesText : card.title)
+            NSPasteboard.general.setString(content, forType: .string)
         }
     }
 
@@ -786,6 +867,57 @@ public final class InteractivePDFView: PDFView {
         setNeedsDisplay(bounds)
     }
 
+    private func triggerHoldSelection() {
+        guard var tracker = holdTracker, !tracker.didTrigger else { return }
+        tracker.didTrigger = true
+        holdTracker = tracker
+
+        guard let document else { return }
+        let page = tracker.page
+        let pagePoint = tracker.pagePoint
+
+        guard let wordSel = page.selectionForWord(at: pagePoint) ?? page.selection(for: NSRange(location: max(0, page.characterIndex(at: pagePoint)), length: 1)),
+              let str = wordSel.string, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let rects = PDFHighlightResolver.lineRects(from: wordSel, document: document)
+        guard let first = rects.first, let last = rects.last else { return }
+
+        selectedCardID = nil
+        activeToolbarOwner = .pdf
+        selectCardHandler?(nil)
+        clearHandles()
+        hideToolbar()
+
+        let canonicalStart = endpoint(for: first, start: true)
+        let canonicalEnd = endpoint(for: last, start: false)
+        let text = PDFHighlightResolver.normalizeExcerptParagraphs(wordSel)
+
+        let pending = PendingSelection(
+            selection: wordSel,
+            text: text,
+            rects: rects,
+            startPage: page,
+            startPoint: canonicalStart,
+            endPage: page,
+            endPoint: canonicalEnd
+        )
+        renderPendingHighlight(pending)
+        let knobView = convert(canonicalEnd, from: page)
+        showToolbar(mode: .create, knobViewPoint: knobView)
+
+        handleDrag = HandleDrag(
+            cardID: nil,
+            movingStart: false,
+            startPage: page,
+            startPoint: canonicalStart,
+            endPage: page,
+            endPoint: canonicalEnd,
+            latestSelection: wordSel
+        )
+    }
+
     public override func mouseDown(with event: NSEvent) {
         let viewPoint = convert(event.locationInWindow, from: nil)
         Swift.print("[MouseDown] viewPoint=\(viewPoint) toolbarHidden=\(toolbarHostingView?.isHidden ?? true) toolbarFrame=\(toolbarHostingView?.frame ?? .zero)")
@@ -801,8 +933,11 @@ public final class InteractivePDFView: PDFView {
         }
 
         guard let page = page(for: viewPoint, nearest: true) else {
+            holdTracker?.timer?.invalidate()
+            holdTracker = nil
             clearPendingSelection()
             selectedCardID = nil
+            activeToolbarOwner = .none
             selectCardHandler?(nil)
             clearHandles()
             hideToolbar()
@@ -813,19 +948,52 @@ public final class InteractivePDFView: PDFView {
 
         if selectionTool == .textSelection,
            beginHandleDragIfNeeded(page: page, point: pagePoint) {
+            holdTracker?.timer?.invalidate()
+            holdTracker = nil
             return
+        }
+
+        // Double-click shortcut: immediately select word and show creation toolbar
+        if event.clickCount >= 2, selectionTool == .textSelection {
+            holdTracker?.timer?.invalidate()
+            holdTracker = nil
+            if let wordSel = page.selectionForWord(at: pagePoint),
+               let str = wordSel.string, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               let document {
+                let rects = PDFHighlightResolver.lineRects(from: wordSel, document: document)
+                if let first = rects.first, let last = rects.last {
+                    selectedCardID = nil
+                    activeToolbarOwner = .pdf
+                    selectCardHandler?(nil)
+                    clearHandles()
+                    hideToolbar()
+
+                    let canonicalStart = endpoint(for: first, start: true)
+                    let canonicalEnd = endpoint(for: last, start: false)
+                    let text = PDFHighlightResolver.normalizeExcerptParagraphs(wordSel)
+
+                    let pending = PendingSelection(
+                        selection: wordSel,
+                        text: text,
+                        rects: rects,
+                        startPage: page,
+                        startPoint: canonicalStart,
+                        endPage: page,
+                        endPoint: canonicalEnd
+                    )
+                    renderPendingHighlight(pending)
+                    let knobView = convert(canonicalEnd, from: page)
+                    showToolbar(mode: .create, knobViewPoint: knobView)
+                    return
+                }
+            }
         }
 
         if selectionTool == .textSelection,
            let card = cardHit(on: page, at: pagePoint) {
-            if selectedCardID == card.id {
-                // Clicked inside already selected card:
-                // Allow super.mouseDown so double-click or drag selects text inside
-                super.mouseDown(with: event)
-                return
-            }
             clearPendingSelection()
             selectedCardID = card.id
+            activeToolbarOwner = .pdf
             selectCardHandler?(card.id)
             if let document {
                 let rects = PDFHighlightResolver.lineRects(for: card, in: document)
@@ -834,12 +1002,30 @@ public final class InteractivePDFView: PDFView {
                 installHandleAnnotations(for: card, lineRects: rects, accent: accent)
             }
             updateToolbarPosition()
+
+            // Arm click-and-hold tracker to start selection inside this card if held
+            holdTracker?.timer?.invalidate()
+            var tracker = HoldTracker(
+                cardID: card.id,
+                page: page,
+                pagePoint: pagePoint,
+                viewPoint: viewPoint
+            )
+            tracker.timer = Timer.scheduledTimer(withTimeInterval: 0.28, repeats: false) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.triggerHoldSelection()
+                }
+            }
+            holdTracker = tracker
             return
         }
 
         // Blank area outside any note or handle!
+        holdTracker?.timer?.invalidate()
+        holdTracker = nil
         clearPendingSelection()
         selectedCardID = nil
+        activeToolbarOwner = .none
         selectCardHandler?(nil)
         clearHandles()
         hideToolbar()
@@ -854,6 +1040,15 @@ public final class InteractivePDFView: PDFView {
     }
 
     public override func mouseDragged(with event: NSEvent) {
+        if let tracker = holdTracker, !tracker.didTrigger {
+            let currentView = convert(event.locationInWindow, from: nil)
+            let dist = hypot(currentView.x - tracker.viewPoint.x, currentView.y - tracker.viewPoint.y)
+            if dist > 4.0 {
+                tracker.timer?.invalidate()
+                triggerHoldSelection()
+            }
+        }
+
         if var handleDrag {
             let currentView = convert(event.locationInWindow, from: nil)
             guard let currentPage = page(for: currentView, nearest: true) else { return }
@@ -911,6 +1106,9 @@ public final class InteractivePDFView: PDFView {
     }
 
     public override func mouseUp(with event: NSEvent) {
+        holdTracker?.timer?.invalidate()
+        holdTracker = nil
+
         if let handleDrag {
             defer {
                 clearLiveHighlight()
@@ -1003,6 +1201,7 @@ public final class InteractivePDFView: PDFView {
 
         // Clear any previous card selection
         selectedCardID = nil
+        activeToolbarOwner = .pdf
         selectCardHandler?(nil)
         clearHandles()
 
@@ -1018,6 +1217,67 @@ public final class InteractivePDFView: PDFView {
         renderPendingHighlight(pending)
         let knobView = convert(endPoint, from: lastPage)
         showToolbar(mode: .create, knobViewPoint: knobView)
+    }
+
+    public override func menu(for event: NSEvent) -> NSMenu? {
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        guard let page = page(for: viewPoint, nearest: true) else {
+            return super.menu(for: event)
+        }
+        let pagePoint = convert(viewPoint, to: page)
+
+        if let card = cardHit(on: page, at: pagePoint) ?? (selectedCardID.flatMap { id in cards.first(where: { $0.id == id }) }) {
+            let menu = NSMenu(title: "Note")
+
+            let copyContentItem = NSMenuItem(title: "Copy Note Content", action: #selector(copyNoteContentAction(_:)), keyEquivalent: "")
+            copyContentItem.target = self
+            copyContentItem.representedObject = card
+            menu.addItem(copyContentItem)
+
+            let copyTitleItem = NSMenuItem(title: "Copy Note Title", action: #selector(copyNoteTitleAction(_:)), keyEquivalent: "")
+            copyTitleItem.target = self
+            copyTitleItem.representedObject = card
+            menu.addItem(copyTitleItem)
+
+            menu.addItem(NSMenuItem.separator())
+
+            let editItem = NSMenuItem(title: "Edit Note", action: #selector(editNoteAction(_:)), keyEquivalent: "")
+            editItem.target = self
+            editItem.representedObject = card
+            menu.addItem(editItem)
+
+            let deleteItem = NSMenuItem(title: "Delete Note", action: #selector(deleteNoteAction(_:)), keyEquivalent: "")
+            deleteItem.target = self
+            deleteItem.representedObject = card
+            menu.addItem(deleteItem)
+
+            return menu
+        }
+
+        return super.menu(for: event)
+    }
+
+    @objc private func copyNoteContentAction(_ sender: NSMenuItem) {
+        guard let card = sender.representedObject as? NoteCard else { return }
+        NSPasteboard.general.clearContents()
+        let content = !card.highlightText.isEmpty ? card.highlightText : (!card.notesText.isEmpty ? card.notesText : card.title)
+        NSPasteboard.general.setString(content, forType: .string)
+    }
+
+    @objc private func copyNoteTitleAction(_ sender: NSMenuItem) {
+        guard let card = sender.representedObject as? NoteCard else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(card.title, forType: .string)
+    }
+
+    @objc private func editNoteAction(_ sender: NSMenuItem) {
+        guard let card = sender.representedObject as? NoteCard else { return }
+        editCardHandler?(card.id)
+    }
+
+    @objc private func deleteNoteAction(_ sender: NSMenuItem) {
+        guard let card = sender.representedObject as? NoteCard else { return }
+        deleteCardHandler?(card.id)
     }
 
     static func clampToLine(on page: PDFPage, point: CGPoint) -> CGPoint {

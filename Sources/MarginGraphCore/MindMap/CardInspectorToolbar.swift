@@ -3,6 +3,8 @@ import SwiftUI
 public struct CardInspectorToolbar: View {
     public var card: NoteCard
     public var onEdit: () -> Void
+    public var onCopyTitle: () -> Void
+    public var onCopyContent: () -> Void
     public var onChangeColor: (Int) -> Void
     public var onDelete: () -> Void
     public var onLink: () -> Void
@@ -11,6 +13,8 @@ public struct CardInspectorToolbar: View {
     public init(
         card: NoteCard,
         onEdit: @escaping () -> Void = {},
+        onCopyTitle: @escaping () -> Void = {},
+        onCopyContent: @escaping () -> Void = {},
         onChangeColor: @escaping (Int) -> Void = { _ in },
         onDelete: @escaping () -> Void = {},
         onLink: @escaping () -> Void = {},
@@ -18,6 +22,8 @@ public struct CardInspectorToolbar: View {
     ) {
         self.card = card
         self.onEdit = onEdit
+        self.onCopyTitle = onCopyTitle
+        self.onCopyContent = onCopyContent
         self.onChangeColor = onChangeColor
         self.onDelete = onDelete
         self.onLink = onLink
@@ -32,6 +38,20 @@ public struct CardInspectorToolbar: View {
             }
             .buttonStyle(.plain)
             .help("Edit Card")
+
+            Button(action: onCopyTitle) {
+                Image(systemName: "character.textbox")
+                    .font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
+            .help("Copy Title")
+
+            Button(action: onCopyContent) {
+                Image(systemName: "doc.on.doc")
+                    .font(.system(size: 13))
+            }
+            .buttonStyle(.plain)
+            .help("Copy Content")
 
             Divider()
                 .frame(height: 14)

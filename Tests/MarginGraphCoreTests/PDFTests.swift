@@ -217,6 +217,61 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(parts[1], "Paragraph two starting after an empty line.")
     }
 
+    func testPhysicalLinesBuildSingleParagraphWithQuotesAndDehyphenation() {
+        let page = PDFPage()
+        // Line 1: starts with indent
+        let line1 = PDFHighlightResolver.PhysicalLine(
+            text: "There is another reason that note-",
+            bounds: CGRect(x: 86.25, y: 430, width: 453, height: 14),
+            page: page
+        )
+        // Line 2: de-hyphenates "notetaking." and has quotes within line
+        let line2 = PDFHighlightResolver.PhysicalLine(
+            text: "taking. “Some people are just like that,” “writing has to be difficult,” “the",
+            bounds: CGRect(x: 72.0, y: 412, width: 468, height: 14),
+            page: page
+        )
+        // Line 3: continues sentence and finishes
+        let line3 = PDFHighlightResolver.PhysicalLine(
+            text: "struggle is part of the deal” are just a few mantras that keep many from inquiring.",
+            bounds: CGRect(x: 72.0, y: 394, width: 350, height: 14),
+            page: page
+        )
+
+        let result = PDFHighlightResolver.buildParagraphs(from: [line1, line2, line3], fallbackRaw: "")
+        let paras = result.components(separatedBy: "\n\n")
+        XCTAssertEqual(paras.count, 1)
+        XCTAssertTrue(paras[0].contains("notetaking. “Some people are just like that,” “writing has to be difficult,” “the struggle"))
+    }
+
+    func testPhysicalLinesDetectsRealParagraphBreak() {
+        let page = PDFPage()
+        // Paragraph 1, line 1
+        let p1_1 = PDFHighlightResolver.PhysicalLine(
+            text: "This is the first line of the first paragraph.",
+            bounds: CGRect(x: 86.25, y: 500, width: 450, height: 14),
+            page: page
+        )
+        // Paragraph 1, line 2 (ends short with period)
+        let p1_2 = PDFHighlightResolver.PhysicalLine(
+            text: "This ends short.",
+            bounds: CGRect(x: 72.0, y: 482, width: 120, height: 14),
+            page: page
+        )
+        // Paragraph 2, line 1 (starts with indent at 86.25)
+        let p2_1 = PDFHighlightResolver.PhysicalLine(
+            text: "This is the second paragraph starting with indent.",
+            bounds: CGRect(x: 86.25, y: 464, width: 450, height: 14),
+            page: page
+        )
+
+        let result = PDFHighlightResolver.buildParagraphs(from: [p1_1, p1_2, p2_1], fallbackRaw: "")
+        let paras = result.components(separatedBy: "\n\n")
+        XCTAssertEqual(paras.count, 2)
+        XCTAssertEqual(paras[0], "This is the first line of the first paragraph. This ends short.")
+        XCTAssertEqual(paras[1], "This is the second paragraph starting with indent.")
+    }
+
     func testHighlightRectDeduplication() {
         let rects = [
             HighlightRect(page: 1, x: 50, y: 100, width: 200, height: 16),

@@ -118,12 +118,12 @@ public struct PDFPopoverToolbarView: View {
                         .foregroundStyle(Color.white.opacity(0.85))
 
                     Button(action: onCopy) {
-                        Image(systemName: "doc.on.clipboard")
+                        Image(systemName: "doc.on.doc")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
-                    .help("Copy Excerpt")
+                    .help("Copy Content")
 
                     Button(action: onDelete) {
                         Image(systemName: "trash")

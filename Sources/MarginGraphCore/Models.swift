@@ -153,3 +153,9 @@ public struct ReviewItem: Codable, Hashable, Sendable {
         self.lastReviewed = lastReviewed
     }
 }
+
+public enum ToolbarOwner: String, Codable, Hashable, Sendable {
+    case none
+    case mindMap
+    case pdf
+}

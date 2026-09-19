@@ -5,6 +5,7 @@ public struct MindMapCanvasView: View {
     public var cards: [NoteCard]
     public var links: [CardLink]
     public var selectedCardID: UUID?
+    public var activeToolbarOwner: ToolbarOwner
     public var mediaStorage: MediaStorage?
     public var onSelect: (NoteCard?) -> Void
     public var onMove: (UUID, CGPoint) -> Void
@@ -29,6 +30,7 @@ public struct MindMapCanvasView: View {
         cards: [NoteCard],
         links: [CardLink] = [],
         selectedCardID: UUID? = nil,
+        activeToolbarOwner: ToolbarOwner = .mindMap,
         mediaStorage: MediaStorage? = nil,
         onSelect: @escaping (NoteCard?) -> Void,
         onMove: @escaping (UUID, CGPoint) -> Void,
@@ -41,6 +43,7 @@ public struct MindMapCanvasView: View {
         self.cards = cards
         self.links = links
         self.selectedCardID = selectedCardID
+        self.activeToolbarOwner = activeToolbarOwner
         self.mediaStorage = mediaStorage
         self.onSelect = onSelect
         self.onMove = onMove
@@ -127,7 +130,8 @@ public struct MindMapCanvasView: View {
                 }
 
                 // Floating Card Inspector Toolbar
-                if let selectedID = selectedCardID,
+                if activeToolbarOwner == .mindMap,
+                   let selectedID = selectedCardID,
                    let selectedCard = cards.first(where: { $0.id == selectedID }),
                    let frame = frames[selectedID] {
                     let cardPos = viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.minY))
@@ -135,6 +139,15 @@ public struct MindMapCanvasView: View {
                         card: selectedCard,
                         onEdit: {
                             onEditCard?(selectedCard)
+                        },
+                        onCopyTitle: {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(selectedCard.title, forType: .string)
+                        },
+                        onCopyContent: {
+                            NSPasteboard.general.clearContents()
+                            let content = !selectedCard.highlightText.isEmpty ? selectedCard.highlightText : (!selectedCard.notesText.isEmpty ? selectedCard.notesText : selectedCard.title)
+                            NSPasteboard.general.setString(content, forType: .string)
                         },
                         onChangeColor: { newColor in
                             onChangeColor?(selectedID, newColor)

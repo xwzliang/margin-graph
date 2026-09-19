@@ -32,6 +32,7 @@ public struct MarginNotePDFContainerView: View {
     public var manager: PDFDocumentManager
     public var cards: [NoteCard]
     public var selectedCardID: UUID?
+    public var activeToolbarOwner: ToolbarOwner
     public var jumpTarget: PDFJumpTarget?
     public var onExcerpt: (PDFExcerpt) -> Void
     public var onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)?
@@ -50,6 +51,7 @@ public struct MarginNotePDFContainerView: View {
         manager: PDFDocumentManager,
         cards: [NoteCard],
         selectedCardID: UUID? = nil,
+        activeToolbarOwner: ToolbarOwner = .none,
         jumpTarget: PDFJumpTarget? = nil,
         onExcerpt: @escaping (PDFExcerpt) -> Void,
         onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)? = nil,
@@ -62,6 +64,7 @@ public struct MarginNotePDFContainerView: View {
         self.manager = manager
         self.cards = cards
         self.selectedCardID = selectedCardID
+        self.activeToolbarOwner = activeToolbarOwner
         self.jumpTarget = jumpTarget
         self.onExcerpt = onExcerpt
         self.onCreateCardWithColor = onCreateCardWithColor
@@ -138,6 +141,7 @@ public struct MarginNotePDFContainerView: View {
                     highlightColor: NSColor(highlightColor),
                     cards: cards,
                     selectedCardID: selectedCardID,
+                    activeToolbarOwner: activeToolbarOwner,
                     jumpTarget: jumpTarget,
                     currentPageIndex: $currentPageIndex,
                     onExcerpt: onExcerpt,
