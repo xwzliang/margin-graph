@@ -145,16 +145,20 @@ final class DatabaseTests: XCTestCase {
 
         var card = NoteCard(topicId: topic.id, title: "Card With Emphasis", highlightText: "This is some key highlighted text that matters")
         card.emphasisList = ["key highlighted text", "matters"]
+        card.emphasisRects = [HighlightRect(page: 0, x: 10, y: 20, width: 80, height: 14)]
         try db.insertCard(card)
 
         let fetched = try db.getCard(id: card.id)
         XCTAssertNotNil(fetched)
         XCTAssertEqual(fetched?.emphasisList, ["key highlighted text", "matters"])
+        XCTAssertEqual(fetched?.emphasisRects, [HighlightRect(page: 0, x: 10, y: 20, width: 80, height: 14)])
 
         card.emphasisList.append("This is some")
+        card.emphasisRects.append(HighlightRect(page: 0, x: 100, y: 20, width: 40, height: 14))
         try db.updateCard(card)
 
         let updated = try db.getCard(id: card.id)
         XCTAssertEqual(updated?.emphasisList, ["key highlighted text", "matters", "This is some"])
+        XCTAssertEqual(updated?.emphasisRects.count, 2)
     }
 }

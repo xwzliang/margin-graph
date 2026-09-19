@@ -457,6 +457,52 @@ final class PDFTests: XCTestCase {
         context.closePDF()
     }
 
+    func testEmphasisDottedLineResolution() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-EmphasisTest-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeSyntheticPDF(at: url)
+        guard let document = PDFDocument(url: url), let page = document.page(at: 0) else {
+            XCTFail("Failed to load synthetic PDF")
+            return
+        }
+
+        let empRect = HighlightRect(page: 0, x: 194.5, y: 94.9, width: 86.8, height: 22.0)
+        let card = NoteCard(
+            topicId: UUID(),
+            title: "Emphasis Test",
+            highlightText: "MarginGraph synthetic PDF",
+            highlightRects: [HighlightRect(page: 0, x: 60, y: 90, width: 250, height: 25)],
+            emphasisList: ["synthetic"],
+            emphasisRects: [empRect]
+        )
+
+        let manager = try PDFDocumentManager(url: url, md5: "testmd5")
+        let reader = PDFReaderView(
+            manager: manager,
+            cards: [card]
+        )
+        let view = InteractivePDFView()
+        view.document = document
+        view.cards = [card]
+
+        // Manually apply base highlights
+        let annot = DottedLineAnnotation(
+            bounds: CGRect(x: empRect.x - 2, y: empRect.y - 1 - 3, width: empRect.width + 4, height: 6),
+            forType: .square,
+            withProperties: nil
+        )
+        annot.lineStartPoint = CGPoint(x: empRect.x, y: empRect.y - 1)
+        annot.lineEndPoint = CGPoint(x: empRect.x + empRect.width, y: empRect.y - 1)
+        annot.contents = "MarginGraph-card-emphasis"
+        page.addAnnotation(annot)
+
+        XCTAssertTrue(page.annotations.contains { $0.contents == "MarginGraph-card-emphasis" })
+        XCTAssertEqual(card.emphasisRects.count, 1)
+        XCTAssertEqual(card.emphasisRects.first?.width, 86.8)
+    }
+
     func testTargetCardPendingSelectionContainment() {
         let card = NoteCard(
             topicId: UUID(),

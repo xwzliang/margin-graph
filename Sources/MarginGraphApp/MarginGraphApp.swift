@@ -454,6 +454,12 @@ final class AppModel: ObservableObject {
         let sortedPages = card.highlightRects.map { $0.page }.sorted()
         card.startPage = sortedPages.first
         card.endPage = sortedPages.last
+        let remainingRects = card.highlightRects
+        card.emphasisRects.removeAll { emp in
+            !remainingRects.contains { r in
+                r.page == emp.page && CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: -4, dy: -4).intersects(CGRect(x: emp.x, y: emp.y, width: emp.width, height: emp.height))
+            }
+        }
         card.updatedAt = Date()
         registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Delete Excerpt Segment")
         try? database.updateCard(card)
@@ -464,13 +470,18 @@ final class AppModel: ObservableObject {
         Swift.print("[App] deleteSegment cardID=\(cardID) segmentID=\(segmentID) remainingSegments=\(card.excerptSegments.count)")
     }
 
-    func emphasizeTextInCard(cardID: UUID, text: String) {
+    func emphasizeTextInCard(cardID: UUID, text: String, rects: [HighlightRect] = []) {
         guard let oldCard = try? database.getCard(id: cardID) else { return }
         var card = oldCard
         let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty else { return }
         if !card.emphasisList.contains(clean) {
             card.emphasisList.append(clean)
+        }
+        for r in rects {
+            if !card.emphasisRects.contains(where: { $0.page == r.page && abs($0.y - r.y) < 1.0 && abs($0.x - r.x) < 2.0 && abs($0.width - r.width) < 2.0 }) {
+                card.emphasisRects.append(r)
+            }
         }
         card.updatedAt = Date()
         registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Emphasize Text")
@@ -479,7 +490,7 @@ final class AppModel: ObservableObject {
         selectedCardID = cardID
         activeToolbarOwner = .pdf
         objectWillChange.send()
-        Swift.print("[App] emphasizeTextInCard cardID=\(cardID) emphasisList=\(card.emphasisList)")
+        Swift.print("[App] emphasizeTextInCard cardID=\(cardID) emphasisList=\(card.emphasisList) emphasisRects=\(card.emphasisRects.count)")
     }
 
     func navigateToCard(_ card: NoteCard) {
@@ -1047,8 +1058,8 @@ struct StudyWorkspaceView: View {
                 onMerge: { cardID, text, rects in
                     model.mergeSelectionIntoCard(cardID: cardID, text: text, rects: rects)
                 },
-                onEmphasize: { cardID, text in
-                    model.emphasizeTextInCard(cardID: cardID, text: text)
+                onEmphasize: { cardID, text, rects in
+                    model.emphasizeTextInCard(cardID: cardID, text: text, rects: rects)
                 }
             )
         } else {

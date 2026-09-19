@@ -257,6 +257,11 @@ public enum PDFHighlightResolver {
     }
 
     public static func lineRects(for card: NoteCard, in document: PDFDocument) -> [HighlightRect] {
+        let segRects = card.effectiveSegments.flatMap(\.rects).filter {
+            $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
+        }
+        if !segRects.isEmpty { return deduplicate(segRects) }
+
         let stored = card.highlightRects.filter {
             $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
         }
@@ -358,7 +363,7 @@ public struct PDFReaderView: NSViewRepresentable {
     public var onAsTitle: ((UUID, String) -> Void)?
     public var onAddToComments: ((UUID, String) -> Void)?
     public var onMerge: ((UUID, String, [HighlightRect]) -> Void)?
-    public var onEmphasize: ((UUID, String) -> Void)?
+    public var onEmphasize: ((UUID, String, [HighlightRect]) -> Void)?
 
     public init(
         manager: PDFDocumentManager,
@@ -381,7 +386,7 @@ public struct PDFReaderView: NSViewRepresentable {
         onAsTitle: ((UUID, String) -> Void)? = nil,
         onAddToComments: ((UUID, String) -> Void)? = nil,
         onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
-        onEmphasize: ((UUID, String) -> Void)? = nil
+        onEmphasize: ((UUID, String, [HighlightRect]) -> Void)? = nil
     ) {
         self.manager = manager
         self.displayMode = displayMode
@@ -532,52 +537,105 @@ public struct PDFReaderView: NSViewRepresentable {
             }
 
             // Draw thick blue dotted underline for emphasized text in this card
-            for phrase in card.emphasisList {
-                let clean = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !clean.isEmpty else { continue }
-                var selections = document.findString(clean, withOptions: [.caseInsensitive])
-                if selections.isEmpty {
-                    for r in lineRects {
-                        guard let p = document.page(at: r.page) else { continue }
-                        if let sel = p.selection(for: CGRect(x: r.x, y: r.y, width: r.width, height: r.height)),
-                           let str = sel.string, str.localizedCaseInsensitiveContains(clean) {
-                            selections.append(sel)
-                        }
-                    }
+            if !card.emphasisRects.isEmpty {
+                for line in card.emphasisRects {
+                    guard let page = document.page(at: line.page) else { continue }
+                    let lineY = line.y - 1.0
+                    let startPt = CGPoint(x: line.x, y: lineY)
+                    let endPt = CGPoint(x: line.x + line.width, y: lineY)
+                    let annot = DottedLineAnnotation(
+                        bounds: CGRect(x: line.x - 2, y: lineY - 3, width: line.width + 4, height: 6),
+                        forType: .square,
+                        withProperties: nil
+                    )
+                    annot.lineStartPoint = startPt
+                    annot.lineEndPoint = endPt
+                    annot.strokeColor = MarginNoteTheme.nsCursorColor
+                    annot.strokeLineWidth = 2.5
+                    annot.dashPattern = [2.5, 3.5]
+                    annot.contents = "MarginGraph-card-emphasis"
+                    page.addAnnotation(annot)
                 }
-                for sel in selections {
-                    guard let selPage = sel.pages.first else { continue }
-                    let pageIdx = document.index(for: selPage)
-                    let selBounds = sel.bounds(for: selPage)
-                    let overlapsCardHighlight = lineRects.contains { r in
-                        guard r.page == pageIdx else { return false }
-                        let rect = CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: -4, dy: -4)
-                        return rect.intersects(selBounds)
-                    }
-                    guard overlapsCardHighlight else { continue }
-                    for line in PDFHighlightResolver.lineRects(from: sel, document: document) {
-                        guard let page = document.page(at: line.page) else { continue }
-                        let lineY = line.y - 1.0
-                        let startPt = CGPoint(x: line.x, y: lineY)
-                        let endPt = CGPoint(x: line.x + line.width, y: lineY)
-                        let annot = DottedLineAnnotation(
-                            bounds: CGRect(x: line.x - 2, y: lineY - 3, width: line.width + 4, height: 6),
-                            forType: .square,
-                            withProperties: nil
-                        )
-                        annot.lineStartPoint = startPt
-                        annot.lineEndPoint = endPt
-                        annot.strokeColor = MarginNoteTheme.nsCursorColor
-                        annot.strokeLineWidth = 2.5
-                        annot.dashPattern = [2.5, 3.5]
-                        annot.contents = "MarginGraph-card-emphasis"
-                        page.addAnnotation(annot)
+            } else {
+                for phrase in card.emphasisList {
+                    let clean = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !clean.isEmpty else { continue }
+                    let selections = resolveEmphasisSelections(clean: clean, in: document, lineRects: lineRects, view: view)
+                    for sel in selections {
+                        for selPage in sel.pages {
+                            let pageIdx = document.index(for: selPage)
+                            for line in PDFHighlightResolver.lineRects(from: sel, document: document) {
+                                guard line.page == pageIdx, let page = document.page(at: line.page) else { continue }
+                                let lineY = line.y - 1.0
+                                let startPt = CGPoint(x: line.x, y: lineY)
+                                let endPt = CGPoint(x: line.x + line.width, y: lineY)
+                                let annot = DottedLineAnnotation(
+                                    bounds: CGRect(x: line.x - 2, y: lineY - 3, width: line.width + 4, height: 6),
+                                    forType: .square,
+                                    withProperties: nil
+                                )
+                                annot.lineStartPoint = startPt
+                                annot.lineEndPoint = endPt
+                                annot.strokeColor = MarginNoteTheme.nsCursorColor
+                                annot.strokeLineWidth = 2.5
+                                annot.dashPattern = [2.5, 3.5]
+                                annot.contents = "MarginGraph-card-emphasis"
+                                page.addAnnotation(annot)
+                            }
+                        }
                     }
                 }
             }
         }
         view.layoutDocumentView()
         view.setNeedsDisplay(view.bounds)
+    }
+
+    private func resolveEmphasisSelections(clean: String, in document: PDFDocument, lineRects: [HighlightRect], view: InteractivePDFView) -> [PDFSelection] {
+        var selections = document.findString(clean, withOptions: [.caseInsensitive])
+        if selections.isEmpty {
+            let cleanedWords = clean.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+            if cleanedWords.count > 1, let firstWord = cleanedWords.first, let lastWord = cleanedWords.last {
+                let startSelections = document.findString(firstWord, withOptions: [.caseInsensitive])
+                let endSelections = document.findString(lastWord, withOptions: [.caseInsensitive])
+                for sSel in startSelections {
+                    guard let sPage = sSel.pages.first else { continue }
+                    let sPageIdx = document.index(for: sPage)
+                    let sBounds = sSel.bounds(for: sPage)
+                    let sOverlaps = lineRects.contains { $0.page == sPageIdx && CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).insetBy(dx: -4, dy: -4).intersects(sBounds) }
+                    guard sOverlaps else { continue }
+
+                    for eSel in endSelections {
+                        guard let ePage = eSel.pages.first else { continue }
+                        let ePageIdx = document.index(for: ePage)
+                        guard ePageIdx >= sPageIdx else { continue }
+                        let eBounds = eSel.bounds(for: ePage)
+                        let eOverlaps = lineRects.contains { $0.page == ePageIdx && CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height).insetBy(dx: -4, dy: -4).intersects(eBounds) }
+                        guard eOverlaps else { continue }
+
+                        let startPt = CGPoint(x: sBounds.minX, y: sBounds.midY)
+                        let endPt = CGPoint(x: eBounds.maxX, y: eBounds.midY)
+                        if let combined = view.makeMultiPageSelection(
+                            from: sPage,
+                            at: startPt,
+                            to: ePage,
+                            at: endPt
+                        ) {
+                            selections.append(combined)
+                        }
+                    }
+                }
+            } else {
+                for r in lineRects {
+                    guard let p = document.page(at: r.page) else { continue }
+                    if let sel = p.selection(for: CGRect(x: r.x, y: r.y, width: r.width, height: r.height)),
+                       let str = sel.string, str.localizedCaseInsensitiveContains(clean) {
+                        selections.append(sel)
+                    }
+                }
+            }
+        }
+        return selections
     }
 
     private func applyActiveSelection(to view: InteractivePDFView) {
@@ -703,7 +761,7 @@ public final class InteractivePDFView: PDFView {
     var asTitleHandler: ((UUID, String) -> Void)?
     var addToCommentsHandler: ((UUID, String) -> Void)?
     var mergeHandler: ((UUID, String, [HighlightRect]) -> Void)?
-    var emphasizeHandler: ((UUID, String) -> Void)?
+    var emphasizeHandler: ((UUID, String, [HighlightRect]) -> Void)?
     var targetCardID: UUID?
 
     private struct HoldTracker {
@@ -1039,7 +1097,8 @@ public final class InteractivePDFView: PDFView {
     private func handleToolbarEmphasize() {
         guard let targetID = targetCardID, let pending = pendingSelection else { return }
         let text = pending.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        emphasizeHandler?(targetID, text)
+        let rects = pending.rects
+        emphasizeHandler?(targetID, text, rects)
 
         // Immediately add DottedLineAnnotation to the PDF view for instant visual feedback
         for line in pending.rects {

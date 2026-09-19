@@ -45,7 +45,7 @@ public struct MarginNotePDFContainerView: View {
     public var onAsTitle: ((UUID, String) -> Void)?
     public var onAddToComments: ((UUID, String) -> Void)?
     public var onMerge: ((UUID, String, [HighlightRect]) -> Void)?
-    public var onEmphasize: ((UUID, String) -> Void)?
+    public var onEmphasize: ((UUID, String, [HighlightRect]) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -69,7 +69,7 @@ public struct MarginNotePDFContainerView: View {
         onAsTitle: ((UUID, String) -> Void)? = nil,
         onAddToComments: ((UUID, String) -> Void)? = nil,
         onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
-        onEmphasize: ((UUID, String) -> Void)? = nil
+        onEmphasize: ((UUID, String, [HighlightRect]) -> Void)? = nil
     ) {
         self.manager = manager
         self.cards = cards

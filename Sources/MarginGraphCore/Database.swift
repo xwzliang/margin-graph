@@ -100,6 +100,9 @@ public final class Database: @unchecked Sendable {
         if try !hasColumn("excerpt_segments", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN excerpt_segments TEXT NOT NULL DEFAULT '[]';")
         }
+        if try !hasColumn("emphasis_rects", in: "cards") {
+            try execute("ALTER TABLE cards ADD COLUMN emphasis_rects TEXT NOT NULL DEFAULT '[]';")
+        }
     }
 
     private func hasColumn(_ column: String, in table: String) throws -> Bool {
@@ -304,10 +307,11 @@ public final class Database: @unchecked Sendable {
         let highlightRects = try jsonString(card.highlightRects)
         let emphasisList = try jsonString(card.emphasisList)
         let excerptSegments = try jsonString(card.excerptSegments)
+        let emphasisRects = try jsonString(card.emphasisRects)
         let verb = replace ? "INSERT OR REPLACE" : "INSERT"
         let sql = """
-        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at,highlight_rects,emphasis_list,excerpt_segments)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at,highlight_rects,emphasis_list,excerpt_segments,emphasis_rects)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         try withStatement(sql) { statement in
             bind(card.id.uuidString, to: 1, in: statement)
@@ -335,6 +339,7 @@ public final class Database: @unchecked Sendable {
             bind(highlightRects, to: 23, in: statement)
             bind(emphasisList, to: 24, in: statement)
             bind(excerptSegments, to: 25, in: statement)
+            bind(emphasisRects, to: 26, in: statement)
             try requireDone(statement)
         }
     }
@@ -402,6 +407,7 @@ public final class Database: @unchecked Sendable {
         let highlightRects = (try? decodeJSON([HighlightRect].self, text(statement, 22))) ?? []
         let emphasisList = (try? decodeJSON([String].self, text(statement, 23))) ?? []
         let excerptSegments = (try? decodeJSON([ExcerptSegment].self, text(statement, 24))) ?? []
+        let emphasisRects = (try? decodeJSON([HighlightRect].self, text(statement, 25))) ?? []
 
         return NoteCard(
             id: id,
@@ -423,6 +429,7 @@ public final class Database: @unchecked Sendable {
             highlightPicHash: text(statement, 19),
             highlightRects: highlightRects,
             emphasisList: emphasisList,
+            emphasisRects: emphasisRects,
             excerptSegments: excerptSegments,
             createdAt: Date(timeIntervalSince1970: double(statement, 20) ?? 0),
             updatedAt: Date(timeIntervalSince1970: double(statement, 21) ?? 0)

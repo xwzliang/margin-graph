@@ -83,6 +83,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var highlightPicHash: String?
     public var highlightRects: [HighlightRect]
     public var emphasisList: [String]
+    public var emphasisRects: [HighlightRect]
     public var excerptSegments: [ExcerptSegment]
     public var createdAt: Date
     public var updatedAt: Date
@@ -107,6 +108,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         highlightPicHash: String? = nil,
         highlightRects: [HighlightRect] = [],
         emphasisList: [String] = [],
+        emphasisRects: [HighlightRect] = [],
         excerptSegments: [ExcerptSegment] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
@@ -130,6 +132,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         self.highlightPicHash = highlightPicHash
         self.highlightRects = highlightRects
         self.emphasisList = emphasisList
+        self.emphasisRects = emphasisRects
         self.excerptSegments = excerptSegments
         self.createdAt = createdAt
         self.updatedAt = updatedAt
