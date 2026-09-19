@@ -96,7 +96,7 @@ public struct CardNodeView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         // Highlight / Excerpt text
                         if hasExcerpt {
-                            Text(card.highlightText)
+                            Text(styledExcerptText)
                                 .font(.system(size: 11.5, weight: .regular))
                                 .foregroundStyle(Color(white: 0.20))
                                 .lineSpacing(2)
@@ -183,51 +183,33 @@ public struct CardNodeView: View {
         }
     }
 
+    private var styledExcerptText: AttributedString {
+        var attr = AttributedString(card.highlightText)
+        for emphasis in card.emphasisList where !emphasis.isEmpty {
+            var searchRange = attr.startIndex..<attr.endIndex
+            while let range = attr[searchRange].range(of: emphasis) {
+                attr[range].inlinePresentationIntent = .stronglyEmphasized
+                attr[range].underlineStyle = Text.LineStyle(pattern: .dot, color: Color(MarginNoteTheme.cursorBlue))
+                if range.upperBound < attr.endIndex {
+                    searchRange = range.upperBound..<attr.endIndex
+                } else {
+                    break
+                }
+            }
+        }
+        return attr
+    }
+
     @ViewBuilder
     private var selectionOverlay: some View {
         if isSelected {
-            ZStack {
-                // Dashed blue outline matching MarginNote 3
-                RoundedRectangle(cornerRadius: 7)
-                    .strokeBorder(
-                        MarginNoteTheme.cursorBlue,
-                        style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
-                    )
-
-                // 4 Corner grab handles
-                GeometryReader { geo in
-                    let handleSize: CGFloat = 6
-                    let w = geo.size.width
-                    let h = geo.size.height
-
-                    Group {
-                        // Top-left
-                        Circle()
-                            .fill(MarginNoteTheme.cursorBlue)
-                            .frame(width: handleSize, height: handleSize)
-                            .position(x: 0, y: 0)
-
-                        // Top-right
-                        Circle()
-                            .fill(MarginNoteTheme.cursorBlue)
-                            .frame(width: handleSize, height: handleSize)
-                            .position(x: w, y: 0)
-
-                        // Bottom-left
-                        Circle()
-                            .fill(MarginNoteTheme.cursorBlue)
-                            .frame(width: handleSize, height: handleSize)
-                            .position(x: 0, y: h)
-
-                        // Bottom-right
-                        Circle()
-                            .fill(MarginNoteTheme.cursorBlue)
-                            .frame(width: handleSize, height: handleSize)
-                            .position(x: w, y: h)
-                    }
-                }
-            }
-            .allowsHitTesting(false)
+            // Dashed blue outline matching MarginNote 3 (without corner circles)
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(
+                    MarginNoteTheme.cursorBlue,
+                    style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
+                )
+                .allowsHitTesting(false)
         }
     }
 

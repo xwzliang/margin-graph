@@ -14,6 +14,12 @@ public struct PDFPopoverToolbarView: View {
     public var onSelectColor: (Int) -> Void
     public var onEdit: () -> Void
     public var onDelete: () -> Void
+    public var onEmphasize: () -> Void
+    public var onAsTitle: () -> Void
+    public var onAddToComments: () -> Void
+    public var onMerge: () -> Void
+    public var hasTargetCard: Bool
+    public var isWithinTargetHighlight: Bool
 
     public init(
         mode: PDFPopoverMode,
@@ -22,7 +28,13 @@ public struct PDFPopoverToolbarView: View {
         onCopy: @escaping () -> Void = {},
         onSelectColor: @escaping (Int) -> Void = { _ in },
         onEdit: @escaping () -> Void = {},
-        onDelete: @escaping () -> Void = {}
+        onDelete: @escaping () -> Void = {},
+        onEmphasize: @escaping () -> Void = {},
+        onAsTitle: @escaping () -> Void = {},
+        onAddToComments: @escaping () -> Void = {},
+        onMerge: @escaping () -> Void = {},
+        hasTargetCard: Bool = false,
+        isWithinTargetHighlight: Bool = false
     ) {
         self.mode = mode
         self.arrowOffset = arrowOffset
@@ -31,6 +43,12 @@ public struct PDFPopoverToolbarView: View {
         self.onSelectColor = onSelectColor
         self.onEdit = onEdit
         self.onDelete = onDelete
+        self.onEmphasize = onEmphasize
+        self.onAsTitle = onAsTitle
+        self.onAddToComments = onAddToComments
+        self.onMerge = onMerge
+        self.hasTargetCard = hasTargetCard
+        self.isWithinTargetHighlight = isWithinTargetHighlight
     }
 
     public var body: some View {
@@ -51,7 +69,7 @@ public struct PDFPopoverToolbarView: View {
             HStack(spacing: 7) {
                 switch mode {
                 case .create:
-                    // Creation mode (media_1789795402558.png)
+                    // Creation mode (media_1789795402558.png & media_1789816959834.png)
                     Button(action: onCopy) {
                         Text("Copy")
                             .font(.system(size: 11.5, weight: .medium))
@@ -59,6 +77,42 @@ public struct PDFPopoverToolbarView: View {
                             .padding(.horizontal, 4)
                     }
                     .buttonStyle(.plain)
+
+                    if hasTargetCard {
+                        if isWithinTargetHighlight {
+                            Button(action: onEmphasize) {
+                                Text("Emphasize")
+                                    .font(.system(size: 11.5, weight: .medium))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Button(action: onAsTitle) {
+                            Text("As title")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onAddToComments) {
+                            Text("Add to comments")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                        }
+                        .buttonStyle(.plain)
+
+                        Button(action: onMerge) {
+                            Text("Merge")
+                                .font(.system(size: 11.5, weight: .medium))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 4)
+                        }
+                        .buttonStyle(.plain)
+                    }
 
                     Divider()
                         .frame(height: 14)

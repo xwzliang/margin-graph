@@ -137,4 +137,24 @@ final class DatabaseTests: XCTestCase {
             [due.cardId]
         )
     }
+
+    func testEmphasisListPersistence() throws {
+        let db = try Database(inMemory: true)
+        let topic = Topic(title: "Emphasis Topic")
+        try db.insertTopic(topic)
+
+        var card = NoteCard(topicId: topic.id, title: "Card With Emphasis", highlightText: "This is some key highlighted text that matters")
+        card.emphasisList = ["key highlighted text", "matters"]
+        try db.insertCard(card)
+
+        let fetched = try db.getCard(id: card.id)
+        XCTAssertNotNil(fetched)
+        XCTAssertEqual(fetched?.emphasisList, ["key highlighted text", "matters"])
+
+        card.emphasisList.append("This is some")
+        try db.updateCard(card)
+
+        let updated = try db.getCard(id: card.id)
+        XCTAssertEqual(updated?.emphasisList, ["key highlighted text", "matters", "This is some"])
+    }
 }

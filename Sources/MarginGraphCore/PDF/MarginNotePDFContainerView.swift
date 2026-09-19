@@ -41,6 +41,10 @@ public struct MarginNotePDFContainerView: View {
     public var onDeleteCard: ((UUID) -> Void)?
     public var onSelectCard: ((UUID?) -> Void)?
     public var onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)?
+    public var onAsTitle: ((UUID, String) -> Void)?
+    public var onAddToComments: ((UUID, String) -> Void)?
+    public var onMerge: ((UUID, String, [HighlightRect]) -> Void)?
+    public var onEmphasize: ((UUID, String) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -59,7 +63,11 @@ public struct MarginNotePDFContainerView: View {
         onChangeCardColor: ((UUID, Int) -> Void)? = nil,
         onDeleteCard: ((UUID) -> Void)? = nil,
         onSelectCard: ((UUID?) -> Void)? = nil,
-        onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)? = nil
+        onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)? = nil,
+        onAsTitle: ((UUID, String) -> Void)? = nil,
+        onAddToComments: ((UUID, String) -> Void)? = nil,
+        onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
+        onEmphasize: ((UUID, String) -> Void)? = nil
     ) {
         self.manager = manager
         self.cards = cards
@@ -73,6 +81,10 @@ public struct MarginNotePDFContainerView: View {
         self.onDeleteCard = onDeleteCard
         self.onSelectCard = onSelectCard
         self.onUpdateCardHighlight = onUpdateCardHighlight
+        self.onAsTitle = onAsTitle
+        self.onAddToComments = onAddToComments
+        self.onMerge = onMerge
+        self.onEmphasize = onEmphasize
     }
 
     public var body: some View {
@@ -150,7 +162,11 @@ public struct MarginNotePDFContainerView: View {
                     onChangeCardColor: onChangeCardColor,
                     onDeleteCard: onDeleteCard,
                     onSelectCard: onSelectCard,
-                    onUpdateCardHighlight: onUpdateCardHighlight
+                    onUpdateCardHighlight: onUpdateCardHighlight,
+                    onAsTitle: onAsTitle,
+                    onAddToComments: onAddToComments,
+                    onMerge: onMerge,
+                    onEmphasize: onEmphasize
                 )
                 .background(Color(white: 0.94))
 

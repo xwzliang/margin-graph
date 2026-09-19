@@ -363,6 +363,80 @@ final class AppModel: ObservableObject {
         Swift.print("[App] updateHighlight completed cardID=\(cardID) newTitle='\(card.title.prefix(30))...' newTextLength=\(card.highlightText.count) rects=\(rects.count)")
     }
 
+    func setCardTitleFromSelection(cardID: UUID, text: String) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        card.title = text
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Set Card Title")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        activeToolbarOwner = .pdf
+        objectWillChange.send()
+        Swift.print("[App] setCardTitleFromSelection cardID=\(cardID) newTitle='\(text)'")
+    }
+
+    func addCommentFromSelection(cardID: UUID, text: String) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        if card.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            card.notesText = text
+        } else {
+            card.notesText = card.notesText + "\n\n" + text
+        }
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Add Comment")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        activeToolbarOwner = .pdf
+        objectWillChange.send()
+        Swift.print("[App] addCommentFromSelection cardID=\(cardID) appendedText='\(text)'")
+    }
+
+    func mergeSelectionIntoCard(cardID: UUID, text: String, rects: [HighlightRect]) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(text)
+        if card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            card.highlightText = normalized
+        } else {
+            card.highlightText = card.highlightText + "\n\n" + normalized
+        }
+        let combinedRects = card.highlightRects + rects
+        card.highlightRects = PDFHighlightResolver.deduplicate(combinedRects)
+        let sortedPages = card.highlightRects.map { $0.page }.sorted()
+        if let minP = sortedPages.first { card.startPage = minP }
+        if let maxP = sortedPages.last { card.endPage = maxP }
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Merge Highlight")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        activeToolbarOwner = .pdf
+        objectWillChange.send()
+        Swift.print("[App] mergeSelectionIntoCard cardID=\(cardID) totalRects=\(card.highlightRects.count)")
+    }
+
+    func emphasizeTextInCard(cardID: UUID, text: String) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        if !card.emphasisList.contains(clean) {
+            card.emphasisList.append(clean)
+        }
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Emphasize Text")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        activeToolbarOwner = .pdf
+        objectWillChange.send()
+        Swift.print("[App] emphasizeTextInCard cardID=\(cardID) emphasisList=\(card.emphasisList)")
+    }
+
     func navigateToCard(_ card: NoteCard) {
         if let md5 = card.bookMD5,
            let document = studyDocuments.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }) ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }),
@@ -914,6 +988,18 @@ struct StudyWorkspaceView: View {
                         startPos: startPos,
                         endPos: endPos
                     )
+                },
+                onAsTitle: { cardID, text in
+                    model.setCardTitleFromSelection(cardID: cardID, text: text)
+                },
+                onAddToComments: { cardID, text in
+                    model.addCommentFromSelection(cardID: cardID, text: text)
+                },
+                onMerge: { cardID, text, rects in
+                    model.mergeSelectionIntoCard(cardID: cardID, text: text, rects: rects)
+                },
+                onEmphasize: { cardID, text in
+                    model.emphasizeTextInCard(cardID: cardID, text: text)
                 }
             )
         } else {

@@ -392,4 +392,39 @@ final class PDFTests: XCTestCase {
         context.endPDFPage()
         context.closePDF()
     }
+
+    func testTargetCardPendingSelectionContainment() {
+        let card = NoteCard(
+            topicId: UUID(),
+            title: "Test Card",
+            highlightText: "This is a key excerpt from the document.",
+            highlightRects: [
+                HighlightRect(page: 0, x: 50, y: 100, width: 300, height: 16)
+            ]
+        )
+        let view = InteractivePDFView()
+        view.cards = [card]
+
+        let pendingWithin = InteractivePDFView.PendingSelection(
+            selection: PDFSelection(),
+            text: "key excerpt",
+            rects: [HighlightRect(page: 0, x: 80, y: 100, width: 60, height: 16)],
+            startPage: PDFPage(),
+            startPoint: CGPoint(x: 80, y: 108),
+            endPage: PDFPage(),
+            endPoint: CGPoint(x: 140, y: 108)
+        )
+        XCTAssertTrue(view.checkIfPendingWithinTarget(pendingWithin, targetCardID: card.id))
+
+        let pendingOutside = InteractivePDFView.PendingSelection(
+            selection: PDFSelection(),
+            text: "completely different text elsewhere",
+            rects: [HighlightRect(page: 0, x: 80, y: 300, width: 120, height: 16)],
+            startPage: PDFPage(),
+            startPoint: CGPoint(x: 80, y: 308),
+            endPage: PDFPage(),
+            endPoint: CGPoint(x: 200, y: 308)
+        )
+        XCTAssertFalse(view.checkIfPendingWithinTarget(pendingOutside, targetCardID: card.id))
+    }
 }
