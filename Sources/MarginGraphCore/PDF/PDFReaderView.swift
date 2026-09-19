@@ -236,11 +236,6 @@ public enum PDFHighlightResolver {
         let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
         annotation.color = color
         annotation.contents = contents
-        let p1 = NSValue(point: CGPoint(x: bounds.minX, y: bounds.maxY))
-        let p2 = NSValue(point: CGPoint(x: bounds.maxX, y: bounds.maxY))
-        let p3 = NSValue(point: CGPoint(x: bounds.minX, y: bounds.minY))
-        let p4 = NSValue(point: CGPoint(x: bounds.maxX, y: bounds.minY))
-        annotation.quadrilateralPoints = [p1, p2, p3, p4]
         return annotation
     }
 }
