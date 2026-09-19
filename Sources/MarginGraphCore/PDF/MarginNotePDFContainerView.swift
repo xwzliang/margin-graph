@@ -34,6 +34,8 @@ public struct MarginNotePDFContainerView: View {
     public var selectedCardID: UUID?
     public var jumpTarget: PDFJumpTarget?
     public var onExcerpt: (PDFExcerpt) -> Void
+    public var onSelectCard: ((UUID) -> Void)?
+    public var onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -45,13 +47,17 @@ public struct MarginNotePDFContainerView: View {
         cards: [NoteCard],
         selectedCardID: UUID? = nil,
         jumpTarget: PDFJumpTarget? = nil,
-        onExcerpt: @escaping (PDFExcerpt) -> Void
+        onExcerpt: @escaping (PDFExcerpt) -> Void,
+        onSelectCard: ((UUID) -> Void)? = nil,
+        onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)? = nil
     ) {
         self.manager = manager
         self.cards = cards
         self.selectedCardID = selectedCardID
         self.jumpTarget = jumpTarget
         self.onExcerpt = onExcerpt
+        self.onSelectCard = onSelectCard
+        self.onUpdateCardHighlight = onUpdateCardHighlight
     }
 
     public var body: some View {
@@ -122,7 +128,9 @@ public struct MarginNotePDFContainerView: View {
                     selectedCardID: selectedCardID,
                     jumpTarget: jumpTarget,
                     currentPageIndex: $currentPageIndex,
-                    onExcerpt: onExcerpt
+                    onExcerpt: onExcerpt,
+                    onSelectCard: onSelectCard,
+                    onUpdateCardHighlight: onUpdateCardHighlight
                 )
                 .background(Color(white: 0.94))
 
