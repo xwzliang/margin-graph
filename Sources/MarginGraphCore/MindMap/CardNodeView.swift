@@ -106,7 +106,7 @@ public struct CardNodeView: View {
                         // User comments / notes
                         if hasNotes {
                             Text(card.notesText)
-                                .font(.system(size: 11.5, weight: .regular))
+                                .font(.system(size: 11.5, weight: .bold))
                                 .foregroundStyle(Color(white: 0.32))
                                 .lineSpacing(2)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -188,7 +188,7 @@ public struct CardNodeView: View {
         for emphasis in card.emphasisList where !emphasis.isEmpty {
             var searchRange = attr.startIndex..<attr.endIndex
             while let range = attr[searchRange].range(of: emphasis) {
-                attr[range].inlinePresentationIntent = .stronglyEmphasized
+                attr[range].font = .system(size: 11.5, weight: .heavy)
                 attr[range].underlineStyle = Text.LineStyle(pattern: .dot, color: Color(MarginNoteTheme.cursorBlue))
                 if range.upperBound < attr.endIndex {
                     searchRange = range.upperBound..<attr.endIndex

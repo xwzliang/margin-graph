@@ -75,6 +75,7 @@ public struct PDFPopoverToolbarView: View {
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
 
@@ -85,6 +86,7 @@ public struct PDFPopoverToolbarView: View {
                                     .font(.system(size: 11.5, weight: .medium))
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 4)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.plain)
                         }
@@ -94,6 +96,7 @@ public struct PDFPopoverToolbarView: View {
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 4)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
 
@@ -102,6 +105,7 @@ public struct PDFPopoverToolbarView: View {
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 4)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
 
@@ -110,6 +114,7 @@ public struct PDFPopoverToolbarView: View {
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 4)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
                     }

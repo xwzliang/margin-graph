@@ -131,7 +131,7 @@ final class PDFTests: XCTestCase {
         var updatedCardID: UUID?
         var updatedText: String?
         var updatedRects: [HighlightRect] = []
-        view.updateCardHighlightHandler = { id, text, newRects, startPt, endPt in
+        view.updateCardHighlightHandler = { id, segId, text, newRects, startPt, endPt in
             updatedCardID = id
             updatedText = text
             updatedRects = newRects
@@ -142,11 +142,75 @@ final class PDFTests: XCTestCase {
             let extracted = PDFHighlightResolver.lineRects(from: sel, document: doc)
             XCTAssertFalse(extracted.isEmpty)
             XCTAssertEqual(extracted.first?.page, 0)
-            view.updateCardHighlightHandler?(cardID, sel.string ?? "", extracted, .zero, .zero)
+            view.updateCardHighlightHandler?(cardID, nil, sel.string ?? "", extracted, .zero, .zero)
             XCTAssertEqual(updatedCardID, cardID)
             XCTAssertFalse(updatedRects.isEmpty)
             XCTAssertNotNil(updatedText)
         }
+    }
+
+    func testExcerptSegmentDatabaseRoundTrip() throws {
+        let db = try Database(inMemory: true)
+        let topic = Topic(title: "Segment Test")
+        try db.insertTopic(topic)
+
+        let seg1 = ExcerptSegment(id: UUID(), text: "First segment text", rects: [HighlightRect(page: 0, x: 10, y: 20, width: 100, height: 15)])
+        let seg2 = ExcerptSegment(id: UUID(), text: "Second segment text", rects: [HighlightRect(page: 0, x: 10, y: 40, width: 120, height: 15)])
+
+        let card = NoteCard(
+            topicId: topic.id,
+            highlightText: "First segment text\n\nSecond segment text",
+            highlightRects: seg1.rects + seg2.rects,
+            emphasisList: ["First segment"],
+            excerptSegments: [seg1, seg2]
+        )
+        try db.insertCard(card)
+
+        let loaded = try XCTUnwrap(db.getCard(id: card.id))
+        XCTAssertEqual(loaded.excerptSegments.count, 2)
+        XCTAssertEqual(loaded.excerptSegments[0].text, "First segment text")
+        XCTAssertEqual(loaded.excerptSegments[1].text, "Second segment text")
+        XCTAssertEqual(loaded.effectiveSegments.count, 2)
+        XCTAssertEqual(loaded.emphasisList, ["First segment"])
+
+        // Test fallback when excerptSegments is empty
+        var legacyCard = card
+        legacyCard.id = UUID()
+        legacyCard.excerptSegments = []
+        try db.insertCard(legacyCard)
+
+        let loadedLegacy = try XCTUnwrap(db.getCard(id: legacyCard.id))
+        XCTAssertEqual(loadedLegacy.excerptSegments.count, 0)
+        XCTAssertEqual(loadedLegacy.effectiveSegments.count, 1)
+        XCTAssertEqual(loadedLegacy.effectiveSegments[0].text, legacyCard.highlightText)
+    }
+
+    func testDottedLineAnnotationRendering() {
+        let annot = DottedLineAnnotation(
+            bounds: CGRect(x: 10, y: 20, width: 100, height: 10),
+            forType: .square,
+            withProperties: nil
+        )
+        annot.lineStartPoint = CGPoint(x: 10, y: 25)
+        annot.lineEndPoint = CGPoint(x: 110, y: 25)
+        annot.strokeLineWidth = 2.5
+        annot.dashPattern = [2.5, 3.5]
+
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let context = CGContext(
+            data: nil,
+            width: 200,
+            height: 100,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            XCTFail("Failed to create graphics context")
+            return
+        }
+
+        annot.draw(with: .cropBox, in: context)
     }
 
     func testMultiPageSelectionAcrossPages() throws {

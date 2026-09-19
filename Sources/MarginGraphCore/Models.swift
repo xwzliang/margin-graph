@@ -51,6 +51,18 @@ public struct HighlightRect: Codable, Hashable, Sendable {
     }
 }
 
+public struct ExcerptSegment: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    public var text: String
+    public var rects: [HighlightRect]
+
+    public init(id: UUID = UUID(), text: String = "", rects: [HighlightRect] = []) {
+        self.id = id
+        self.text = text
+        self.rects = rects
+    }
+}
+
 public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var topicId: UUID
@@ -71,6 +83,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var highlightPicHash: String?
     public var highlightRects: [HighlightRect]
     public var emphasisList: [String]
+    public var excerptSegments: [ExcerptSegment]
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -94,6 +107,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         highlightPicHash: String? = nil,
         highlightRects: [HighlightRect] = [],
         emphasisList: [String] = [],
+        excerptSegments: [ExcerptSegment] = [],
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -116,8 +130,19 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         self.highlightPicHash = highlightPicHash
         self.highlightRects = highlightRects
         self.emphasisList = emphasisList
+        self.excerptSegments = excerptSegments
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+    }
+
+    public var effectiveSegments: [ExcerptSegment] {
+        if !excerptSegments.isEmpty {
+            return excerptSegments
+        }
+        if !highlightRects.isEmpty || !highlightText.isEmpty {
+            return [ExcerptSegment(id: id, text: highlightText, rects: highlightRects)]
+        }
+        return []
     }
 }
 

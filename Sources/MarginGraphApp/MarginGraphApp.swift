@@ -339,6 +339,7 @@ final class AppModel: ObservableObject {
 
     func updateHighlight(
         cardID: UUID,
+        segmentID: UUID?,
         newText: String,
         rects: [HighlightRect],
         startPos: CGPoint,
@@ -347,8 +348,22 @@ final class AppModel: ObservableObject {
         guard let oldCard = try? database.getCard(id: cardID) else { return }
         var card = oldCard
         let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(newText)
-        card.highlightText = normalized
-        card.highlightRects = rects
+        if !card.excerptSegments.isEmpty || segmentID != nil {
+            var segments = card.effectiveSegments
+            if let segmentID, let idx = segments.firstIndex(where: { $0.id == segmentID }) {
+                segments[idx].text = normalized
+                segments[idx].rects = rects
+            } else if let firstIdx = segments.indices.first {
+                segments[firstIdx].text = normalized
+                segments[firstIdx].rects = rects
+            }
+            card.excerptSegments = segments
+            card.highlightText = segments.map(\.text).joined(separator: "\n\n")
+            card.highlightRects = PDFHighlightResolver.deduplicate(segments.flatMap(\.rects))
+        } else {
+            card.highlightText = normalized
+            card.highlightRects = rects
+        }
         card.startPage = rects.first?.page ?? card.startPage
         card.endPage = rects.last?.page ?? card.endPage
         card.startPos = startPos
@@ -360,7 +375,7 @@ final class AppModel: ObservableObject {
         selectedCardID = cardID
         activeToolbarOwner = .pdf
         objectWillChange.send()
-        Swift.print("[App] updateHighlight completed cardID=\(cardID) newTitle='\(card.title.prefix(30))...' newTextLength=\(card.highlightText.count) rects=\(rects.count)")
+        Swift.print("[App] updateHighlight completed cardID=\(cardID) segmentID=\(String(describing: segmentID)) newTitle='\(card.title.prefix(30))...' newTextLength=\(card.highlightText.count) rects=\(rects.count)")
     }
 
     func setCardTitleFromSelection(cardID: UUID, text: String) {
@@ -399,12 +414,17 @@ final class AppModel: ObservableObject {
         guard let oldCard = try? database.getCard(id: cardID) else { return }
         var card = oldCard
         let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(text)
-        if card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            card.highlightText = normalized
-        } else {
-            card.highlightText = card.highlightText + "\n\n" + normalized
+        var segments = card.effectiveSegments
+        if segments.isEmpty {
+            if !card.highlightText.isEmpty || !card.highlightRects.isEmpty {
+                segments.append(ExcerptSegment(id: UUID(), text: card.highlightText, rects: card.highlightRects))
+            }
         }
-        let combinedRects = card.highlightRects + rects
+        let newSegment = ExcerptSegment(id: UUID(), text: normalized, rects: rects)
+        segments.append(newSegment)
+        card.excerptSegments = segments
+        card.highlightText = segments.map(\.text).joined(separator: "\n\n")
+        let combinedRects = segments.flatMap(\.rects)
         card.highlightRects = PDFHighlightResolver.deduplicate(combinedRects)
         let sortedPages = card.highlightRects.map { $0.page }.sorted()
         if let minP = sortedPages.first { card.startPage = minP }
@@ -416,7 +436,32 @@ final class AppModel: ObservableObject {
         selectedCardID = cardID
         activeToolbarOwner = .pdf
         objectWillChange.send()
-        Swift.print("[App] mergeSelectionIntoCard cardID=\(cardID) totalRects=\(card.highlightRects.count)")
+        Swift.print("[App] mergeSelectionIntoCard cardID=\(cardID) totalSegments=\(card.excerptSegments.count) totalRects=\(card.highlightRects.count)")
+    }
+
+    func deleteSegment(cardID: UUID, segmentID: UUID) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        var segments = card.effectiveSegments
+        segments.removeAll(where: { $0.id == segmentID })
+        if segments.isEmpty {
+            delete(cardID: cardID)
+            return
+        }
+        card.excerptSegments = segments
+        card.highlightText = segments.map(\.text).joined(separator: "\n\n")
+        card.highlightRects = PDFHighlightResolver.deduplicate(segments.flatMap(\.rects))
+        let sortedPages = card.highlightRects.map { $0.page }.sorted()
+        card.startPage = sortedPages.first
+        card.endPage = sortedPages.last
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Delete Excerpt Segment")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        activeToolbarOwner = .pdf
+        objectWillChange.send()
+        Swift.print("[App] deleteSegment cardID=\(cardID) segmentID=\(segmentID) remainingSegments=\(card.excerptSegments.count)")
     }
 
     func emphasizeTextInCard(cardID: UUID, text: String) {
@@ -977,12 +1022,16 @@ struct StudyWorkspaceView: View {
                 onDeleteCard: { cardID in
                     model.delete(cardID: cardID)
                 },
+                onDeleteSegment: { cardID, segmentID in
+                    model.deleteSegment(cardID: cardID, segmentID: segmentID)
+                },
                 onSelectCard: { cardID in
                     model.selectCardFromPDF(cardID: cardID)
                 },
-                onUpdateCardHighlight: { cardID, newText, rects, startPos, endPos in
+                onUpdateCardHighlight: { cardID, segmentID, newText, rects, startPos, endPos in
                     model.updateHighlight(
                         cardID: cardID,
+                        segmentID: segmentID,
                         newText: newText,
                         rects: rects,
                         startPos: startPos,

@@ -39,8 +39,9 @@ public struct MarginNotePDFContainerView: View {
     public var onEditCard: ((UUID) -> Void)?
     public var onChangeCardColor: ((UUID, Int) -> Void)?
     public var onDeleteCard: ((UUID) -> Void)?
+    public var onDeleteSegment: ((UUID, UUID) -> Void)?
     public var onSelectCard: ((UUID?) -> Void)?
-    public var onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)?
+    public var onUpdateCardHighlight: ((UUID, UUID?, String, [HighlightRect], CGPoint, CGPoint) -> Void)?
     public var onAsTitle: ((UUID, String) -> Void)?
     public var onAddToComments: ((UUID, String) -> Void)?
     public var onMerge: ((UUID, String, [HighlightRect]) -> Void)?
@@ -62,8 +63,9 @@ public struct MarginNotePDFContainerView: View {
         onEditCard: ((UUID) -> Void)? = nil,
         onChangeCardColor: ((UUID, Int) -> Void)? = nil,
         onDeleteCard: ((UUID) -> Void)? = nil,
+        onDeleteSegment: ((UUID, UUID) -> Void)? = nil,
         onSelectCard: ((UUID?) -> Void)? = nil,
-        onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)? = nil,
+        onUpdateCardHighlight: ((UUID, UUID?, String, [HighlightRect], CGPoint, CGPoint) -> Void)? = nil,
         onAsTitle: ((UUID, String) -> Void)? = nil,
         onAddToComments: ((UUID, String) -> Void)? = nil,
         onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
@@ -79,6 +81,7 @@ public struct MarginNotePDFContainerView: View {
         self.onEditCard = onEditCard
         self.onChangeCardColor = onChangeCardColor
         self.onDeleteCard = onDeleteCard
+        self.onDeleteSegment = onDeleteSegment
         self.onSelectCard = onSelectCard
         self.onUpdateCardHighlight = onUpdateCardHighlight
         self.onAsTitle = onAsTitle
@@ -161,6 +164,7 @@ public struct MarginNotePDFContainerView: View {
                     onEditCard: onEditCard,
                     onChangeCardColor: onChangeCardColor,
                     onDeleteCard: onDeleteCard,
+                    onDeleteSegment: onDeleteSegment,
                     onSelectCard: onSelectCard,
                     onUpdateCardHighlight: onUpdateCardHighlight,
                     onAsTitle: onAsTitle,
