@@ -60,7 +60,9 @@ final class AppModel: ObservableObject {
         let ahrensTopic = existingTopics.first(where: { $0.title.contains("Ahrens") })
         let ahrensCards = (try? database.cardsForTopic(id: ahrensTopic?.id ?? UUID())) ?? []
         let hasHighlightRects = ahrensCards.contains { !$0.highlightRects.isEmpty }
-        let needsImport = existingTopics.isEmpty || !hasHighlightRects || existingDocs.contains(where: { $0.filePath.isEmpty })
+        let existingCards = existingTopics.flatMap { (try? database.cardsForTopic(id: $0.id)) ?? [] }
+        let colorsNeedRefresh = !existingCards.isEmpty && existingCards.allSatisfy { $0.colorIndex == 0 }
+        let needsImport = existingTopics.isEmpty || !hasHighlightRects || colorsNeedRefresh || existingDocs.contains(where: { $0.filePath.isEmpty })
         guard needsImport else { return }
 
         let liveCandidates = [
@@ -242,6 +244,34 @@ final class AppModel: ObservableObject {
         print("[App] select card: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
         selectedCardID = card.id
         navigateToCard(card)
+    }
+
+    func select(cardID: UUID) {
+        if let card = mindMapCards.first(where: { $0.id == cardID })
+            ?? documentCards.first(where: { $0.id == cardID })
+            ?? (try? database.getCard(id: cardID)) {
+            select(card: card)
+        }
+    }
+
+    func updateHighlight(
+        cardID: UUID,
+        newText: String,
+        rects: [HighlightRect],
+        startPos: CGPoint,
+        endPos: CGPoint
+    ) {
+        guard var card = try? database.getCard(id: cardID) else { return }
+        card.highlightText = newText
+        card.highlightRects = rects
+        card.startPage = rects.first?.page ?? card.startPage
+        card.endPage = rects.last?.page ?? card.endPage
+        card.startPos = startPos
+        card.endPos = endPos
+        card.updatedAt = Date()
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
     }
 
     func navigateToCard(_ card: NoteCard) {
@@ -720,7 +750,19 @@ struct StudyWorkspaceView: View {
                 cards: model.documentCards.isEmpty ? model.mindMapCards : model.documentCards,
                 selectedCardID: model.selectedCardID,
                 jumpTarget: model.jumpTarget,
-                onExcerpt: model.createExcerpt
+                onExcerpt: model.createExcerpt,
+                onSelectCard: { cardID in
+                    model.select(cardID: cardID)
+                },
+                onUpdateCardHighlight: { cardID, newText, rects, startPos, endPos in
+                    model.updateHighlight(
+                        cardID: cardID,
+                        newText: newText,
+                        rects: rects,
+                        startPos: startPos,
+                        endPos: endPos
+                    )
+                }
             )
         } else {
             VStack(spacing: 12) {
