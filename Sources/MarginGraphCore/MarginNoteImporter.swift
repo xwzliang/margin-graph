@@ -129,6 +129,16 @@ public final class MarginNoteImporter {
             let created = parseDate(first(row, ["ZCREATEDAT", "ZCREATEDATE", "ZCREATED"])) ?? Date()
             let updated = parseDate(first(row, ["ZUPDATEDAT", "ZMODIFIEDDATE", "ZUPDATED"])) ?? created
 
+            var colorIndex = Int(first(row, ["ZCOLORINDEX", "ZCOLOR"]) ?? "") ?? -1
+            if colorIndex < 0 || colorIndex == 0 {
+                if let style = first(row, ["ZHIGHLIGHT_STYLE", "ZHIGHLIGHTSTYLE", "ZSTYLE"]),
+                   let last = style.last,
+                   let hex = Int(String(last), radix: 16) {
+                    colorIndex = hex
+                }
+            }
+            if colorIndex < 0 { colorIndex = 0 }
+
             cards.append(NoteCard(
                 id: noteKeyMap[key] ?? stableUUID(key),
                 topicId: topicId,
@@ -144,7 +154,7 @@ public final class MarginNoteImporter {
                 endPage: zeroBasedPage(first(row, ["ZENDPAGE"])),
                 startPos: parsePoint(first(row, ["ZSTARTPOS"])),
                 endPos: parsePoint(first(row, ["ZENDPOS"])),
-                colorIndex: Int(first(row, ["ZCOLORINDEX", "ZCOLOR"]) ?? "0") ?? 0,
+                colorIndex: colorIndex,
                 tags: parseStringList(first(row, ["ZTAGS"])),
                 highlightPicHash: first(row, ["ZHIGHLIGHTPICHASH"]),
                 highlightRects: parseHighlightRects(first(row, ["ZHIGHLIGHTS"])),
