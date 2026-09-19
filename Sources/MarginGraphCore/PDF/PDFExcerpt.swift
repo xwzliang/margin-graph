@@ -43,7 +43,7 @@ public final class ExcerptCoordinator: @unchecked Sendable {
         let card = NoteCard(
             topicId: topicId,
             bookMD5: excerpt.bookMD5,
-            title: title ?? excerpt.text.prefix(80).description,
+            title: title ?? "",
             highlightText: excerpt.text,
             startPage: excerpt.pageIndex,
             endPage: excerpt.pageIndex,

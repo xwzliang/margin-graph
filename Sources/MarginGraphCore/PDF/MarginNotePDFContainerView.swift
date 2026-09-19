@@ -34,7 +34,11 @@ public struct MarginNotePDFContainerView: View {
     public var selectedCardID: UUID?
     public var jumpTarget: PDFJumpTarget?
     public var onExcerpt: (PDFExcerpt) -> Void
-    public var onSelectCard: ((UUID) -> Void)?
+    public var onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)?
+    public var onEditCard: ((UUID) -> Void)?
+    public var onChangeCardColor: ((UUID, Int) -> Void)?
+    public var onDeleteCard: ((UUID) -> Void)?
+    public var onSelectCard: ((UUID?) -> Void)?
     public var onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
@@ -48,7 +52,11 @@ public struct MarginNotePDFContainerView: View {
         selectedCardID: UUID? = nil,
         jumpTarget: PDFJumpTarget? = nil,
         onExcerpt: @escaping (PDFExcerpt) -> Void,
-        onSelectCard: ((UUID) -> Void)? = nil,
+        onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)? = nil,
+        onEditCard: ((UUID) -> Void)? = nil,
+        onChangeCardColor: ((UUID, Int) -> Void)? = nil,
+        onDeleteCard: ((UUID) -> Void)? = nil,
+        onSelectCard: ((UUID?) -> Void)? = nil,
         onUpdateCardHighlight: ((UUID, String, [HighlightRect], CGPoint, CGPoint) -> Void)? = nil
     ) {
         self.manager = manager
@@ -56,6 +64,10 @@ public struct MarginNotePDFContainerView: View {
         self.selectedCardID = selectedCardID
         self.jumpTarget = jumpTarget
         self.onExcerpt = onExcerpt
+        self.onCreateCardWithColor = onCreateCardWithColor
+        self.onEditCard = onEditCard
+        self.onChangeCardColor = onChangeCardColor
+        self.onDeleteCard = onDeleteCard
         self.onSelectCard = onSelectCard
         self.onUpdateCardHighlight = onUpdateCardHighlight
     }
@@ -129,6 +141,10 @@ public struct MarginNotePDFContainerView: View {
                     jumpTarget: jumpTarget,
                     currentPageIndex: $currentPageIndex,
                     onExcerpt: onExcerpt,
+                    onCreateCardWithColor: onCreateCardWithColor,
+                    onEditCard: onEditCard,
+                    onChangeCardColor: onChangeCardColor,
+                    onDeleteCard: onDeleteCard,
                     onSelectCard: onSelectCard,
                     onUpdateCardHighlight: onUpdateCardHighlight
                 )

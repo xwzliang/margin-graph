@@ -254,10 +254,10 @@ final class AppModel: ObservableObject {
         reloadStudySet()
     }
 
-    func createExcerpt(_ excerpt: PDFExcerpt) {
+    func createExcerpt(_ excerpt: PDFExcerpt, colorIndex: Int = 0) {
         let topic = ensureTopic()
         let coordinator = ExcerptCoordinator(database: database, mediaStorage: mediaStorage)
-        guard let card = try? coordinator.createCard(from: excerpt, topicId: topic.id) else { return }
+        guard let card = try? coordinator.createCard(from: excerpt, topicId: topic.id, colorIndex: colorIndex) else { return }
         selectedCardID = card.id
         reloadStudySet()
         navigateToCard(card)
@@ -277,7 +277,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func selectCardFromPDF(cardID: UUID) {
+    func selectCardFromPDF(cardID: UUID?) {
+        guard let cardID else {
+            Swift.print("[App] selectCardFromPDF: deselected")
+            selectedCardID = nil
+            jumpTarget = nil
+            return
+        }
         if let card = mindMapCards.first(where: { $0.id == cardID })
             ?? documentCards.first(where: { $0.id == cardID })
             ?? (try? database.getCard(id: cardID)) {
@@ -332,18 +338,8 @@ final class AppModel: ObservableObject {
     ) {
         guard let oldCard = try? database.getCard(id: cardID) else { return }
         var card = oldCard
-        let oldHighlight = card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let oldTitle = card.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        let isAutoTitle = oldTitle.isEmpty
-            || oldTitle == oldHighlight
-            || (oldHighlight.count > 0 && oldTitle.hasPrefix(String(oldHighlight.prefix(15))))
-            || (oldTitle.count > 0 && oldHighlight.hasPrefix(String(oldTitle.prefix(15))))
         let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(newText)
         card.highlightText = normalized
-        if isAutoTitle {
-            let firstParagraph = normalized.components(separatedBy: "\n\n").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            card.title = firstParagraph.isEmpty ? normalized : firstParagraph
-        }
         card.highlightRects = rects
         card.startPage = rects.first?.page ?? card.startPage
         card.endPage = rects.last?.page ?? card.endPage
@@ -873,7 +869,24 @@ struct StudyWorkspaceView: View {
                 cards: model.documentCards.isEmpty ? model.mindMapCards : model.documentCards,
                 selectedCardID: model.selectedCardID,
                 jumpTarget: model.jumpTarget,
-                onExcerpt: model.createExcerpt,
+                onExcerpt: { excerpt in
+                    model.createExcerpt(excerpt)
+                },
+                onCreateCardWithColor: { excerpt, colorIdx in
+                    model.createExcerpt(excerpt, colorIndex: colorIdx)
+                },
+                onEditCard: { cardID in
+                    if let card = model.mindMapCards.first(where: { $0.id == cardID })
+                        ?? (try? model.database.getCard(id: cardID)) {
+                        model.editingCard = card
+                    }
+                },
+                onChangeCardColor: { cardID, colorIdx in
+                    model.changeCardColor(cardID: cardID, colorIndex: colorIdx)
+                },
+                onDeleteCard: { cardID in
+                    model.delete(cardID: cardID)
+                },
                 onSelectCard: { cardID in
                     model.selectCardFromPDF(cardID: cardID)
                 },

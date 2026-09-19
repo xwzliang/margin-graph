@@ -207,6 +207,16 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(paragraphs[1], "The classic role model would be Charles Darwin. He forced himself to write down disconfirming facts.")
     }
 
+    func testNormalizeExcerptPreservesEmptyLinesBetweenParagraphs() {
+        let input = "Paragraph one with several words here.\n\nParagraph two starting after an empty line."
+        let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(input)
+        XCTAssertTrue(normalized.contains("\n\n"))
+        let parts = normalized.components(separatedBy: "\n\n")
+        XCTAssertEqual(parts.count, 2)
+        XCTAssertEqual(parts[0], "Paragraph one with several words here.")
+        XCTAssertEqual(parts[1], "Paragraph two starting after an empty line.")
+    }
+
     func testHighlightRectDeduplication() {
         let rects = [
             HighlightRect(page: 1, x: 50, y: 100, width: 200, height: 16),
@@ -216,6 +226,38 @@ final class PDFTests: XCTestCase {
         ]
         let deduplicated = PDFHighlightResolver.deduplicate(rects)
         XCTAssertEqual(deduplicated.count, 2)
+    }
+
+    func testExcerptCoordinatorDefaultsToEmptyTitleAndSpecifiedColor() throws {
+        let database = try Database(inMemory: true)
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraphMediaTest-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = try MediaStorage(directoryURL: root)
+        let topic = Topic(title: "Test Topic")
+        try database.insertTopic(topic)
+
+        let excerpt = PDFExcerpt(
+            bookMD5: "md5test",
+            pageIndex: 0,
+            bounds: CGRect(x: 10, y: 20, width: 100, height: 30),
+            text: "Important excerpt text"
+        )
+        let coordinator = ExcerptCoordinator(database: database, mediaStorage: media)
+        let card = try coordinator.createCard(from: excerpt, topicId: topic.id, colorIndex: 2)
+
+        XCTAssertEqual(card.title, "", "New card title must default to empty string")
+        XCTAssertEqual(card.highlightText, "Important excerpt text")
+        XCTAssertEqual(card.colorIndex, 2)
+    }
+
+    func testMarginNoteBlueColorIsBfdbfe() {
+        let colors = MarginNoteTheme.cardColors(for: 2)
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        NSColor(colors.accent).usingColorSpace(.sRGB)?.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        XCTAssertEqual(round(red * 255), 191)
+        XCTAssertEqual(round(green * 255), 219)
+        XCTAssertEqual(round(blue * 255), 254)
     }
 
     private func makeMultiPageSyntheticPDF(at url: URL) throws {

@@ -39,13 +39,17 @@ public struct TreeLayoutResult {
 
 public enum TreeLayout {
     public static func estimatedCardHeight(for card: NoteCard, width: CGFloat = 240) -> CGFloat {
-        let titleText = card.title.isEmpty ? (card.highlightText.isEmpty ? "Note" : card.highlightText) : card.title
-        let titleChars = max(1, titleText.count)
-        let titleLineCount = max(1, (titleChars + 28) / 29)
-        let headerHeight = CGFloat(titleLineCount) * 19.0 + 16.0
+        let headerHeight: CGFloat
+        if !card.title.isEmpty {
+            let titleChars = max(1, card.title.count)
+            let titleLineCount = max(1, (titleChars + 28) / 29)
+            headerHeight = CGFloat(titleLineCount) * 19.0 + 16.0
+        } else {
+            headerHeight = 18.0
+        }
 
         var bodyContentHeight: CGFloat = 0
-        let hasExcerpt = !card.title.isEmpty && !card.highlightText.isEmpty
+        let hasExcerpt = !card.highlightText.isEmpty
         if hasExcerpt {
             let excerptChars = card.highlightText.count
             let excerptLines = max(1, (excerptChars + 34) / 35)
@@ -80,8 +84,7 @@ public enum TreeLayout {
         var columnStartX: CGFloat = 40
         var nextY: CGFloat = 40
         let totalCards = max(1, cards.count)
-        let totalArea = CGFloat(totalCards) * (configuration.nodeSize.width + configuration.horizontalSpacing) * (180.0 + configuration.verticalSpacing)
-        let maxColumnHeight: CGFloat = max(2600, sqrt(totalArea / 1.55))
+        let maxColumnHeight: CGFloat = max(1400.0, 270.0 * sqrt(CGFloat(totalCards)))
 
         @discardableResult
         func place(_ card: NoteCard, depth: Int, baseX: CGFloat) -> CGRect {
@@ -121,7 +124,8 @@ public enum TreeLayout {
 
         for root in roots {
             if nextY >= maxColumnHeight {
-                columnStartX += configuration.nodeSize.width + configuration.horizontalSpacing
+                let currentMaxX = frames.values.map(\.maxX).max() ?? (columnStartX + configuration.nodeSize.width)
+                columnStartX = currentMaxX + configuration.horizontalSpacing
                 nextY = 40
             }
             _ = place(root, depth: 0, baseX: columnStartX)

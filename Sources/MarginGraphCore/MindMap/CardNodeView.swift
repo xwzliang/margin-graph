@@ -36,37 +36,58 @@ public struct CardNodeView: View {
         Button(action: onSelect) {
             VStack(alignment: .leading, spacing: 0) {
                 // 1. Accent Header Section (Title & chevron)
-                HStack(alignment: .top, spacing: 5) {
-                    if hasChildren {
-                        Button(action: onToggleFold) {
-                            Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(Color(white: 0.25))
-                                .frame(width: 14, height: 14)
+                if !card.title.isEmpty {
+                    HStack(alignment: .top, spacing: 5) {
+                        if hasChildren {
+                            Button(action: onToggleFold) {
+                                Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                                    .foregroundStyle(Color(white: 0.25))
+                                    .frame(width: 14, height: 14)
+                            }
+                            .buttonStyle(.plain)
                         }
-                        .buttonStyle(.plain)
+
+                        Text(card.title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color(white: 0.12))
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Spacer(minLength: 4)
+
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Color(white: 0.35))
+                            .padding(.top, 2)
                     }
-
-                    let displayTitle = card.title.isEmpty ? (card.highlightText.isEmpty ? "Note" : card.highlightText) : card.title
-                    Text(displayTitle)
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(white: 0.12))
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 4)
-
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color(white: 0.35))
-                        .padding(.top, 2)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(cardColors.accent)
+                } else {
+                    HStack(alignment: .center, spacing: 5) {
+                        if hasChildren {
+                            Button(action: onToggleFold) {
+                                Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Color(white: 0.25))
+                                    .frame(width: 12, height: 12)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Color(white: 0.35))
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .frame(maxWidth: .infinity)
+                    .background(cardColors.accent)
                 }
-                .padding(.horizontal, 9)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
-                .background(cardColors.accent)
 
                 // 2. Cream Body Section (Excerpt & Notes)
-                let hasExcerpt = !card.title.isEmpty && !card.highlightText.isEmpty
+                let hasExcerpt = !card.highlightText.isEmpty
                 let hasNotes = !card.notesText.isEmpty
                 let hasImage = thumbnail != nil
                 let hasTags = !card.tags.isEmpty

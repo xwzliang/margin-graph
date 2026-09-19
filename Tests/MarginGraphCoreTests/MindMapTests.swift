@@ -61,6 +61,23 @@ final class MindMapTests: XCTestCase {
         XCTAssertLessThanOrEqual(viewport.zoomScale, 3.0)
     }
 
+    func testLayoutAspectRatioInspection() throws {
+        let db = try Database()
+        let topics = try db.allTopics()
+        if let topic = topics.first(where: { $0.title.contains("Ahrens") }) {
+            let cards = try db.cardsForTopic(id: topic.id)
+            let result = TreeLayout.layout(cards: cards)
+            let frames = Array(result.frames.values)
+            if let first = frames.first {
+                let bounds = frames.dropFirst().reduce(first) { $0.union($1) }
+                let aspect = bounds.width / bounds.height
+                print("DEBUG_FINAL_ASPECT: bounds=\(bounds) aspect=\(aspect)")
+                XCTAssertGreaterThan(aspect, 1.0, "Layout should be wider than tall")
+                XCTAssertLessThan(aspect, 2.5, "Layout should reasonably match minimap aspect ratio")
+            }
+        }
+    }
+
     func testDatabaseReparentIndentAndOutdent() throws {
         let database = try Database(inMemory: true)
         let topic = Topic(title: "MindMap")

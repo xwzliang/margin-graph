@@ -122,7 +122,7 @@ public final class MarginNoteImporter {
         for row in noteRows {
             let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let topicKey = first(row, ["ZTOPICID", "ZTOPIC", "ZTOPIC_PK"])
-            let topicId = topicKey.flatMap { topicKeyMap[$0] } ?? topicKey.map(stableUUID) ?? fallbackTopic
+            let topicId = topicKey.flatMap { topicKeyMap[$0] } ?? fallbackTopic
             let parentKey = first(row, ["ZGROUPNOTEID", "ZGROUPNOTE", "ZPARENTNOTEID"])
             let parentId = parentKey.flatMap { noteKeyMap[$0] ?? UUID(uuidString: $0) }
             let mindLinks = parseStringList(first(row, ["ZMINDLINKS"])).map { noteKeyMap[$0] ?? stableUUID($0) }

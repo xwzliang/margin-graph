@@ -114,7 +114,11 @@ public struct MindMapCanvasView: View {
                         .scaleEffect(viewport.zoomScale)
                         .frame(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale)
                         .contentShape(RoundedRectangle(cornerRadius: 5 * viewport.zoomScale))
-                        .highPriorityGesture(nodeDrag(card: card, frame: frame, frames: frames))
+                        .simultaneousGesture(TapGesture().onEnded {
+                            print("[MindMap] TapGesture onSelect: \(card.title)")
+                            onSelect(card)
+                        })
+                        .gesture(nodeDrag(card: card, frame: frame, frames: frames))
                         .position(
                             x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY)).x,
                             y: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY)).y
@@ -489,10 +493,15 @@ private struct MiniMapView: View {
             let sy = size.height / max(1, bounds.height)
             let scale = min(sx, sy)
 
+            let contentWidth = bounds.width * scale
+            let contentHeight = bounds.height * scale
+            let offsetX = (size.width - contentWidth) / 2.0
+            let offsetY = (size.height - contentHeight) / 2.0
+
             for frame in frames {
                 let rect = CGRect(
-                    x: (frame.minX - bounds.minX) * scale,
-                    y: (frame.minY - bounds.minY) * scale,
+                    x: offsetX + (frame.minX - bounds.minX) * scale,
+                    y: offsetY + (frame.minY - bounds.minY) * scale,
                     width: max(2, frame.width * scale),
                     height: max(2, frame.height * scale)
                 )
@@ -502,8 +511,8 @@ private struct MiniMapView: View {
             let visibleOrigin = viewport.screenToCanvas(.zero)
             let visibleEnd = viewport.screenToCanvas(CGPoint(x: canvasSize.width, y: canvasSize.height))
             let visible = CGRect(
-                x: (visibleOrigin.x - bounds.minX) * scale,
-                y: (visibleOrigin.y - bounds.minY) * scale,
+                x: offsetX + (visibleOrigin.x - bounds.minX) * scale,
+                y: offsetY + (visibleOrigin.y - bounds.minY) * scale,
                 width: (visibleEnd.x - visibleOrigin.x) * scale,
                 height: (visibleEnd.y - visibleOrigin.y) * scale
             )
@@ -526,8 +535,13 @@ private struct MiniMapView: View {
                     let scale = min(sx, sy)
                     guard scale > 0 else { return }
 
-                    let canvasX = bounds.minX + gesture.location.x / scale
-                    let canvasY = bounds.minY + gesture.location.y / scale
+                    let contentWidth = bounds.width * scale
+                    let contentHeight = bounds.height * scale
+                    let offsetX = (140.0 - contentWidth) / 2.0
+                    let offsetY = (90.0 - contentHeight) / 2.0
+
+                    let canvasX = bounds.minX + (gesture.location.x - offsetX) / scale
+                    let canvasY = bounds.minY + (gesture.location.y - offsetY) / scale
                     viewport.panOffset = CGPoint(
                         x: canvasSize.width / 2 - canvasX * viewport.zoomScale,
                         y: canvasSize.height / 2 - canvasY * viewport.zoomScale

@@ -29,8 +29,8 @@ public struct MarginNoteTheme {
         (Color(red: 245/255.0, green: 239/255.0, blue: 220/255.0), Color(red: 226/255.0, green: 217/255.0, blue: 130/255.0), Color(red: 243/255.0, green: 236/255.0, blue: 160/255.0)),
         // 1: Green #c3ebac
         (Color(red: 245/255.0, green: 239/255.0, blue: 220/255.0), Color(red: 169/255.0, green: 214/255.0, blue: 144/255.0), Color(red: 195/255.0, green: 235/255.0, blue: 172/255.0)),
-        // 2: Blue #b6cbd6
-        (Color(red: 245/255.0, green: 239/255.0, blue: 220/255.0), Color(red: 156/255.0, green: 181/255.0, blue: 194/255.0), Color(red: 182/255.0, green: 203/255.0, blue: 214/255.0)),
+        // 2: Blue #bfdbfe
+        (Color(red: 245/255.0, green: 239/255.0, blue: 220/255.0), Color(red: 147/255.0, green: 197/255.0, blue: 253/255.0), Color(red: 191/255.0, green: 219/255.0, blue: 254/255.0)),
         // 3: Coral / Light Red #f2bab7
         (Color(red: 245/255.0, green: 239/255.0, blue: 220/255.0), Color(red: 230/255.0, green: 165/255.0, blue: 160/255.0), Color(red: 242/255.0, green: 186/255.0, blue: 183/255.0)),
         // 4: Light Purple / Lavender #e0c3e8
