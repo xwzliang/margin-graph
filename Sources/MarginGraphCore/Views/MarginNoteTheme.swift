@@ -20,24 +20,27 @@ public struct MarginNoteTheme {
     public static let cardBorder = Color(red: 0.84, green: 0.81, blue: 0.74)
 
     public static let cardPastels: [(background: Color, border: Color, accent: Color)] = [
-        // 0: Yellow
-        (Color(red: 0.99, green: 0.97, blue: 0.85), Color(red: 0.90, green: 0.86, blue: 0.68), Color(red: 0.85, green: 0.75, blue: 0.20)),
-        // 1: Red / Coral
-        (Color(red: 0.99, green: 0.90, blue: 0.88), Color(red: 0.94, green: 0.76, blue: 0.72), Color(red: 0.88, green: 0.35, blue: 0.30)),
-        // 2: Orange
-        (Color(red: 1.00, green: 0.94, blue: 0.84), Color(red: 0.95, green: 0.84, blue: 0.68), Color(red: 0.92, green: 0.60, blue: 0.15)),
-        // 3: Green
-        (Color(red: 0.91, green: 0.97, blue: 0.90), Color(red: 0.78, green: 0.90, blue: 0.75), Color(red: 0.30, green: 0.70, blue: 0.35)),
-        // 4: Blue
-        (Color(red: 0.90, green: 0.94, blue: 0.99), Color(red: 0.76, green: 0.85, blue: 0.96), Color(red: 0.25, green: 0.55, blue: 0.85)),
-        // 5: Purple
-        (Color(red: 0.95, green: 0.92, blue: 0.99), Color(red: 0.86, green: 0.78, blue: 0.95), Color(red: 0.60, green: 0.40, blue: 0.85)),
-        // 6: Gray / White
-        (Color(red: 0.95, green: 0.94, blue: 0.92), Color(red: 0.85, green: 0.83, blue: 0.80), Color(red: 0.55, green: 0.53, blue: 0.50))
+        // MarginNote color indices 0...15.
+        (Color(red: 0.99, green: 0.97, blue: 0.85), Color(red: 0.90, green: 0.86, blue: 0.68), Color(red: 0.85, green: 0.75, blue: 0.20)), // 0 yellow
+        (Color(red: 0.99, green: 0.90, blue: 0.88), Color(red: 0.94, green: 0.76, blue: 0.72), Color(red: 0.88, green: 0.35, blue: 0.30)), // 1 coral
+        (Color(red: 1.00, green: 0.94, blue: 0.84), Color(red: 0.95, green: 0.84, blue: 0.68), Color(red: 0.92, green: 0.60, blue: 0.15)), // 2 orange
+        (Color(red: 0.91, green: 0.97, blue: 0.90), Color(red: 0.78, green: 0.90, blue: 0.75), Color(red: 0.30, green: 0.70, blue: 0.35)), // 3 green
+        (Color(red: 0.90, green: 0.94, blue: 0.99), Color(red: 0.76, green: 0.85, blue: 0.96), Color(red: 0.25, green: 0.55, blue: 0.85)), // 4 blue
+        (Color(red: 0.95, green: 0.92, blue: 0.99), Color(red: 0.86, green: 0.78, blue: 0.95), Color(red: 0.60, green: 0.40, blue: 0.85)), // 5 purple
+        (Color(red: 0.95, green: 0.94, blue: 0.92), Color(red: 0.85, green: 0.83, blue: 0.80), Color(red: 0.55, green: 0.53, blue: 0.50)), // 6 gray
+        (Color(red: 0.91, green: 0.98, blue: 0.97), Color(red: 0.73, green: 0.91, blue: 0.88), Color(red: 0.20, green: 0.68, blue: 0.62)), // 7 teal
+        (Color(red: 0.98, green: 0.91, blue: 0.95), Color(red: 0.91, green: 0.76, blue: 0.85), Color(red: 0.80, green: 0.35, blue: 0.62)), // 8 pink
+        (Color(red: 0.94, green: 0.96, blue: 0.86), Color(red: 0.84, green: 0.88, blue: 0.68), Color(red: 0.58, green: 0.68, blue: 0.22)), // 9 lime
+        (Color(red: 0.89, green: 0.97, blue: 0.99), Color(red: 0.72, green: 0.88, blue: 0.93), Color(red: 0.20, green: 0.62, blue: 0.76)), // a cyan
+        (Color(red: 0.93, green: 0.91, blue: 1.00), Color(red: 0.80, green: 0.77, blue: 0.95), Color(red: 0.45, green: 0.38, blue: 0.82)), // b indigo
+        (Color(red: 1.00, green: 0.92, blue: 0.88), Color(red: 0.95, green: 0.78, blue: 0.70), Color(red: 0.86, green: 0.42, blue: 0.24)), // c vermilion
+        (Color(red: 0.93, green: 0.98, blue: 0.91), Color(red: 0.79, green: 0.91, blue: 0.74), Color(red: 0.38, green: 0.66, blue: 0.25)), // d leaf
+        (Color(red: 0.91, green: 0.93, blue: 0.98), Color(red: 0.76, green: 0.81, blue: 0.92), Color(red: 0.32, green: 0.46, blue: 0.76)), // e slate blue
+        (Color(red: 0.97, green: 0.93, blue: 0.87), Color(red: 0.89, green: 0.81, blue: 0.69), Color(red: 0.68, green: 0.52, blue: 0.27))  // f ochre
     ]
 
     public static func cardColors(for colorIndex: Int) -> (background: Color, border: Color, accent: Color) {
-        let idx = abs(colorIndex) % cardPastels.count
+        let idx = ((colorIndex % cardPastels.count) + cardPastels.count) % cardPastels.count
         return cardPastels[idx]
     }
 
