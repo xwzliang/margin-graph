@@ -1,0 +1,10 @@
+{
+  "protocol_version": 1,
+  "session_id": "20260919-085635-PDF-highlight-selection-drag-cursors-range-adjustment-and-MarginNote-color-import",
+  "repository": "xwzliang/margin-graph",
+  "task_branch": "chatgpt-worker/pdf-highlight-cursors-and-color",
+  "status": "waiting_for_worker",
+  "current_request": 1,
+  "last_tested_commit": null,
+  "max_iterations": 5
+}
