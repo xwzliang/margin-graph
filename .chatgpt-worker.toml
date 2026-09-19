@@ -11,6 +11,7 @@ commands = [
 
 [browser]
 transport = "native"
+auto_allow = true
 
 [communication]
 runtime_dir = ".chatgpt-worker"
