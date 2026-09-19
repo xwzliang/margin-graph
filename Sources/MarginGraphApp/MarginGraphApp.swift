@@ -57,8 +57,10 @@ final class AppModel: ObservableObject {
     func autoImportLiveMarginNoteIfEmpty() {
         let existingTopics = (try? database.allTopics()) ?? []
         let existingDocs = (try? database.allDocuments()) ?? []
-        let ahrensUpdated = existingTopics.first(where: { $0.title.contains("Ahrens") })?.updatedAt.timeIntervalSince1970 ?? 0
-        let needsImport = existingTopics.isEmpty || existingDocs.contains(where: { $0.filePath.isEmpty }) || ahrensUpdated < 1_000_000_000
+        let ahrensTopic = existingTopics.first(where: { $0.title.contains("Ahrens") })
+        let ahrensCards = (try? database.cardsForTopic(id: ahrensTopic?.id ?? UUID())) ?? []
+        let hasHighlightRects = ahrensCards.contains { !$0.highlightRects.isEmpty }
+        let needsImport = existingTopics.isEmpty || !hasHighlightRects || existingDocs.contains(where: { $0.filePath.isEmpty })
         guard needsImport else { return }
 
         let liveCandidates = [
@@ -206,7 +208,7 @@ final class AppModel: ObservableObject {
     }
 
     func switchToDocument(_ document: Document) {
-        guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath)) else { return }
+        guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
         activeDocument = document
         manager = loaded
         reloadDocumentCards()
@@ -251,7 +253,16 @@ final class AppModel: ObservableObject {
 
         guard let page = card.startPage else { return }
         let bounds: CGRect
-        if let start = card.startPos, let end = card.endPos {
+        if let firstLine = card.highlightRects.first {
+            let pageLines = card.highlightRects.filter { $0.page == page }
+            if let first = pageLines.first {
+                bounds = pageLines.dropFirst().reduce(
+                    CGRect(x: first.x, y: first.y, width: first.width, height: first.height)
+                ) { $0.union(CGRect(x: $1.x, y: $1.y, width: $1.width, height: $1.height)) }
+            } else {
+                bounds = CGRect(x: firstLine.x, y: firstLine.y, width: firstLine.width, height: firstLine.height)
+            }
+        } else if let start = card.startPos, let end = card.endPos {
             bounds = CGRect(
                 x: min(start.x, end.x),
                 y: min(start.y, end.y),
@@ -706,7 +717,8 @@ struct StudyWorkspaceView: View {
         if let manager = model.manager {
             MarginNotePDFContainerView(
                 manager: manager,
-                cards: model.documentCards,
+                cards: model.documentCards.isEmpty ? model.mindMapCards : model.documentCards,
+                selectedCardID: model.selectedCardID,
                 jumpTarget: model.jumpTarget,
                 onExcerpt: model.createExcerpt
             )

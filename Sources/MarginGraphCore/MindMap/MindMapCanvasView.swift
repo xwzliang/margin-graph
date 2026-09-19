@@ -91,7 +91,8 @@ public struct MindMapCanvasView: View {
                         )
                         .frame(width: frame.width, height: frame.height)
                         .scaleEffect(viewport.zoomScale)
-                        .contentShape(RoundedRectangle(cornerRadius: 5))
+                        .frame(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale)
+                        .contentShape(RoundedRectangle(cornerRadius: 5 * viewport.zoomScale))
                         .highPriorityGesture(nodeDrag(card: card, frame: frame, frames: frames))
                         .position(
                             x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY)).x,

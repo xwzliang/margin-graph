@@ -289,7 +289,7 @@ public final class Database: @unchecked Sendable {
         )
     }
 
-    public func insertCard(_ card: NoteCard) throws { try writeCard(card, replace: false) }
+    public func insertCard(_ card: NoteCard) throws { try writeCard(card, replace: true) }
     public func updateCard(_ card: NoteCard) throws { try writeCard(card, replace: true) }
 
     private func writeCard(_ card: NoteCard, replace: Bool) throws {
@@ -358,7 +358,7 @@ public final class Database: @unchecked Sendable {
         )
     }
 
-    private func cards(sql: String, values: [String]) throws -> [NoteCard] {
+    func cards(sql: String, values: [String]) throws -> [NoteCard] {
         try withStatement(sql) { statement in
             for (offset, value) in values.enumerated() {
                 bind(value, to: Int32(offset + 1), in: statement)

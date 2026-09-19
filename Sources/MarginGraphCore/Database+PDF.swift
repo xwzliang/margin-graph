@@ -2,10 +2,9 @@ import Foundation
 
 public extension Database {
     func cardsForDocument(md5: String) throws -> [NoteCard] {
-        var result: [NoteCard] = []
-        for topic in try allTopics() {
-            result.append(contentsOf: try cardsForTopic(id: topic.id).filter { $0.bookMD5 == md5 })
-        }
-        return result.sorted { $0.createdAt < $1.createdAt }
+        try cards(
+            sql: "SELECT * FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%') ORDER BY created_at",
+            values: [md5, "\(md5)%", md5]
+        )
     }
 }

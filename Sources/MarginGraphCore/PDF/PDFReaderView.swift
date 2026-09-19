@@ -108,6 +108,7 @@ public struct PDFReaderView: NSViewRepresentable {
     public var tool: PDFSelectionTool
     public var highlightColor: NSColor
     public var cards: [NoteCard]
+    public var selectedCardID: UUID?
     public var jumpTarget: PDFJumpTarget?
     @Binding public var currentPageIndex: Int
     public var onExcerpt: ((PDFExcerpt) -> Void)?
@@ -118,6 +119,7 @@ public struct PDFReaderView: NSViewRepresentable {
         tool: PDFSelectionTool = .textSelection,
         highlightColor: NSColor = .systemYellow,
         cards: [NoteCard] = [],
+        selectedCardID: UUID? = nil,
         jumpTarget: PDFJumpTarget? = nil,
         currentPageIndex: Binding<Int> = .constant(0),
         onExcerpt: ((PDFExcerpt) -> Void)? = nil
@@ -127,6 +129,7 @@ public struct PDFReaderView: NSViewRepresentable {
         self.tool = tool
         self.highlightColor = highlightColor
         self.cards = cards
+        self.selectedCardID = selectedCardID
         self.jumpTarget = jumpTarget
         self._currentPageIndex = currentPageIndex
         self.onExcerpt = onExcerpt
@@ -156,7 +159,14 @@ public struct PDFReaderView: NSViewRepresentable {
         view.displayMode = displayMode == .continuous ? .singlePageContinuous : .singlePage
         view.autoScales = true
         configure(view)
-        applyCardHighlights(to: view)
+        if context.coordinator.lastCardCount != cards.count ||
+           context.coordinator.lastSelectedCardID != selectedCardID ||
+           context.coordinator.lastDocument !== view.document {
+            context.coordinator.lastCardCount = cards.count
+            context.coordinator.lastSelectedCardID = selectedCardID
+            context.coordinator.lastDocument = view.document
+            applyCardHighlights(to: view)
+        }
 
         if context.coordinator.lastPageIndex != currentPageIndex {
             context.coordinator.lastPageIndex = currentPageIndex
@@ -202,9 +212,12 @@ public struct PDFReaderView: NSViewRepresentable {
         }
 
         for card in cards {
-            let matchesBook = card.bookMD5 == manager.md5 ||
-                (card.bookMD5 != nil && (card.bookMD5!.hasPrefix(manager.md5) || manager.md5.hasPrefix(card.bookMD5!)))
-            guard matchesBook else { continue }
+            if let bookMD5 = card.bookMD5, !bookMD5.isEmpty {
+                let matchesBook = bookMD5 == manager.md5 ||
+                    bookMD5.hasPrefix(manager.md5) ||
+                    manager.md5.hasPrefix(bookMD5)
+                guard matchesBook else { continue }
+            }
 
             let lineRects = PDFHighlightResolver.lineRects(for: card, in: document)
             guard !lineRects.isEmpty else { continue }
@@ -219,26 +232,31 @@ public struct PDFReaderView: NSViewRepresentable {
                 page.addAnnotation(annotation)
             }
 
-            if isActive(card: card), let pageIndex = card.startPage,
-               let page = document.page(at: pageIndex) {
-                let pageRects = lineRects
-                    .filter { $0.page == pageIndex }
-                    .map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
-                if let first = pageRects.first {
-                    let union = pageRects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -2, dy: -2)
+            if isActive(card: card) {
+                let cardPageRects: [Int: [CGRect]] = Dictionary(grouping: lineRects, by: \.page)
+                    .mapValues { $0.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) } }
+                for (pageIdx, rects) in cardPageRects {
+                    guard let page = document.page(at: pageIdx), let first = rects.first else { continue }
+                    let union = rects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -3, dy: -3)
                     let active = PDFAnnotation(bounds: union, forType: .square, withProperties: nil)
                     active.color = accent.withAlphaComponent(0.95)
                     let border = PDFBorder()
-                    border.lineWidth = 1.5
+                    border.lineWidth = 2.0
+                    border.style = .solid
                     active.border = border
                     active.contents = "MarginGraph-active-highlight"
                     page.addAnnotation(active)
                 }
             }
         }
+        view.layoutDocumentView()
+        view.setNeedsDisplay(view.bounds)
     }
 
     private func isActive(card: NoteCard) -> Bool {
+        if let selectedCardID {
+            return card.id == selectedCardID
+        }
         guard let jumpTarget, card.startPage == jumpTarget.pageIndex else { return false }
         guard let start = card.startPos, let end = card.endPos else {
             return !card.highlightText.isEmpty
@@ -257,7 +275,7 @@ public struct PDFReaderView: NSViewRepresentable {
         let pageBounds = page.bounds(for: .cropBox)
         let destinationPoint: CGPoint
         if target.bounds.width > 2 && target.bounds.height > 2 {
-            destinationPoint = CGPoint(x: target.bounds.midX, y: target.bounds.midY)
+            destinationPoint = CGPoint(x: max(0, target.bounds.minX - 30), y: min(pageBounds.maxY, target.bounds.maxY + 80))
         } else {
             destinationPoint = CGPoint(x: pageBounds.midX, y: pageBounds.maxY - 100)
         }
@@ -273,6 +291,9 @@ public struct PDFReaderView: NSViewRepresentable {
         var parent: PDFReaderView
         var lastJump: PDFJumpTarget?
         var lastPageIndex: Int = 0
+        var lastCardCount: Int = -1
+        var lastSelectedCardID: UUID?
+        weak var lastDocument: PDFDocument?
         var observer: NSObjectProtocol?
 
         init(_ parent: PDFReaderView) {

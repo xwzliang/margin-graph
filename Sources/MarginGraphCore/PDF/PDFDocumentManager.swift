@@ -25,7 +25,7 @@ public final class PDFDocumentManager: @unchecked Sendable {
     public let pageCount: Int
     public let outline: [PDFOutlineItem]
 
-    public init(url: URL) throws {
+    public init(url: URL, md5: String? = nil) throws {
         guard let document = PDFDocument(url: url) else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -33,8 +33,12 @@ public final class PDFDocumentManager: @unchecked Sendable {
         self.document = document
         self.pageCount = document.pageCount
 
-        let data = try Data(contentsOf: url)
-        self.md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        if let md5, !md5.isEmpty {
+            self.md5 = md5
+        } else {
+            let data = try Data(contentsOf: url)
+            self.md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
 
         let attributeTitle = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
         self.title = (attributeTitle?.isEmpty == false ? attributeTitle : nil)

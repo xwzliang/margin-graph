@@ -2,6 +2,8 @@ import Foundation
 import CoreGraphics
 import SQLite3
 import PDFKit
+import zlib
+
 
 public struct MarginNoteImportResult: Sendable {
     public var topics: [Topic]
@@ -235,17 +237,47 @@ public final class MarginNoteImporter {
 
     private func parseHighlightRects(_ raw: String?) -> [HighlightRect] {
         guard let raw, raw.hasPrefix("base64:"),
-              let data = Data(base64Encoded: String(raw.dropFirst("base64:".count))),
-              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+              let data = Data(base64Encoded: String(raw.dropFirst("base64:".count)))
         else { return [] }
 
         var result: [HighlightRect] = []
 
+        func addRect(page: Int, rect: CGRect) {
+            guard rect.width > 0, rect.height > 0 else { return }
+            result.append(HighlightRect(
+                page: max(0, page - 1),
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height
+            ))
+        }
+
         func walk(_ value: Any) {
             if let dict = value as? [String: Any] {
+                if let gzData = dict["textSelData"] as? Data,
+                   let decompressed = decompressGzip(gzData),
+                   let jsonArr = try? JSONSerialization.jsonObject(with: decompressed) as? [[String: Any]] {
+                    for item in jsonArr {
+                        let page = (item["pageNo"] as? NSNumber)?.intValue ?? Int(item["pageNo"] as? String ?? "")
+                        if let page, let rObj = item["rect"], let r = parseRect(rObj) {
+                            addRect(page: page, rect: r)
+                        }
+                    }
+                }
+                if let list = dict["textSelLst"] as? [Any] {
+                    for item in list {
+                        if let d = item as? [String: Any] {
+                            let page = (d["pageNo"] as? NSNumber)?.intValue ?? Int(d["pageNo"] as? String ?? "")
+                            if let page, let rObj = d["rect"], let r = parseRect(rObj) {
+                                addRect(page: page, rect: r)
+                            }
+                        }
+                    }
+                }
                 if let pageValue = dict["pageNo"],
-                   let rectValue = dict["rect"] as? String,
-                   let rect = parseRect(rectValue) {
+                   let rectObj = dict["rect"],
+                   let rect = parseRect(rectObj) {
                     let page: Int?
                     if let number = pageValue as? NSNumber {
                         page = number.intValue
@@ -255,13 +287,7 @@ public final class MarginNoteImporter {
                         page = nil
                     }
                     if let page {
-                        result.append(HighlightRect(
-                            page: max(0, page - 1),
-                            x: rect.origin.x,
-                            y: rect.origin.y,
-                            width: rect.size.width,
-                            height: rect.size.height
-                        ))
+                        addRect(page: page, rect: rect)
                     }
                 }
                 for child in dict.values {
@@ -272,19 +298,74 @@ public final class MarginNoteImporter {
             }
         }
 
-        walk(plist)
+        if let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) {
+            unarchiver.requiresSecureCoding = false
+            if let root = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) {
+                walk(root)
+            }
+        } else if let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) {
+            walk(plist)
+        }
+
         return result
     }
 
-    private func parseRect(_ raw: String) -> CGRect? {
-        let regex = try? NSRegularExpression(pattern: #"-?\d+(?:\.\d+)?"#)
-        let nsRange = NSRange(raw.startIndex..<raw.endIndex, in: raw)
-        let values = regex?.matches(in: raw, range: nsRange).compactMap { match -> Double? in
-            guard let range = Range(match.range, in: raw) else { return nil }
-            return Double(raw[range])
-        } ?? []
-        guard values.count >= 4 else { return nil }
-        return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+    private func decompressGzip(_ data: Data) -> Data? {
+        guard !data.isEmpty else { return nil }
+        var stream = z_stream()
+        let initStatus = inflateInit2_(&stream, 16 + MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
+        guard initStatus == Z_OK else { return nil }
+        defer { inflateEnd(&stream) }
+
+        var decompressed = Data()
+        let bufferSize = 4096
+        let buffer = UnsafeMutablePointer<UInt8>.allocate(capacity: bufferSize)
+        defer { buffer.deallocate() }
+
+        data.withUnsafeBytes { rawBufferPointer in
+            stream.next_in = UnsafeMutablePointer<Bytef>(mutating: rawBufferPointer.bindMemory(to: Bytef.self).baseAddress)
+            stream.avail_in = uInt(data.count)
+
+            while true {
+                stream.next_out = buffer
+                stream.avail_out = uInt(bufferSize)
+                let status = inflate(&stream, Z_NO_FLUSH)
+                if status != Z_OK && status != Z_STREAM_END {
+                    break
+                }
+                let count = bufferSize - Int(stream.avail_out)
+                decompressed.append(buffer, count: count)
+                if status == Z_STREAM_END { break }
+                if stream.avail_out > 0 { break }
+            }
+        }
+
+        return decompressed.isEmpty ? nil : decompressed
+    }
+
+    private func parseRect(_ raw: Any) -> CGRect? {
+        if let val = raw as? NSValue {
+            return val.rectValue
+        }
+        if let dict = raw as? [String: Any] {
+            if let x = (dict["x"] as? NSNumber)?.doubleValue,
+               let y = (dict["y"] as? NSNumber)?.doubleValue,
+               let w = (dict["w"] as? NSNumber)?.doubleValue,
+               let h = (dict["h"] as? NSNumber)?.doubleValue {
+                return CGRect(x: x, y: y, width: w, height: h)
+            }
+        }
+        if let str = raw as? String {
+            let regex = try? NSRegularExpression(pattern: #"-?\d+(?:\.\d+)?"#)
+            let nsRange = NSRange(str.startIndex..<str.endIndex, in: str)
+            let values = regex?.matches(in: str, range: nsRange).compactMap { match -> Double? in
+                guard let range = Range(match.range, in: str) else { return nil }
+                return Double(str[range])
+            } ?? []
+            guard values.count >= 4 else { return nil }
+            return CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        }
+        return nil
     }
 
     private func parseDate(_ raw: String?) -> Date? {

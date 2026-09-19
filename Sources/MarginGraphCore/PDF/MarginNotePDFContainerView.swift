@@ -31,6 +31,7 @@ public enum MarginNotePDFTool: String, CaseIterable, Identifiable {
 public struct MarginNotePDFContainerView: View {
     public var manager: PDFDocumentManager
     public var cards: [NoteCard]
+    public var selectedCardID: UUID?
     public var jumpTarget: PDFJumpTarget?
     public var onExcerpt: (PDFExcerpt) -> Void
 
@@ -42,11 +43,13 @@ public struct MarginNotePDFContainerView: View {
     public init(
         manager: PDFDocumentManager,
         cards: [NoteCard],
+        selectedCardID: UUID? = nil,
         jumpTarget: PDFJumpTarget? = nil,
         onExcerpt: @escaping (PDFExcerpt) -> Void
     ) {
         self.manager = manager
         self.cards = cards
+        self.selectedCardID = selectedCardID
         self.jumpTarget = jumpTarget
         self.onExcerpt = onExcerpt
     }
@@ -116,6 +119,7 @@ public struct MarginNotePDFContainerView: View {
                     tool: selectionTool,
                     highlightColor: NSColor(highlightColor),
                     cards: cards,
+                    selectedCardID: selectedCardID,
                     jumpTarget: jumpTarget,
                     currentPageIndex: $currentPageIndex,
                     onExcerpt: onExcerpt

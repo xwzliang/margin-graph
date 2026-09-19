@@ -90,11 +90,13 @@ public struct CardEditorSheet: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
 
-                        TextField("Card Title", text: $title, axis: .vertical)
-                            .textFieldStyle(.roundedBorder)
+                        TextEditor(text: $title)
                             .font(.system(size: 13))
-                            .lineLimit(2...6)
-                            .padding(.vertical, 2)
+                            .lineSpacing(2)
+                            .padding(4)
+                            .frame(minHeight: 64, maxHeight: 130)
+                            .background(Color.white)
+                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(white: 0.82), lineWidth: 1))
                     }
 
                     // Excerpt (Read-only preview from PDF)
