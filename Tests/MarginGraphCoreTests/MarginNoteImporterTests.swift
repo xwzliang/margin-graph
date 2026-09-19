@@ -21,17 +21,18 @@ final class MarginNoteImporterTests: XCTestCase {
         CREATE TABLE ZBOOK (Z_PK INTEGER, ZBOOKID TEXT, ZTITLE TEXT, ZFILEPATH TEXT, ZMD5 TEXT, ZTOTALPAGES INTEGER);
         CREATE TABLE ZBOOKNOTE (
             Z_PK INTEGER, ZNOTEID TEXT, ZTOPICID TEXT, ZBOOKMD5 TEXT, ZNOTETITLE TEXT,
-            ZHIGHLIGHT_TEXT TEXT, ZNOTES_TEXT TEXT, ZGROUPNOTEID TEXT, ZMINDPOS TEXT, ZMINDLINKS TEXT
+            ZHIGHLIGHT_TEXT TEXT, ZNOTES_TEXT TEXT, ZGROUPNOTEID TEXT, ZMINDPOS TEXT, ZMINDLINKS TEXT,
+            ZHIGHLIGHT_STYLE TEXT
         );
         INSERT INTO ZTOPIC VALUES(1, '\(topicID.uuidString)', 'Notebook', '["book-md5"]');
         INSERT INTO ZBOOK VALUES(1, '\(UUID().uuidString)', 'Book', '/tmp/book.pdf', 'book-md5', 99);
         INSERT INTO ZBOOKNOTE VALUES(
             1, '\(parentID.uuidString)', '\(topicID.uuidString)', 'book-md5',
-            'Parent', 'quote', 'note', NULL, '{10,20}', '["\(childID.uuidString)"]'
+            'Parent', 'quote', 'note', NULL, '{10,20}', '["\(childID.uuidString)"]', 'mbooks-annotationa'
         );
         INSERT INTO ZBOOKNOTE VALUES(
             2, '\(childID.uuidString)', '\(topicID.uuidString)', 'book-md5',
-            'Child', '', '', '\(parentID.uuidString)', '{30,40}', '[]'
+            'Child', '', '', '\(parentID.uuidString)', '{30,40}', '[]', 'mbooks-annotation1c'
         );
         """)
 
@@ -47,6 +48,8 @@ final class MarginNoteImporterTests: XCTestCase {
 
         XCTAssertEqual(parent.mindPos?.x, 10)
         XCTAssertEqual(parent.mindLinks, [childID])
+        XCTAssertEqual(parent.colorIndex, 10)
+        XCTAssertEqual(child.colorIndex, 12)
         XCTAssertEqual(child.groupNoteId, parentID)
         XCTAssertEqual(
             try destination.childCards(parentId: parentID, topicId: topicID).first?.id,
