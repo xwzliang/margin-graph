@@ -38,6 +38,35 @@ public struct TreeLayoutResult {
 }
 
 public enum TreeLayout {
+    public static func estimatedCardHeight(for card: NoteCard, width: CGFloat = 240) -> CGFloat {
+        let titleText = card.title.isEmpty ? (card.highlightText.isEmpty ? "Note" : card.highlightText) : card.title
+        let titleChars = max(1, titleText.count)
+        let titleLineCount = max(1, (titleChars + 28) / 29)
+        let headerHeight = CGFloat(titleLineCount) * 19.0 + 16.0
+
+        var bodyContentHeight: CGFloat = 0
+        let hasExcerpt = !card.title.isEmpty && !card.highlightText.isEmpty
+        if hasExcerpt {
+            let excerptChars = card.highlightText.count
+            let excerptLines = max(1, (excerptChars + 34) / 35)
+            bodyContentHeight += CGFloat(excerptLines) * 16.5 + 8.0
+        }
+        if !card.notesText.isEmpty {
+            let noteChars = card.notesText.count
+            let noteLines = max(1, (noteChars + 34) / 35)
+            bodyContentHeight += CGFloat(noteLines) * 16.5 + 8.0
+        }
+        if card.highlightPicHash != nil {
+            bodyContentHeight += 90.0
+        }
+        if !card.tags.isEmpty {
+            bodyContentHeight += 24.0
+        }
+
+        let bodyHeight = bodyContentHeight > 0 ? (bodyContentHeight + 14.0) : 0
+        return max(70, headerHeight + bodyHeight)
+    }
+
     public static func layout(
         cards: [NoteCard],
         configuration: TreeLayoutConfiguration = TreeLayoutConfiguration()
@@ -50,18 +79,20 @@ public enum TreeLayout {
         var visible = Set<UUID>()
         var columnStartX: CGFloat = 40
         var nextY: CGFloat = 40
-        let maxColumnHeight: CGFloat = 720
+        let maxColumnHeight: CGFloat = 1600
 
         @discardableResult
         func place(_ card: NoteCard, depth: Int, baseX: CGFloat) -> CGRect {
             let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
             let x = baseX + CGFloat(depth) * (configuration.nodeSize.width + configuration.horizontalSpacing)
+            let cardHeight = estimatedCardHeight(for: card, width: configuration.nodeSize.width)
+            let currentSize = CGSize(width: configuration.nodeSize.width, height: cardHeight)
 
             if card.isFolded || cardChildren.isEmpty {
-                let frame = CGRect(origin: CGPoint(x: x, y: nextY), size: configuration.nodeSize)
+                let frame = CGRect(origin: CGPoint(x: x, y: nextY), size: currentSize)
                 frames[card.id] = frame
                 visible.insert(card.id)
-                nextY += configuration.nodeSize.height + configuration.verticalSpacing
+                nextY += cardHeight + configuration.verticalSpacing
                 return frame
             }
 
@@ -75,11 +106,11 @@ public enum TreeLayout {
             if let first = childFrames.first, let last = childFrames.last {
                 childCenterY = (first.midY + last.midY) / 2
             } else {
-                childCenterY = subtreeStartY + configuration.nodeSize.height / 2
+                childCenterY = subtreeStartY + cardHeight / 2
             }
 
-            let originY = max(subtreeStartY, childCenterY - configuration.nodeSize.height / 2)
-            let frame = CGRect(origin: CGPoint(x: x, y: originY), size: configuration.nodeSize)
+            let originY = max(subtreeStartY, childCenterY - cardHeight / 2)
+            let frame = CGRect(origin: CGPoint(x: x, y: originY), size: currentSize)
             frames[card.id] = frame
             visible.insert(card.id)
             return frame

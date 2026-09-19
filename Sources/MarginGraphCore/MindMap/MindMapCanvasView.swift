@@ -19,6 +19,11 @@ public struct MindMapCanvasView: View {
     @State private var zoomStart: CGFloat?
     @State private var dragLocations: [UUID: CGPoint] = [:]
     @State private var canvasMode: String = "Drag" // "Drag" or "Select"
+    @State private var isDraggingVScroll = false
+    @State private var vScrollStartPanY: CGFloat = 0
+    @State private var isDraggingHScroll = false
+    @State private var hScrollStartPanX: CGFloat = 0
+    @State private var isHoveringScrollbars = false
 
     public init(
         cards: [NoteCard],
@@ -56,6 +61,17 @@ public struct MindMapCanvasView: View {
                 // Warm parchment background
                 MarginNoteTheme.canvasBackground
                     .ignoresSafeArea()
+                    .background(
+                        ScrollWheelCatcherView { dx, dy in
+                            viewport.panOffset = CGPoint(
+                                x: viewport.panOffset.x + dx,
+                                y: viewport.panOffset.y + dy
+                            )
+                        }
+                    )
+                    .onHover { hovering in
+                        isHoveringScrollbars = hovering
+                    }
 
                 // Subtle grid with pan and deselect
                 grid
@@ -165,6 +181,9 @@ public struct MindMapCanvasView: View {
                 .frame(width: 140, height: 90)
                 .padding(16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+
+                // Draggable Vertical & Horizontal Scrollbars
+                scrollBars(proxy: proxy, frames: frames)
             }
             .clipped()
             .onAppear {
@@ -331,6 +350,115 @@ public struct MindMapCanvasView: View {
         }
     }
 
+    @ViewBuilder
+    private func scrollBars(proxy: GeometryProxy, frames: [UUID: CGRect]) -> some View {
+        let allCardFrames = Array(frames.values)
+        if !allCardFrames.isEmpty {
+            let cardsBounds = allCardFrames.dropFirst().reduce(allCardFrames[0]) { $0.union($1) }.insetBy(dx: -120, dy: -120)
+            let visibleOrigin = viewport.screenToCanvas(.zero)
+            let visibleEnd = viewport.screenToCanvas(CGPoint(x: proxy.size.width, y: proxy.size.height))
+            let visibleRect = CGRect(
+                x: min(visibleOrigin.x, visibleEnd.x),
+                y: min(visibleOrigin.y, visibleEnd.y),
+                width: max(1, abs(visibleEnd.x - visibleOrigin.x)),
+                height: max(1, abs(visibleEnd.y - visibleOrigin.y))
+            )
+            let domain = cardsBounds.union(visibleRect)
+
+            // Vertical Scrollbar
+            let trackHeight = max(50, proxy.size.height - 140)
+            let visibleRatioY = min(1.0, max(0.08, visibleRect.height / max(1, domain.height)))
+            let thumbHeight = max(24, trackHeight * visibleRatioY)
+            let scrollableRangeY = max(1, domain.height - visibleRect.height)
+            let currentProgressY = max(0.0, min(1.0, (visibleRect.minY - domain.minY) / scrollableRangeY))
+            let thumbY = currentProgressY * (trackHeight - thumbHeight)
+
+            let vScrollGesture = DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    if !isDraggingVScroll {
+                        isDraggingVScroll = true
+                        vScrollStartPanY = viewport.panOffset.y
+                    }
+                    let deltaFraction = value.translation.height / max(1, trackHeight - thumbHeight)
+                    let deltaCanvasY = deltaFraction * scrollableRangeY
+                    viewport.panOffset.y = vScrollStartPanY - deltaCanvasY * viewport.zoomScale
+                }
+                .onEnded { _ in
+                    isDraggingVScroll = false
+                }
+
+            ZStack(alignment: .top) {
+                // Track
+                Capsule()
+                    .fill(Color.black.opacity(isHoveringScrollbars || isDraggingVScroll ? 0.08 : 0.03))
+                    .frame(width: 6, height: trackHeight)
+                    .contentShape(Rectangle())
+                    .onTapGesture { loc in
+                        let targetProgress = max(0.0, min(1.0, (loc.y - thumbHeight / 2) / max(1, trackHeight - thumbHeight)))
+                        let targetMinY = domain.minY + targetProgress * scrollableRangeY
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            viewport.panOffset.y = -targetMinY * viewport.zoomScale
+                        }
+                    }
+
+                // Thumb
+                Capsule()
+                    .fill(Color.black.opacity(isDraggingVScroll ? 0.55 : (isHoveringScrollbars ? 0.38 : 0.22)))
+                    .frame(width: 6, height: thumbHeight)
+                    .offset(y: thumbY)
+                    .highPriorityGesture(vScrollGesture)
+            }
+            .frame(width: 12, height: trackHeight)
+            .position(x: proxy.size.width - 10, y: 16 + trackHeight / 2)
+
+            // Horizontal Scrollbar
+            let trackWidth = max(50, proxy.size.width - 250)
+            let visibleRatioX = min(1.0, max(0.08, visibleRect.width / max(1, domain.width)))
+            let thumbWidth = max(24, trackWidth * visibleRatioX)
+            let scrollableRangeX = max(1, domain.width - visibleRect.width)
+            let currentProgressX = max(0.0, min(1.0, (visibleRect.minX - domain.minX) / scrollableRangeX))
+            let thumbX = currentProgressX * (trackWidth - thumbWidth)
+
+            let hScrollGesture = DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    if !isDraggingHScroll {
+                        isDraggingHScroll = true
+                        hScrollStartPanX = viewport.panOffset.x
+                    }
+                    let deltaFraction = value.translation.width / max(1, trackWidth - thumbWidth)
+                    let deltaCanvasX = deltaFraction * scrollableRangeX
+                    viewport.panOffset.x = hScrollStartPanX - deltaCanvasX * viewport.zoomScale
+                }
+                .onEnded { _ in
+                    isDraggingHScroll = false
+                }
+
+            ZStack(alignment: .leading) {
+                // Track
+                Capsule()
+                    .fill(Color.black.opacity(isHoveringScrollbars || isDraggingHScroll ? 0.08 : 0.03))
+                    .frame(width: trackWidth, height: 6)
+                    .contentShape(Rectangle())
+                    .onTapGesture { loc in
+                        let targetProgress = max(0.0, min(1.0, (loc.x - thumbWidth / 2) / max(1, trackWidth - thumbWidth)))
+                        let targetMinX = domain.minX + targetProgress * scrollableRangeX
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            viewport.panOffset.x = -targetMinX * viewport.zoomScale
+                        }
+                    }
+
+                // Thumb
+                Capsule()
+                    .fill(Color.black.opacity(isDraggingHScroll ? 0.55 : (isHoveringScrollbars ? 0.38 : 0.22)))
+                    .frame(width: thumbWidth, height: 6)
+                    .offset(x: thumbX)
+                    .highPriorityGesture(hScrollGesture)
+            }
+            .frame(width: trackWidth, height: 12)
+            .position(x: 84 + trackWidth / 2, y: proxy.size.height - 10)
+        }
+    }
+
     private func transformed(_ path: Path) -> Path {
         path.applying(CGAffineTransform(
             a: viewport.zoomScale,
@@ -382,5 +510,55 @@ private struct MiniMapView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(red: 0.80, green: 0.76, blue: 0.70), lineWidth: 0.8))
         .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+    }
+}
+
+private struct ScrollWheelCatcherView: NSViewRepresentable {
+    var onScroll: (CGFloat, CGFloat) -> Void
+
+    func makeNSView(context: Context) -> ScrollMonitorNSView {
+        let view = ScrollMonitorNSView()
+        view.onScroll = onScroll
+        return view
+    }
+
+    func updateNSView(_ nsView: ScrollMonitorNSView, context: Context) {
+        nsView.onScroll = onScroll
+    }
+
+    final class ScrollMonitorNSView: NSView {
+        var onScroll: ((CGFloat, CGFloat) -> Void)?
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window != nil {
+                if monitor == nil {
+                    monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                        guard let self = self, let window = self.window, event.window == window else {
+                            return event
+                        }
+                        let pointInView = self.convert(event.locationInWindow, from: nil)
+                        if self.bounds.contains(pointInView) {
+                            let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 12
+                            let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 12
+                            if abs(dx) > 0.001 || abs(dy) > 0.001 {
+                                self.onScroll?(dx, dy)
+                                return nil
+                            }
+                        }
+                        return event
+                    }
+                }
+            }
+        }
+
+        override func viewWillMove(toWindow newWindow: NSWindow?) {
+            super.viewWillMove(toWindow: newWindow)
+            if newWindow == nil, let m = monitor {
+                NSEvent.removeMonitor(m)
+                monitor = nil
+            }
+        }
     }
 }

@@ -92,4 +92,41 @@ final class MindMapTests: XCTestCase {
         try database.reparentCard(id: sibling.id, to: child.id)
         XCTAssertNil(try database.getCard(id: sibling.id)?.groupNoteId)
     }
+
+    func testTreeLayoutCalculatesDynamicCardHeightsForMultilineContent() {
+        let topic = UUID()
+        let shortCard = NoteCard(id: UUID(), topicId: topic, title: "Short Title")
+        let longCard = NoteCard(
+            id: UUID(),
+            topicId: topic,
+            title: "This is a very long title that spans across multiple lines in the header section of the note card",
+            highlightText: "This is an extensive multi-sentence excerpt extracted from the book that also spans across multiple lines of text in the card body.",
+            notesText: "User notes and reflections on this topic.\nSecond line of notes.\nThird line of notes."
+        )
+
+        let shortHeight = TreeLayout.estimatedCardHeight(for: shortCard, width: 220)
+        let longHeight = TreeLayout.estimatedCardHeight(for: longCard, width: 220)
+
+        XCTAssertGreaterThan(longHeight, shortHeight)
+        XCTAssertGreaterThanOrEqual(shortHeight, 44)
+        XCTAssertGreaterThanOrEqual(longHeight, 140)
+
+        let result = TreeLayout.layout(cards: [shortCard, longCard])
+        let shortFrame = try! XCTUnwrap(result.frames[shortCard.id])
+        let longFrame = try! XCTUnwrap(result.frames[longCard.id])
+
+        XCTAssertEqual(shortFrame.height, shortHeight)
+        XCTAssertEqual(longFrame.height, longHeight)
+    }
+
+    func testMarginNoteThemeColorsAndBlueCursor() {
+        let yellow = MarginNoteTheme.cardColors(for: 0)
+        let green = MarginNoteTheme.cardColors(for: 1)
+        let blue = MarginNoteTheme.cardColors(for: 2)
+
+        XCTAssertEqual(MarginNoteTheme.cursorBlueHex, "#1265dd")
+        XCTAssertNotNil(yellow.accent)
+        XCTAssertNotNil(green.accent)
+        XCTAssertNotNil(blue.accent)
+    }
 }

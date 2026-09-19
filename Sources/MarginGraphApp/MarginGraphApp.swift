@@ -38,6 +38,22 @@ final class AppModel: ObservableObject {
 
     let database: Database
     let mediaStorage: MediaStorage
+    let undoManager = UndoManager()
+
+    var canUndo: Bool { undoManager.canUndo }
+    var canRedo: Bool { undoManager.canRedo }
+
+    func undo() {
+        guard undoManager.canUndo else { return }
+        undoManager.undo()
+        objectWillChange.send()
+    }
+
+    func redo() {
+        guard undoManager.canRedo else { return }
+        undoManager.redo()
+        objectWillChange.send()
+    }
 
     init() {
         database = try! Database()
@@ -48,6 +64,13 @@ final class AppModel: ObservableObject {
             selectedTopicID = topics.first?.id
         }
         reloadStudySet()
+
+        NotificationCenter.default.addObserver(forName: .NSUndoManagerDidUndoChange, object: undoManager, queue: .main) { [weak self] _ in
+            self?.objectWillChange.send()
+        }
+        NotificationCenter.default.addObserver(forName: .NSUndoManagerDidRedoChange, object: undoManager, queue: .main) { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     var selectedTopic: Topic? {
@@ -254,6 +277,52 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func selectCardFromPDF(cardID: UUID) {
+        if let card = mindMapCards.first(where: { $0.id == cardID })
+            ?? documentCards.first(where: { $0.id == cardID })
+            ?? (try? database.getCard(id: cardID)) {
+            Swift.print("[App] selectCardFromPDF: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
+            selectedCardID = card.id
+        }
+    }
+
+    private func registerCardUndo(oldCard: NoteCard, newCard: NoteCard, actionName: String) {
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.restoreCard(cardToRestore: oldCard, oppositeCard: newCard, actionName: actionName)
+            }
+        }
+        undoManager.setActionName(actionName)
+    }
+
+    private func restoreCard(cardToRestore: NoteCard, oppositeCard: NoteCard, actionName: String) {
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.restoreCard(cardToRestore: oppositeCard, oppositeCard: cardToRestore, actionName: actionName)
+            }
+        }
+        undoManager.setActionName(actionName)
+        try? database.updateCard(cardToRestore)
+        reloadStudySet()
+        selectedCardID = cardToRestore.id
+        navigateToCard(cardToRestore)
+        objectWillChange.send()
+    }
+
+    private func restoreDeletedCard(_ card: NoteCard) {
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.delete(cardID: card.id)
+            }
+        }
+        undoManager.setActionName("Delete Note")
+        try? database.insertCard(card)
+        reloadStudySet()
+        selectedCardID = card.id
+        navigateToCard(card)
+        objectWillChange.send()
+    }
+
     func updateHighlight(
         cardID: UUID,
         newText: String,
@@ -261,17 +330,31 @@ final class AppModel: ObservableObject {
         startPos: CGPoint,
         endPos: CGPoint
     ) {
-        guard var card = try? database.getCard(id: cardID) else { return }
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        let oldHighlight = card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let oldTitle = card.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let isAutoTitle = oldTitle.isEmpty
+            || oldTitle == oldHighlight
+            || (oldHighlight.count > 0 && oldTitle.hasPrefix(String(oldHighlight.prefix(15))))
+            || (oldTitle.count > 0 && oldHighlight.hasPrefix(String(oldTitle.prefix(15))))
         card.highlightText = newText
+        if isAutoTitle {
+            let firstLine = newText.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            card.title = firstLine.isEmpty ? newText : firstLine
+        }
         card.highlightRects = rects
         card.startPage = rects.first?.page ?? card.startPage
         card.endPage = rects.last?.page ?? card.endPage
         card.startPos = startPos
         card.endPos = endPos
         card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Update Highlight")
         try? database.updateCard(card)
         reloadStudySet()
         selectedCardID = cardID
+        objectWillChange.send()
+        Swift.print("[App] updateHighlight completed cardID=\(cardID) newTitle='\(card.title.prefix(30))...' newTextLength=\(card.highlightText.count) rects=\(rects.count)")
     }
 
     func navigateToCard(_ card: NoteCard) {
@@ -312,13 +395,20 @@ final class AppModel: ObservableObject {
     }
 
     func move(cardID: UUID, to position: CGPoint) {
+        if var card = try? database.getCard(id: cardID) {
+            let oldCard = card
+            card.mindPos = position
+            registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Move Card")
+        }
         try? database.moveCard(id: cardID, to: position)
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func reparent(cardID: UUID, to parentID: UUID?) {
         try? database.reparentCard(id: cardID, to: parentID)
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func toggleFold(cardID: UUID, folded: Bool) {
@@ -329,27 +419,49 @@ final class AppModel: ObservableObject {
     func indent(cardID: UUID, under siblingID: UUID) {
         try? database.indentCard(id: cardID, under: siblingID)
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func outdent(cardID: UUID) {
         try? database.outdentCard(id: cardID)
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func delete(cardID: UUID) {
+        if let oldCard = try? database.getCard(id: cardID) {
+            undoManager.registerUndo(withTarget: self) { target in
+                MainActor.assumeIsolated {
+                    target.restoreDeletedCard(oldCard)
+                }
+            }
+            undoManager.setActionName("Delete Note")
+        }
         try? database.deleteCard(id: cardID)
         if selectedCardID == cardID { selectedCardID = nil }
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func changeCardColor(cardID: UUID, colorIndex: Int) {
+        if var card = try? database.getCard(id: cardID) {
+            let oldCard = card
+            card.colorIndex = colorIndex
+            registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Change Color")
+        }
         try? database.setCardColor(id: cardID, colorIndex: colorIndex)
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func updateCard(_ card: NoteCard) {
+        if let oldCard = try? database.getCard(id: card.id) {
+            registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Edit Card")
+        }
         try? database.updateCard(card)
         reloadStudySet()
+        selectedCardID = card.id
+        objectWillChange.send()
     }
 
     func reorder(cardID: UUID, before siblingID: UUID?) {
@@ -501,19 +613,29 @@ struct StudyWorkspaceHeaderView: View {
 
             // Undo / Redo
             HStack(spacing: 4) {
-                Button {} label: {
+                Button {
+                    model.undo()
+                } label: {
                     Image(systemName: "arrow.uturn.backward")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(model.canUndo ? Color.primary : Color.secondary.opacity(0.35))
+                        .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
+                .disabled(!model.canUndo)
+                .help("Undo (⌘Z)")
 
-                Button {} label: {
+                Button {
+                    model.redo()
+                } label: {
                     Image(systemName: "arrow.uturn.forward")
                         .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(model.canRedo ? Color.primary : Color.secondary.opacity(0.35))
+                        .frame(width: 24, height: 24)
                 }
                 .buttonStyle(.plain)
+                .disabled(!model.canRedo)
+                .help("Redo (⇧⌘Z)")
             }
 
             // Outline Toggle
@@ -752,7 +874,7 @@ struct StudyWorkspaceView: View {
                 jumpTarget: model.jumpTarget,
                 onExcerpt: model.createExcerpt,
                 onSelectCard: { cardID in
-                    model.select(cardID: cardID)
+                    model.selectCardFromPDF(cardID: cardID)
                 },
                 onUpdateCardHighlight: { cardID, newText, rects, startPos, endPos in
                     model.updateHighlight(
@@ -877,5 +999,20 @@ struct MarginGraphApp: App {
             }
         }
         .windowStyle(.hiddenTitleBar)
+        .commands {
+            CommandGroup(replacing: .undoRedo) {
+                Button("Undo") {
+                    model.undo()
+                }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!model.canUndo)
+
+                Button("Redo") {
+                    model.redo()
+                }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!model.canRedo)
+            }
+        }
     }
 }

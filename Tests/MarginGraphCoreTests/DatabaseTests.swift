@@ -78,6 +78,54 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try db.getCard(id: card.id)?.title, updated.title)
     }
 
+    func testUndoRedoCardMutations() throws {
+        let db = try Database(inMemory: true)
+        let topic = Topic(title: "UndoTest")
+        try db.insertTopic(topic)
+
+        let initialCard = NoteCard(topicId: topic.id, title: "Initial Title", highlightText: "Initial Text", colorIndex: 0)
+        try db.insertCard(initialCard)
+
+        let undoManager = UndoManager()
+
+        var editedCard = initialCard
+        editedCard.title = "Edited Title"
+        editedCard.colorIndex = 2
+
+        final class UndoHelper: @unchecked Sendable {
+            let db: Database
+            let undoManager: UndoManager
+            init(db: Database, undoManager: UndoManager) {
+                self.db = db
+                self.undoManager = undoManager
+            }
+            func applyUpdate(cardToRestore: NoteCard, opposite: NoteCard) {
+                undoManager.registerUndo(withTarget: self) { helper in
+                    helper.applyUpdate(cardToRestore: opposite, opposite: cardToRestore)
+                }
+                try! db.updateCard(cardToRestore)
+            }
+        }
+
+        let helper = UndoHelper(db: db, undoManager: undoManager)
+        helper.applyUpdate(cardToRestore: editedCard, opposite: initialCard)
+
+        XCTAssertEqual(try db.getCard(id: initialCard.id)?.title, "Edited Title")
+        XCTAssertEqual(try db.getCard(id: initialCard.id)?.colorIndex, 2)
+        XCTAssertTrue(undoManager.canUndo)
+
+        // Perform undo
+        undoManager.undo()
+        XCTAssertEqual(try db.getCard(id: initialCard.id)?.title, "Initial Title")
+        XCTAssertEqual(try db.getCard(id: initialCard.id)?.colorIndex, 0)
+        XCTAssertTrue(undoManager.canRedo)
+
+        // Perform redo
+        undoManager.redo()
+        XCTAssertEqual(try db.getCard(id: initialCard.id)?.title, "Edited Title")
+        XCTAssertEqual(try db.getCard(id: initialCard.id)?.colorIndex, 2)
+    }
+
     func testDueReviewItems() throws {
         let db = try Database(inMemory: true)
         let due = ReviewItem(cardId: UUID(), dueDate: Date(timeIntervalSince1970: 100))

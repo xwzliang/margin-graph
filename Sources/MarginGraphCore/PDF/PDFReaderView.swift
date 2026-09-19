@@ -34,22 +34,6 @@ public enum PDFHighlightResolver {
         }
         if !stored.isEmpty { return stored }
 
-        if !card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let matches = document.findString(card.highlightText, withOptions: [.caseInsensitive])
-            let expectedPage = card.startPage
-            let preferred = expectedPage.map { expected in
-                matches.filter { selection in
-                    selection.pages.contains { document.index(for: $0) == expected }
-                }
-            } ?? matches
-
-            let candidates = preferred.isEmpty ? matches : preferred
-            let resolved = candidates.flatMap { selection in
-                lineRects(from: selection, document: document)
-            }
-            if !resolved.isEmpty { return resolved }
-        }
-
         if let pageIndex = card.startPage,
            pageIndex >= 0,
            pageIndex < document.pageCount,
@@ -75,6 +59,22 @@ public enum PDFHighlightResolver {
                     height: bounds.height
                 )]
             }
+        }
+
+        if !card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let matches = document.findString(card.highlightText, withOptions: [.caseInsensitive])
+            let expectedPage = card.startPage
+            let preferred = expectedPage.map { expected in
+                matches.filter { selection in
+                    selection.pages.contains { document.index(for: $0) == expected }
+                }
+            } ?? matches
+
+            let candidates = preferred.isEmpty ? matches : preferred
+            let resolved = candidates.flatMap { selection in
+                lineRects(from: selection, document: document)
+            }
+            if !resolved.isEmpty { return resolved }
         }
 
         return []
@@ -165,13 +165,19 @@ public struct PDFReaderView: NSViewRepresentable {
         view.displayMode = displayMode == .continuous ? .singlePageContinuous : .singlePage
         view.autoScales = true
         configure(view)
-        if context.coordinator.lastCards != cards ||
-           context.coordinator.lastSelectedCardID != selectedCardID ||
-           context.coordinator.lastDocument !== view.document {
+        let cardsChanged = context.coordinator.lastCards != cards ||
+                           context.coordinator.lastDocument !== view.document
+        let selectionChanged = context.coordinator.lastSelectedCardID != selectedCardID
+
+        if cardsChanged {
             context.coordinator.lastCards = cards
-            context.coordinator.lastSelectedCardID = selectedCardID
             context.coordinator.lastDocument = view.document
-            applyCardHighlights(to: view)
+            context.coordinator.lastSelectedCardID = selectedCardID
+            applyBaseHighlights(to: view)
+            applyActiveSelection(to: view)
+        } else if selectionChanged {
+            context.coordinator.lastSelectedCardID = selectedCardID
+            applyActiveSelection(to: view)
         }
 
         if context.coordinator.lastPageIndex != currentPageIndex {
@@ -208,20 +214,12 @@ public struct PDFReaderView: NSViewRepresentable {
         }
     }
 
-    private func applyCardHighlights(to view: InteractivePDFView) {
+    private func applyBaseHighlights(to view: InteractivePDFView) {
         guard let document = view.document else { return }
 
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }
-            for annotation in page.annotations
-            where annotation.contents == "MarginGraph-card-highlight"
-                || annotation.contents == "MarginGraph-active-highlight"
-                || annotation.contents == "MarginGraph-handle-start"
-                || annotation.contents == "MarginGraph-handle-end"
-                || annotation.contents == "MarginGraph-handle-knob-start"
-                || annotation.contents == "MarginGraph-handle-knob-end"
-                || annotation.contents == "MarginGraph-drag-highlight"
-                || annotation.contents == "MarginGraph-jump" {
+            for annotation in page.annotations where annotation.contents == "MarginGraph-card-highlight" {
                 page.removeAnnotation(annotation)
             }
         }
@@ -246,26 +244,47 @@ public struct PDFReaderView: NSViewRepresentable {
                 annotation.contents = "MarginGraph-card-highlight"
                 page.addAnnotation(annotation)
             }
-
-            if isActive(card: card) {
-                let cardPageRects: [Int: [CGRect]] = Dictionary(grouping: lineRects, by: \.page)
-                    .mapValues { $0.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) } }
-                for (pageIdx, rects) in cardPageRects {
-                    guard let page = document.page(at: pageIdx), let first = rects.first else { continue }
-                    let union = rects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -3, dy: -3)
-                    let active = PDFAnnotation(bounds: union, forType: .square, withProperties: nil)
-                    active.color = accent.withAlphaComponent(0.95)
-                    let border = PDFBorder()
-                    border.lineWidth = 2.0
-                    border.style = .solid
-                    active.border = border
-                    active.contents = "MarginGraph-active-highlight"
-                    page.addAnnotation(active)
-                }
-                view.installHandleAnnotations(for: card, lineRects: lineRects, accent: accent)
-            }
         }
         view.layoutDocumentView()
+        view.setNeedsDisplay(view.bounds)
+    }
+
+    private func applyActiveSelection(to view: InteractivePDFView) {
+        guard let document = view.document else { return }
+
+        for index in 0..<document.pageCount {
+            guard let page = document.page(at: index) else { continue }
+            for annotation in page.annotations
+            where annotation.contents == "MarginGraph-active-highlight"
+                || annotation.contents == "MarginGraph-handle-start"
+                || annotation.contents == "MarginGraph-handle-end"
+                || annotation.contents == "MarginGraph-handle-knob-start"
+                || annotation.contents == "MarginGraph-handle-knob-end"
+                || annotation.contents == "MarginGraph-drag-highlight"
+                || annotation.contents == "MarginGraph-jump" {
+                page.removeAnnotation(annotation)
+            }
+        }
+
+        if let selected = cards.first(where: { isActive(card: $0) }) {
+            let lineRects = PDFHighlightResolver.lineRects(for: selected, in: document)
+            let accent = NSColor(MarginNoteTheme.cardColors(for: selected.colorIndex).accent)
+            let cardPageRects: [Int: [CGRect]] = Dictionary(grouping: lineRects, by: \.page)
+                .mapValues { $0.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) } }
+            for (pageIdx, rects) in cardPageRects {
+                guard let page = document.page(at: pageIdx), let first = rects.first else { continue }
+                let union = rects.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -3, dy: -3)
+                let active = PDFAnnotation(bounds: union, forType: .square, withProperties: nil)
+                active.color = accent.withAlphaComponent(0.95)
+                let border = PDFBorder()
+                border.lineWidth = 2.0
+                border.style = .solid
+                active.border = border
+                active.contents = "MarginGraph-active-highlight"
+                page.addAnnotation(active)
+            }
+            view.installHandleAnnotations(for: selected, lineRects: lineRects, accent: accent)
+        }
         view.setNeedsDisplay(view.bounds)
     }
 
@@ -362,12 +381,21 @@ public final class InteractivePDFView: PDFView {
     private struct HandleDrag {
         var cardID: UUID
         var movingStart: Bool
-        var page: PDFPage
+        var startPage: PDFPage
         var startPoint: CGPoint
+        var endPage: PDFPage
         var endPoint: CGPoint
         var latestSelection: PDFSelection?
     }
     private var handleDrag: HandleDrag?
+
+    public override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    public override var acceptsFirstResponder: Bool {
+        true
+    }
 
     public override func mouseDown(with event: NSEvent) {
         let viewPoint = convert(event.locationInWindow, from: nil)
@@ -376,14 +404,18 @@ public final class InteractivePDFView: PDFView {
             return
         }
         let pagePoint = convert(viewPoint, to: page)
+        Swift.print("[InteractivePDFView] mouseDown viewPoint=\(viewPoint) pagePoint=\(pagePoint)")
 
         if selectionTool == .textSelection,
            beginHandleDragIfNeeded(page: page, point: pagePoint) {
+            Swift.print("[InteractivePDFView] Began handle drag at \(pagePoint)")
             return
         }
 
         if selectionTool == .textSelection,
            let card = cardHit(on: page, at: pagePoint) {
+            Swift.print("[InteractivePDFView] Hit card: \(card.id) - \(card.title)")
+            selectedCardID = card.id
             selectCardHandler?(card.id)
             return
         }
@@ -400,18 +432,25 @@ public final class InteractivePDFView: PDFView {
     public override func mouseDragged(with event: NSEvent) {
         if var handleDrag {
             let currentView = convert(event.locationInWindow, from: nil)
-            let currentPoint = convert(currentView, to: handleDrag.page)
+            guard let currentPage = page(for: currentView, nearest: true) else { return }
+            let currentPoint = convert(currentView, to: currentPage)
             if handleDrag.movingStart {
+                handleDrag.startPage = currentPage
                 handleDrag.startPoint = currentPoint
             } else {
+                handleDrag.endPage = currentPage
                 handleDrag.endPoint = currentPoint
             }
 
-            if let selection = handleDrag.page.selection(from: handleDrag.startPoint, to: handleDrag.endPoint) {
+            if let selection = makeMultiPageSelection(
+                from: handleDrag.startPage, at: handleDrag.startPoint,
+                to: handleDrag.endPage, at: handleDrag.endPoint
+            ) {
                 handleDrag.latestSelection = selection
                 renderLiveHighlight(selection, cardID: handleDrag.cardID)
             }
             self.handleDrag = handleDrag
+            Swift.print("[InteractivePDFView] handleDrag mouseDragged movingStart=\(handleDrag.movingStart) curPt=\(currentPoint) selChars=\(handleDrag.latestSelection?.string?.count ?? 0)")
             return
         }
 
@@ -433,17 +472,28 @@ public final class InteractivePDFView: PDFView {
                 self.handleDrag = nil
             }
             let currentView = convert(event.locationInWindow, from: nil)
-            let currentPoint = convert(currentView, to: handleDrag.page)
+            guard let currentPage = page(for: currentView, nearest: true) else { return }
+            let currentPoint = convert(currentView, to: currentPage)
+            let startPage = handleDrag.movingStart ? currentPage : handleDrag.startPage
             let startPoint = handleDrag.movingStart ? currentPoint : handleDrag.startPoint
+            let endPage = handleDrag.movingStart ? handleDrag.endPage : currentPage
             let endPoint = handleDrag.movingStart ? handleDrag.endPoint : currentPoint
+            Swift.print("[InteractivePDFView] handleDrag mouseUp start=\(startPoint) end=\(endPoint)")
             guard let document,
-                  let selection = handleDrag.page.selection(from: startPoint, to: endPoint) ?? handleDrag.latestSelection
-            else { return }
+                  let selection = makeMultiPageSelection(from: startPage, at: startPoint, to: endPage, at: endPoint) ?? handleDrag.latestSelection
+            else {
+                Swift.print("[InteractivePDFView] handleDrag mouseUp failed to get selection")
+                return
+            }
             let rects = PDFHighlightResolver.lineRects(from: selection, document: document)
-            guard !rects.isEmpty else { return }
+            guard !rects.isEmpty else {
+                Swift.print("[InteractivePDFView] handleDrag mouseUp rects was empty")
+                return
+            }
 
             let canonicalStart = endpoint(for: rects.first!, start: true)
             let canonicalEnd = endpoint(for: rects.last!, start: false)
+            Swift.print("[InteractivePDFView] handleDrag calling handler cardID=\(handleDrag.cardID) textLength=\(selection.string?.count ?? 0) rects=\(rects.count)")
             updateCardHighlightHandler?(
                 handleDrag.cardID,
                 selection.string ?? "",
@@ -486,7 +536,61 @@ public final class InteractivePDFView: PDFView {
         excerptHandler?(factory(pageIndex, bounds, selection.string ?? ""))
     }
 
-    func installHandleAnnotations(for card: NoteCard, lineRects: [HighlightRect], accent: NSColor) {
+    func makeMultiPageSelection(
+        from startPage: PDFPage, at startPoint: CGPoint,
+        to endPage: PDFPage, at endPoint: CGPoint
+    ) -> PDFSelection? {
+        guard let document else { return nil }
+        let startIndex = document.index(for: startPage)
+        let endIndex = document.index(for: endPage)
+        guard startIndex != NSNotFound, endIndex != NSNotFound else { return nil }
+
+        if startIndex == endIndex {
+            return startPage.selection(from: startPoint, to: endPoint)
+        }
+
+        let forward = startIndex < endIndex
+        let pStart = forward ? startPage : endPage
+        let ptStart = forward ? startPoint : endPoint
+        let pEnd = forward ? endPage : startPage
+        let ptEnd = forward ? endPoint : startPoint
+        let idxStart = forward ? startIndex : endIndex
+        let idxEnd = forward ? endIndex : startIndex
+
+        let bStart = pStart.bounds(for: .cropBox)
+        let endOfFirstPage = CGPoint(x: bStart.maxX - 5, y: bStart.minY + 5)
+        var combined: PDFSelection?
+        if let selFirst = pStart.selection(from: ptStart, to: endOfFirstPage) {
+            combined = (selFirst.copy() as? PDFSelection)
+        }
+
+        if idxEnd > idxStart + 1 {
+            for midIdx in (idxStart + 1)..<idxEnd {
+                guard let midPage = document.page(at: midIdx) else { continue }
+                if let fullSel = midPage.selection(for: midPage.bounds(for: .cropBox)) {
+                    if let c = combined {
+                        c.add(fullSel)
+                    } else {
+                        combined = (fullSel.copy() as? PDFSelection)
+                    }
+                }
+            }
+        }
+
+        let bEnd = pEnd.bounds(for: .cropBox)
+        let startOfLastPage = CGPoint(x: bEnd.minX + 5, y: bEnd.maxY - 5)
+        if let selLast = pEnd.selection(from: startOfLastPage, to: ptEnd) {
+            if let c = combined {
+                c.add(selLast)
+            } else {
+                combined = (selLast.copy() as? PDFSelection)
+            }
+        }
+
+        return combined
+    }
+
+    func installHandleAnnotations(for card: NoteCard, lineRects: [HighlightRect], accent: NSColor = .systemYellow) {
         guard let document, let first = lineRects.first, let last = lineRects.last,
               let firstPage = document.page(at: first.page),
               let lastPage = document.page(at: last.page) else { return }
@@ -508,11 +612,12 @@ public final class InteractivePDFView: PDFView {
     }
 
     private func addHandle(to page: PDFPage, at point: CGPoint, lineHeight: CGFloat, accent: NSColor, isStart: Bool) {
+        let cursorColor = MarginNoteTheme.nsCursorColor
         let height = max(16, lineHeight + 8)
         let barBounds = CGRect(x: point.x - 1.5, y: point.y - height / 2, width: 3, height: height)
         let bar = PDFAnnotation(bounds: barBounds, forType: .square, withProperties: nil)
         bar.color = .clear
-        bar.interiorColor = accent.withAlphaComponent(0.95)
+        bar.interiorColor = cursorColor.withAlphaComponent(0.95)
         let border = PDFBorder()
         border.lineWidth = 0
         bar.border = border
@@ -520,10 +625,11 @@ public final class InteractivePDFView: PDFView {
         page.addAnnotation(bar)
 
         let knobSize: CGFloat = 8
-        let knobBounds = CGRect(x: point.x - knobSize / 2, y: point.y - knobSize / 2, width: knobSize, height: knobSize)
+        let knobY = isStart ? (point.y + height / 2) : (point.y - height / 2)
+        let knobBounds = CGRect(x: point.x - knobSize / 2, y: knobY - knobSize / 2, width: knobSize, height: knobSize)
         let knob = PDFAnnotation(bounds: knobBounds, forType: .circle, withProperties: nil)
-        knob.color = accent
-        knob.interiorColor = accent
+        knob.color = cursorColor
+        knob.interiorColor = cursorColor
         knob.contents = isStart ? "MarginGraph-handle-knob-start" : "MarginGraph-handle-knob-end"
         page.addAnnotation(knob)
     }
@@ -534,31 +640,36 @@ public final class InteractivePDFView: PDFView {
               let document else { return false }
         let rects = PDFHighlightResolver.lineRects(for: card, in: document)
         guard let first = rects.first, let last = rects.last,
-              first.page == last.page,
-              let cardPage = document.page(at: first.page),
-              cardPage === page else { return false }
+              let firstPage = document.page(at: first.page),
+              let lastPage = document.page(at: last.page) else { return false }
 
         let startPoint = endpoint(for: first, start: true)
         let endPoint = endpoint(for: last, start: false)
-        let hitRadius: CGFloat = 10
+        let startHeight = max(16, CGFloat(first.height) + 8)
+        let endHeight = max(16, CGFloat(last.height) + 8)
 
-        if hypot(point.x - startPoint.x, point.y - startPoint.y) <= hitRadius {
+        let isNearStart = (firstPage === page) && abs(point.x - startPoint.x) <= 26 && abs(point.y - startPoint.y) <= (startHeight / 2 + 16)
+        let isNearEnd = (lastPage === page) && abs(point.x - endPoint.x) <= 26 && abs(point.y - endPoint.y) <= (endHeight / 2 + 16)
+
+        if isNearStart {
             handleDrag = HandleDrag(
                 cardID: card.id,
                 movingStart: true,
-                page: page,
+                startPage: firstPage,
                 startPoint: startPoint,
+                endPage: lastPage,
                 endPoint: endPoint,
                 latestSelection: nil
             )
             return true
         }
-        if hypot(point.x - endPoint.x, point.y - endPoint.y) <= hitRadius {
+        if isNearEnd {
             handleDrag = HandleDrag(
                 cardID: card.id,
                 movingStart: false,
-                page: page,
+                startPage: firstPage,
                 startPoint: startPoint,
+                endPage: lastPage,
                 endPoint: endPoint,
                 latestSelection: nil
             )
@@ -572,18 +683,19 @@ public final class InteractivePDFView: PDFView {
         let pageIndex = document.index(for: page)
         guard pageIndex != NSNotFound else { return nil }
 
-        // Prefer the already-selected card when highlights overlap.
-        let ordered = cards.sorted { lhs, rhs in
-            (lhs.id == selectedCardID ? 0 : 1) < (rhs.id == selectedCardID ? 0 : 1)
-        }
-        return ordered.first { card in
+        let matching = cards.filter { card in
             PDFHighlightResolver.lineRects(for: card, in: document).contains { line in
                 guard line.page == pageIndex else { return false }
                 let rect = CGRect(x: line.x, y: line.y, width: line.width, height: line.height)
-                    .insetBy(dx: -2, dy: -2)
+                    .insetBy(dx: -4, dy: -4)
                 return rect.contains(point)
             }
         }
+        guard !matching.isEmpty else { return nil }
+        if let selectedCardID, let curIdx = matching.firstIndex(where: { $0.id == selectedCardID }) {
+            return matching[(curIdx + 1) % matching.count]
+        }
+        return matching.first
     }
 
     private func renderLiveHighlight(_ selection: PDFSelection, cardID: UUID) {

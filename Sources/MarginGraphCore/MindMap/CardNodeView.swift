@@ -34,77 +34,96 @@ public struct CardNodeView: View {
 
     public var body: some View {
         Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 6) {
-                // Header: Title and Fold button
-                HStack(alignment: .top, spacing: 4) {
+            VStack(alignment: .leading, spacing: 0) {
+                // 1. Accent Header Section (Title & chevron)
+                HStack(alignment: .top, spacing: 5) {
                     if hasChildren {
                         Button(action: onToggleFold) {
                             Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
                                 .font(.system(size: 10, weight: .bold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 16, height: 16)
+                                .foregroundStyle(Color(white: 0.25))
+                                .frame(width: 14, height: 14)
                         }
                         .buttonStyle(.plain)
                     }
 
-                    Text(card.title.isEmpty ? (card.highlightText.isEmpty ? "Note" : card.highlightText) : card.title)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .lineLimit(card.title.isEmpty ? 3 : 2)
+                    let displayTitle = card.title.isEmpty ? (card.highlightText.isEmpty ? "Note" : card.highlightText) : card.title
+                    Text(displayTitle)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.12))
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    Spacer(minLength: 2)
-                }
+                    Spacer(minLength: 4)
 
-                // Highlight / Excerpt text if title was separate
-                if !card.title.isEmpty && !card.highlightText.isEmpty {
-                    Text(card.highlightText)
-                        .font(.system(size: 11, weight: .regular))
-                        .foregroundStyle(Color(white: 0.25))
-                        .lineLimit(4)
-                        .padding(.leading, hasChildren ? 16 : 0)
-                }
-
-                // User notes
-                if !card.notesText.isEmpty {
-                    Text(card.notesText)
-                        .font(.system(size: 11, weight: .regular))
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(Color(white: 0.35))
-                        .lineLimit(3)
-                        .padding(.leading, hasChildren ? 16 : 0)
+                        .padding(.top, 2)
                 }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .background(cardColors.accent)
 
-                // Image thumbnail
-                if let image = thumbnail {
-                    Image(nsImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(maxHeight: 82)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
-                        .padding(.leading, hasChildren ? 16 : 0)
-                }
+                // 2. Cream Body Section (Excerpt & Notes)
+                let hasExcerpt = !card.title.isEmpty && !card.highlightText.isEmpty
+                let hasNotes = !card.notesText.isEmpty
+                let hasImage = thumbnail != nil
+                let hasTags = !card.tags.isEmpty
 
-                // Tags
-                if !card.tags.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(card.tags.prefix(3), id: \.self) { tag in
-                            Text("#\(tag)")
-                                .font(.system(size: 9))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1.5)
-                                .background(cardColors.accent.opacity(0.18), in: RoundedRectangle(cornerRadius: 3))
-                                .foregroundStyle(cardColors.accent)
+                if hasExcerpt || hasNotes || hasImage || hasTags {
+                    VStack(alignment: .leading, spacing: 6) {
+                        // Highlight / Excerpt text
+                        if hasExcerpt {
+                            Text(card.highlightText)
+                                .font(.system(size: 11.5, weight: .regular))
+                                .foregroundStyle(Color(white: 0.20))
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        // User comments / notes
+                        if hasNotes {
+                            Text(card.notesText)
+                                .font(.system(size: 11.5, weight: .regular))
+                                .foregroundStyle(Color(white: 0.32))
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+
+                        // Image thumbnail
+                        if let image = thumbnail {
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxHeight: 82)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                        }
+
+                        // Tags
+                        if hasTags {
+                            HStack(spacing: 4) {
+                                ForEach(card.tags.prefix(3), id: \.self) { tag in
+                                    Text("#\(tag)")
+                                        .font(.system(size: 9))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1.5)
+                                        .background(cardColors.accent.opacity(0.35), in: RoundedRectangle(cornerRadius: 3))
+                                        .foregroundStyle(Color(white: 0.20))
+                                }
+                            }
                         }
                     }
-                    .padding(.leading, hasChildren ? 16 : 0)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .background(MarginNoteTheme.cardBodyBackground)
                 }
             }
-            .padding(9)
-            .frame(width: 220, height: 120, alignment: .topLeading)
-            .clipped()
-            .background(cardColors.background)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .background(MarginNoteTheme.cardBodyBackground)
+            .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
+                RoundedRectangle(cornerRadius: 7)
                     .stroke(cardColors.border, lineWidth: 1)
             )
             // Blue selection handles overlay when selected
@@ -112,9 +131,14 @@ public struct CardNodeView: View {
                 selectionOverlay
             )
             .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1.5)
-            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                onEdit?()
+            }
+        )
         .contextMenu {
             Button("Edit Card") {
                 onEdit?()
@@ -131,36 +155,48 @@ public struct CardNodeView: View {
     private var selectionOverlay: some View {
         if isSelected {
             ZStack {
-                // Dashed blue outline
-                RoundedRectangle(cornerRadius: 5)
+                // Dashed blue outline matching MarginNote 3
+                RoundedRectangle(cornerRadius: 7)
                     .strokeBorder(
-                        Color(red: 0.2, green: 0.45, blue: 0.9),
+                        MarginNoteTheme.cursorBlue,
                         style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])
                     )
 
-                // 4 Corner handle dots
-                VStack {
-                    HStack {
-                        handleCircle
-                        Spacer()
-                        handleCircle
-                    }
-                    Spacer()
-                    HStack {
-                        handleCircle
-                        Spacer()
-                        handleCircle
+                // 4 Corner grab handles
+                GeometryReader { geo in
+                    let handleSize: CGFloat = 6
+                    let w = geo.size.width
+                    let h = geo.size.height
+
+                    Group {
+                        // Top-left
+                        Circle()
+                            .fill(MarginNoteTheme.cursorBlue)
+                            .frame(width: handleSize, height: handleSize)
+                            .position(x: 0, y: 0)
+
+                        // Top-right
+                        Circle()
+                            .fill(MarginNoteTheme.cursorBlue)
+                            .frame(width: handleSize, height: handleSize)
+                            .position(x: w, y: 0)
+
+                        // Bottom-left
+                        Circle()
+                            .fill(MarginNoteTheme.cursorBlue)
+                            .frame(width: handleSize, height: handleSize)
+                            .position(x: 0, y: h)
+
+                        // Bottom-right
+                        Circle()
+                            .fill(MarginNoteTheme.cursorBlue)
+                            .frame(width: handleSize, height: handleSize)
+                            .position(x: w, y: h)
                     }
                 }
-                .padding(-3)
             }
+            .allowsHitTesting(false)
         }
-    }
-
-    private var handleCircle: some View {
-        Circle()
-            .fill(Color(red: 0.2, green: 0.45, blue: 0.9))
-            .frame(width: 6, height: 6)
     }
 
     private var thumbnail: NSImage? {

@@ -1,8 +1,11 @@
 import XCTest
 import CoreGraphics
 import CoreText
+import PDFKit
+import SwiftUI
 @testable import MarginGraphCore
 
+@MainActor
 final class PDFTests: XCTestCase {
     func testPDFLoadingTextHashAndCrop() throws {
         let url = FileManager.default.temporaryDirectory
@@ -91,6 +94,126 @@ final class PDFTests: XCTestCase {
         let resolved = PDFHighlightResolver.lineRects(for: textCard, in: manager.document)
         XCTAssertFalse(resolved.isEmpty)
         XCTAssertTrue(resolved.allSatisfy { $0.page == 0 && $0.width > 0 && $0.height > 0 })
+    }
+
+    @MainActor
+    func testInteractivePDFViewHighlightDragUpdate() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-drag-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeSyntheticPDF(at: url)
+        let manager = try PDFDocumentManager(url: url)
+        let doc = manager.document
+        guard let page = doc.page(at: 0) else {
+            XCTFail("Missing page 0")
+            return
+        }
+
+        let cardID = UUID()
+        let initialRects = [
+            HighlightRect(page: 0, x: 60, y: 95, width: 200, height: 25)
+        ]
+        let card = NoteCard(
+            id: cardID,
+            topicId: UUID(),
+            title: "Original Title",
+            highlightText: "MarginGraph synthetic PDF",
+            startPage: 0,
+            highlightRects: initialRects
+        )
+
+        let view = InteractivePDFView()
+        view.document = doc
+        view.cards = [card]
+        view.selectedCardID = cardID
+
+        var updatedCardID: UUID?
+        var updatedText: String?
+        var updatedRects: [HighlightRect] = []
+        view.updateCardHighlightHandler = { id, text, newRects, startPt, endPt in
+            updatedCardID = id
+            updatedText = text
+            updatedRects = newRects
+        }
+
+        // Test resolving lineRects from selection
+        if let sel = page.selection(for: CGRect(x: 60, y: 95, width: 120, height: 25)) {
+            let extracted = PDFHighlightResolver.lineRects(from: sel, document: doc)
+            XCTAssertFalse(extracted.isEmpty)
+            XCTAssertEqual(extracted.first?.page, 0)
+            view.updateCardHighlightHandler?(cardID, sel.string ?? "", extracted, .zero, .zero)
+            XCTAssertEqual(updatedCardID, cardID)
+            XCTAssertFalse(updatedRects.isEmpty)
+            XCTAssertNotNil(updatedText)
+        }
+    }
+
+    func testMultiPageSelectionAcrossPages() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-multipage-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeMultiPageSyntheticPDF(at: url)
+        guard let doc = PDFDocument(url: url) else {
+            XCTFail("Failed to load multi-page PDF")
+            return
+        }
+        XCTAssertEqual(doc.pageCount, 2)
+        guard let page0 = doc.page(at: 0), let page1 = doc.page(at: 1) else {
+            XCTFail("Missing pages")
+            return
+        }
+
+        let view = InteractivePDFView()
+        view.document = doc
+
+        let selection = view.makeMultiPageSelection(
+            from: page0, at: CGPoint(x: 60, y: 120),
+            to: page1, at: CGPoint(x: 400, y: 700)
+        )
+        XCTAssertNotNil(selection)
+        let rects = PDFHighlightResolver.lineRects(from: try XCTUnwrap(selection), document: doc)
+        XCTAssertFalse(rects.isEmpty)
+
+        let pagesInRects = Set(rects.map { $0.page })
+        XCTAssertTrue(pagesInRects.contains(0))
+        XCTAssertTrue(pagesInRects.contains(1))
+    }
+
+    func testMarginNoteColorPaletteAndCursorColor() {
+        XCTAssertGreaterThanOrEqual(MarginNoteTheme.cardPastels.count, 6)
+        XCTAssertEqual(MarginNoteTheme.cursorBlueHex, "#1265dd")
+        XCTAssertEqual(MarginNoteTheme.nsCursorColor, NSColor(srgbRed: 18/255.0, green: 101/255.0, blue: 221/255.0, alpha: 1.0))
+    }
+
+    private func makeMultiPageSyntheticPDF(at url: URL) throws {
+        guard let consumer = CGDataConsumer(url: url as CFURL) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        let font = CTFontCreateWithName("Helvetica" as CFString, 20, nil)
+        let attributes = [kCTFontAttributeName: font] as CFDictionary
+
+        context.beginPDFPage(nil)
+        let attr1 = CFAttributedStringCreate(nil, "Page One line of synthetic text here" as CFString, attributes)!
+        let line1 = CTLineCreateWithAttributedString(attr1)
+        context.textPosition = CGPoint(x: 60, y: 120)
+        CTLineDraw(line1, context)
+        context.endPDFPage()
+
+        context.beginPDFPage(nil)
+        let attr2 = CFAttributedStringCreate(nil, "Page Two continuation of text here" as CFString, attributes)!
+        let line2 = CTLineCreateWithAttributedString(attr2)
+        context.textPosition = CGPoint(x: 60, y: 700)
+        CTLineDraw(line2, context)
+        context.endPDFPage()
+
+        context.closePDF()
     }
 
     private func makeSyntheticPDF(at url: URL) throws {
