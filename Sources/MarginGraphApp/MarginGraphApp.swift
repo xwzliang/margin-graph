@@ -338,10 +338,11 @@ final class AppModel: ObservableObject {
             || oldTitle == oldHighlight
             || (oldHighlight.count > 0 && oldTitle.hasPrefix(String(oldHighlight.prefix(15))))
             || (oldTitle.count > 0 && oldHighlight.hasPrefix(String(oldTitle.prefix(15))))
-        card.highlightText = newText
+        let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(newText)
+        card.highlightText = normalized
         if isAutoTitle {
-            let firstLine = newText.components(separatedBy: .newlines).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            card.title = firstLine.isEmpty ? newText : firstLine
+            let firstParagraph = normalized.components(separatedBy: "\n\n").first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            card.title = firstParagraph.isEmpty ? normalized : firstParagraph
         }
         card.highlightRects = rects
         card.startPage = rects.first?.page ?? card.startPage

@@ -79,7 +79,9 @@ public enum TreeLayout {
         var visible = Set<UUID>()
         var columnStartX: CGFloat = 40
         var nextY: CGFloat = 40
-        let maxColumnHeight: CGFloat = 1600
+        let totalCards = max(1, cards.count)
+        let totalArea = CGFloat(totalCards) * (configuration.nodeSize.width + configuration.horizontalSpacing) * (180.0 + configuration.verticalSpacing)
+        let maxColumnHeight: CGFloat = max(2600, sqrt(totalArea / 1.55))
 
         @discardableResult
         func place(_ card: NoteCard, depth: Int, baseX: CGFloat) -> CGRect {
@@ -113,6 +115,7 @@ public enum TreeLayout {
             let frame = CGRect(origin: CGPoint(x: x, y: originY), size: currentSize)
             frames[card.id] = frame
             visible.insert(card.id)
+            nextY = max(nextY, originY + cardHeight + configuration.verticalSpacing)
             return frame
         }
 
@@ -221,6 +224,18 @@ public struct CanvasViewport: Equatable, Sendable {
         panOffset = CGPoint(
             x: viewportSize.width / 2 - frame.midX * zoomScale,
             y: viewportSize.height / 2 - frame.midY * zoomScale
+        )
+    }
+
+    public mutating func zoom(by factor: CGFloat, around screenCenter: CGPoint) {
+        let oldScale = zoomScale
+        let targetScale = min(3.0, max(0.1, oldScale * factor))
+        guard oldScale != targetScale else { return }
+        let canvasPoint = screenToCanvas(screenCenter)
+        zoomScale = targetScale
+        panOffset = CGPoint(
+            x: screenCenter.x - canvasPoint.x * targetScale,
+            y: screenCenter.y - canvasPoint.y * targetScale
         )
     }
 }

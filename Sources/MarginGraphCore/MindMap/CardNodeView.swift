@@ -130,7 +130,8 @@ public struct CardNodeView: View {
             .overlay(
                 selectionOverlay
             )
-            .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1.5)
+            .shadow(color: isSelected ? Color(red: 0.10, green: 0.40, blue: 0.85).opacity(0.20) : .black.opacity(0.14), radius: isSelected ? 8 : 6, x: 0, y: isSelected ? 4 : 3)
+            .shadow(color: .black.opacity(0.06), radius: 1.5, x: 0, y: 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
         }
         .buttonStyle(.plain)

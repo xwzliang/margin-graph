@@ -317,7 +317,15 @@ public final class MarginNoteImporter {
             walk(plist)
         }
 
-        return result
+        var seen = Set<String>()
+        var unique: [HighlightRect] = []
+        for r in result {
+            let key = "\(r.page)_\(Int((r.y / 2).rounded()))_\(Int((r.x / 4).rounded()))_\(Int((r.width / 4).rounded()))"
+            if seen.insert(key).inserted {
+                unique.append(r)
+            }
+        }
+        return unique
     }
 
     private func decompressGzip(_ data: Data) -> Data? {

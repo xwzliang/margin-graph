@@ -129,4 +129,41 @@ final class MindMapTests: XCTestCase {
         XCTAssertNotNil(green.accent)
         XCTAssertNotNil(blue.accent)
     }
+
+    func testTreeLayoutPreventsCollisionsWithExpandedCards() {
+        let topic = UUID()
+        let tallParent = NoteCard(
+            id: UUID(),
+            topicId: topic,
+            title: "Parent with huge text",
+            highlightText: String(repeating: "This is a very long text that expands the card height significantly. ", count: 20)
+        )
+        let smallChild = NoteCard(id: UUID(), topicId: topic, title: "Small child", groupNoteId: tallParent.id)
+        let nextCard = NoteCard(id: UUID(), topicId: topic, title: "Next card below")
+
+        let result = TreeLayout.layout(cards: [tallParent, smallChild, nextCard])
+        let parentFrame = try! XCTUnwrap(result.frames[tallParent.id])
+        let nextFrame = try! XCTUnwrap(result.frames[nextCard.id])
+
+        // Next card must be placed completely below tallParent
+        XCTAssertGreaterThanOrEqual(nextFrame.minY, parentFrame.maxY)
+        XCTAssertFalse(parentFrame.intersects(nextFrame))
+    }
+
+    func testCanvasViewportAnchorZoom() {
+        var viewport = CanvasViewport(
+            panOffset: CGPoint(x: 100, y: 100),
+            zoomScale: 1.0,
+            viewportSize: CGSize(width: 800, height: 600)
+        )
+        let cursor = CGPoint(x: 400, y: 300)
+        let canvasPointBefore = viewport.screenToCanvas(cursor)
+
+        viewport.zoom(by: 1.5, around: cursor)
+
+        let canvasPointAfter = viewport.screenToCanvas(cursor)
+        XCTAssertEqual(viewport.zoomScale, 1.5, accuracy: 0.001)
+        XCTAssertEqual(canvasPointBefore.x, canvasPointAfter.x, accuracy: 0.001)
+        XCTAssertEqual(canvasPointBefore.y, canvasPointAfter.y, accuracy: 0.001)
+    }
 }

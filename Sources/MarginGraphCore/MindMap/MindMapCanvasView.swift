@@ -62,12 +62,17 @@ public struct MindMapCanvasView: View {
                 MarginNoteTheme.canvasBackground
                     .ignoresSafeArea()
                     .background(
-                        ScrollWheelCatcherView { dx, dy in
-                            viewport.panOffset = CGPoint(
-                                x: viewport.panOffset.x + dx,
-                                y: viewport.panOffset.y + dy
-                            )
-                        }
+                        ScrollWheelCatcherView(
+                            onScroll: { dx, dy in
+                                viewport.panOffset = CGPoint(
+                                    x: viewport.panOffset.x + dx,
+                                    y: viewport.panOffset.y + dy
+                                )
+                            },
+                            onZoom: { factor, center in
+                                viewport.zoom(by: factor, around: center)
+                            }
+                        )
                     )
                     .onHover { hovering in
                         isHoveringScrollbars = hovering
@@ -175,7 +180,7 @@ public struct MindMapCanvasView: View {
                 // MiniMapView at bottom-right
                 MiniMapView(
                     frames: Array(frames.values),
-                    viewport: viewport,
+                    viewport: $viewport,
                     canvasSize: proxy.size
                 )
                 .frame(width: 140, height: 90)
@@ -473,7 +478,7 @@ public struct MindMapCanvasView: View {
 
 private struct MiniMapView: View {
     let frames: [CGRect]
-    let viewport: CanvasViewport
+    @Binding var viewport: CanvasViewport
     let canvasSize: CGSize
 
     var body: some View {
@@ -510,24 +515,47 @@ private struct MiniMapView: View {
         )
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(red: 0.80, green: 0.76, blue: 0.70), lineWidth: 0.8))
         .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { gesture in
+                    guard let first = frames.first else { return }
+                    let bounds = frames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
+                    let sx = 140.0 / max(1, bounds.width)
+                    let sy = 90.0 / max(1, bounds.height)
+                    let scale = min(sx, sy)
+                    guard scale > 0 else { return }
+
+                    let canvasX = bounds.minX + gesture.location.x / scale
+                    let canvasY = bounds.minY + gesture.location.y / scale
+                    viewport.panOffset = CGPoint(
+                        x: canvasSize.width / 2 - canvasX * viewport.zoomScale,
+                        y: canvasSize.height / 2 - canvasY * viewport.zoomScale
+                    )
+                }
+        )
     }
 }
 
 private struct ScrollWheelCatcherView: NSViewRepresentable {
     var onScroll: (CGFloat, CGFloat) -> Void
+    var onZoom: ((CGFloat, CGPoint) -> Void)?
 
     func makeNSView(context: Context) -> ScrollMonitorNSView {
         let view = ScrollMonitorNSView()
         view.onScroll = onScroll
+        view.onZoom = onZoom
         return view
     }
 
     func updateNSView(_ nsView: ScrollMonitorNSView, context: Context) {
         nsView.onScroll = onScroll
+        nsView.onZoom = onZoom
     }
 
     final class ScrollMonitorNSView: NSView {
         var onScroll: ((CGFloat, CGFloat) -> Void)?
+        var onZoom: ((CGFloat, CGPoint) -> Void)?
         private var monitor: Any?
 
         override func viewDidMoveToWindow() {
@@ -540,11 +568,20 @@ private struct ScrollWheelCatcherView: NSViewRepresentable {
                         }
                         let pointInView = self.convert(event.locationInWindow, from: nil)
                         if self.bounds.contains(pointInView) {
-                            let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 12
-                            let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 12
-                            if abs(dx) > 0.001 || abs(dy) > 0.001 {
-                                self.onScroll?(dx, dy)
-                                return nil
+                            if event.modifierFlags.contains(.command) {
+                                let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 12
+                                if abs(dy) > 0.001 {
+                                    let factor = 1.0 + dy * 0.008
+                                    self.onZoom?(factor, pointInView)
+                                    return nil
+                                }
+                            } else {
+                                let dx = event.hasPreciseScrollingDeltas ? event.scrollingDeltaX : event.scrollingDeltaX * 12
+                                let dy = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 12
+                                if abs(dx) > 0.001 || abs(dy) > 0.001 {
+                                    self.onScroll?(dx, dy)
+                                    return nil
+                                }
                             }
                         }
                         return event

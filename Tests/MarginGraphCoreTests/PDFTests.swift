@@ -187,6 +187,37 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(MarginNoteTheme.nsCursorColor, NSColor(srgbRed: 18/255.0, green: 101/255.0, blue: 221/255.0, alpha: 1.0))
     }
 
+    func testNormalizeExcerptParagraphs() {
+        let input = """
+        Even the best scientists and thinkers
+        are not free from it. What sets them
+        apart is the mere fact that they are
+        aware of the problem and do
+        something about it.
+
+        The classic role model would be
+        Charles Darwin. He forced himself
+        to write down dis-
+        confirming facts.
+        """
+        let normalized = PDFHighlightResolver.normalizeExcerptParagraphs(input)
+        let paragraphs = normalized.components(separatedBy: "\n\n")
+        XCTAssertEqual(paragraphs.count, 2)
+        XCTAssertEqual(paragraphs[0], "Even the best scientists and thinkers are not free from it. What sets them apart is the mere fact that they are aware of the problem and do something about it.")
+        XCTAssertEqual(paragraphs[1], "The classic role model would be Charles Darwin. He forced himself to write down disconfirming facts.")
+    }
+
+    func testHighlightRectDeduplication() {
+        let rects = [
+            HighlightRect(page: 1, x: 50, y: 100, width: 200, height: 16),
+            HighlightRect(page: 1, x: 50, y: 100, width: 200, height: 16), // exact duplicate
+            HighlightRect(page: 1, x: 51, y: 100.5, width: 199, height: 16), // near duplicate
+            HighlightRect(page: 1, x: 50, y: 120, width: 200, height: 16) // distinct line
+        ]
+        let deduplicated = PDFHighlightResolver.deduplicate(rects)
+        XCTAssertEqual(deduplicated.count, 2)
+    }
+
     private func makeMultiPageSyntheticPDF(at url: URL) throws {
         guard let consumer = CGDataConsumer(url: url as CFURL) else {
             throw CocoaError(.fileWriteUnknown)

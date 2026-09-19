@@ -28,11 +28,59 @@ public struct PDFJumpTarget: Equatable, Sendable {
 }
 
 public enum PDFHighlightResolver {
+    public static func deduplicate(_ rects: [HighlightRect]) -> [HighlightRect] {
+        var seen = Set<String>()
+        var result: [HighlightRect] = []
+        for r in rects {
+            let key = "\(r.page)_\(Int((r.y / 2).rounded()))_\(Int((r.x / 4).rounded()))_\(Int((r.width / 4).rounded()))"
+            if seen.insert(key).inserted {
+                result.append(r)
+            }
+        }
+        return result
+    }
+
+    public static func normalizeExcerptParagraphs(_ rawText: String) -> String {
+        let lines = rawText.components(separatedBy: .newlines)
+        var paragraphs: [String] = []
+        var currentParagraph: [String] = []
+
+        func flush() {
+            if !currentParagraph.isEmpty {
+                paragraphs.append(currentParagraph.joined(separator: " "))
+                currentParagraph.removeAll()
+            }
+        }
+
+        for rawLine in lines {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty {
+                flush()
+                continue
+            }
+
+            let isBullet = line.hasPrefix("- ") || line.hasPrefix("* ") || line.hasPrefix("• ")
+            let isNumbered = line.range(of: #"^\d+[\.\)]\s"#, options: .regularExpression) != nil
+
+            if isBullet || isNumbered {
+                flush()
+                currentParagraph.append(line)
+            } else if let last = currentParagraph.last, last.hasSuffix("-") {
+                currentParagraph[currentParagraph.count - 1] = String(last.dropLast()) + line
+            } else {
+                currentParagraph.append(line)
+            }
+        }
+        flush()
+
+        return paragraphs.joined(separator: "\n\n")
+    }
+
     public static func lineRects(for card: NoteCard, in document: PDFDocument) -> [HighlightRect] {
         let stored = card.highlightRects.filter {
             $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
         }
-        if !stored.isEmpty { return stored }
+        if !stored.isEmpty { return deduplicate(stored) }
 
         if let pageIndex = card.startPage,
            pageIndex >= 0,
@@ -49,7 +97,7 @@ public enum PDFHighlightResolver {
             if bounds.width > 0, bounds.height > 0 {
                 if let selection = page.selection(for: bounds) {
                     let resolved = lineRects(from: selection, document: document)
-                    if !resolved.isEmpty { return resolved }
+                    if !resolved.isEmpty { return deduplicate(resolved) }
                 }
                 return [HighlightRect(
                     page: pageIndex,
@@ -74,7 +122,7 @@ public enum PDFHighlightResolver {
             let resolved = candidates.flatMap { selection in
                 lineRects(from: selection, document: document)
             }
-            if !resolved.isEmpty { return resolved }
+            if !resolved.isEmpty { return deduplicate(resolved) }
         }
 
         return []
@@ -98,7 +146,7 @@ public enum PDFHighlightResolver {
                 ))
             }
         }
-        return result
+        return deduplicate(result)
     }
 }
 
@@ -149,6 +197,7 @@ public struct PDFReaderView: NSViewRepresentable {
         let view = InteractivePDFView()
         view.autoScales = true
         view.displaysPageBreaks = true
+        view.pageBreakMargins = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
         view.document = manager.document
         configure(view)
         context.coordinator.setupObserver(for: view)
@@ -163,6 +212,7 @@ public struct PDFReaderView: NSViewRepresentable {
         }
 
         view.displayMode = displayMode == .continuous ? .singlePageContinuous : .singlePage
+        view.pageBreakMargins = NSEdgeInsets(top: 2, left: 0, bottom: 2, right: 0)
         view.autoScales = true
         configure(view)
         let cardsChanged = context.coordinator.lastCards != cards ||
@@ -240,7 +290,7 @@ public struct PDFReaderView: NSViewRepresentable {
                 guard let page = document.page(at: line.page) else { continue }
                 let rect = CGRect(x: line.x, y: line.y, width: line.width, height: line.height)
                 let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
-                annotation.color = accent.withAlphaComponent(0.40)
+                annotation.color = accent.withAlphaComponent(0.65)
                 annotation.contents = "MarginGraph-card-highlight"
                 page.addAnnotation(annotation)
             }
@@ -493,10 +543,12 @@ public final class InteractivePDFView: PDFView {
 
             let canonicalStart = endpoint(for: rects.first!, start: true)
             let canonicalEnd = endpoint(for: rects.last!, start: false)
-            Swift.print("[InteractivePDFView] handleDrag calling handler cardID=\(handleDrag.cardID) textLength=\(selection.string?.count ?? 0) rects=\(rects.count)")
+            let rawString = selection.string ?? ""
+            let normalizedText = PDFHighlightResolver.normalizeExcerptParagraphs(rawString)
+            Swift.print("[InteractivePDFView] handleDrag calling handler cardID=\(handleDrag.cardID) textLength=\(normalizedText.count) rects=\(rects.count)")
             updateCardHighlightHandler?(
                 handleDrag.cardID,
-                selection.string ?? "",
+                normalizedText,
                 rects,
                 canonicalStart,
                 canonicalEnd
@@ -516,7 +568,8 @@ public final class InteractivePDFView: PDFView {
                let document,
                let pageIndex = pageIndex(of: start.page, in: document),
                let factory = excerptFactory {
-                let text = start.page.selection(for: bounds)?.string ?? ""
+                let rawText = start.page.selection(for: bounds)?.string ?? ""
+                let text = PDFHighlightResolver.normalizeExcerptParagraphs(rawText)
                 excerptHandler?(factory(pageIndex, bounds, text))
             }
             return
@@ -533,7 +586,35 @@ public final class InteractivePDFView: PDFView {
 
         let bounds = selection.bounds(for: page)
         guard !bounds.isEmpty else { return }
-        excerptHandler?(factory(pageIndex, bounds, selection.string ?? ""))
+        let text = PDFHighlightResolver.normalizeExcerptParagraphs(selection.string ?? "")
+        excerptHandler?(factory(pageIndex, bounds, text))
+    }
+
+    static func clampToLine(on page: PDFPage, point: CGPoint) -> CGPoint {
+        guard let full = page.selection(for: page.bounds(for: .cropBox)) else { return point }
+        let lines = full.selectionsByLine()
+        guard !lines.isEmpty else { return point }
+
+        var bestLine: PDFSelection?
+        var minDy = CGFloat.infinity
+        for line in lines {
+            let b = line.bounds(for: page)
+            if point.y >= b.minY - 4 && point.y <= b.maxY + 4 {
+                bestLine = line
+                break
+            }
+            let dy = abs(b.midY - point.y)
+            if dy < minDy {
+                minDy = dy
+                bestLine = line
+            }
+        }
+        if let bestLine {
+            let b = bestLine.bounds(for: page)
+            let clampedX = min(max(point.x, b.minX + 2), b.maxX - 2)
+            return CGPoint(x: clampedX, y: b.midY)
+        }
+        return point
     }
 
     func makeMultiPageSelection(
@@ -546,21 +627,42 @@ public final class InteractivePDFView: PDFView {
         guard startIndex != NSNotFound, endIndex != NSNotFound else { return nil }
 
         if startIndex == endIndex {
-            return startPage.selection(from: startPoint, to: endPoint)
+            let p = startPage
+            let clampedStart = Self.clampToLine(on: p, point: startPoint)
+            let clampedEnd = Self.clampToLine(on: p, point: endPoint)
+
+            let isForward: Bool
+            if abs(clampedStart.y - clampedEnd.y) > 6 {
+                isForward = clampedStart.y > clampedEnd.y
+            } else {
+                isForward = clampedStart.x <= clampedEnd.x
+            }
+
+            let pA = isForward ? clampedStart : clampedEnd
+            let pB = isForward ? clampedEnd : clampedStart
+            return p.selection(from: pA, to: pB)
         }
 
         let forward = startIndex < endIndex
         let pStart = forward ? startPage : endPage
-        let ptStart = forward ? startPoint : endPoint
+        let ptStartRaw = forward ? startPoint : endPoint
         let pEnd = forward ? endPage : startPage
-        let ptEnd = forward ? endPoint : startPoint
+        let ptEndRaw = forward ? endPoint : startPoint
         let idxStart = forward ? startIndex : endIndex
         let idxEnd = forward ? endIndex : startIndex
 
-        let bStart = pStart.bounds(for: .cropBox)
-        let endOfFirstPage = CGPoint(x: bStart.maxX - 5, y: bStart.minY + 5)
+        let clampedStart = Self.clampToLine(on: pStart, point: ptStartRaw)
+        let clampedEnd = Self.clampToLine(on: pEnd, point: ptEndRaw)
+
+        var endOfFirstPage = CGPoint(x: pStart.bounds(for: .cropBox).maxX - 5, y: pStart.bounds(for: .cropBox).minY + 5)
+        if let fullFirst = pStart.selection(for: pStart.bounds(for: .cropBox)),
+           let lastLine = fullFirst.selectionsByLine().last {
+            let lb = lastLine.bounds(for: pStart)
+            endOfFirstPage = CGPoint(x: lb.maxX - 2, y: lb.midY)
+        }
+
         var combined: PDFSelection?
-        if let selFirst = pStart.selection(from: ptStart, to: endOfFirstPage) {
+        if let selFirst = pStart.selection(from: clampedStart, to: endOfFirstPage) {
             combined = (selFirst.copy() as? PDFSelection)
         }
 
@@ -577,9 +679,14 @@ public final class InteractivePDFView: PDFView {
             }
         }
 
-        let bEnd = pEnd.bounds(for: .cropBox)
-        let startOfLastPage = CGPoint(x: bEnd.minX + 5, y: bEnd.maxY - 5)
-        if let selLast = pEnd.selection(from: startOfLastPage, to: ptEnd) {
+        var startOfLastPage = CGPoint(x: pEnd.bounds(for: .cropBox).minX + 5, y: pEnd.bounds(for: .cropBox).maxY - 5)
+        if let fullLast = pEnd.selection(for: pEnd.bounds(for: .cropBox)),
+           let firstLine = fullLast.selectionsByLine().first {
+            let fb = firstLine.bounds(for: pEnd)
+            startOfLastPage = CGPoint(x: fb.minX + 2, y: fb.midY)
+        }
+
+        if let selLast = pEnd.selection(from: startOfLastPage, to: clampedEnd) {
             if let c = combined {
                 c.add(selLast)
             } else {
@@ -711,7 +818,7 @@ public final class InteractivePDFView: PDFView {
             guard let page = document.page(at: line.page) else { continue }
             let rect = CGRect(x: line.x, y: line.y, width: line.width, height: line.height)
             let annotation = PDFAnnotation(bounds: rect, forType: .highlight, withProperties: nil)
-            annotation.color = accent.withAlphaComponent(0.55)
+            annotation.color = accent.withAlphaComponent(0.65)
             annotation.contents = "MarginGraph-drag-highlight"
             page.addAnnotation(annotation)
         }
