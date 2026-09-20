@@ -798,4 +798,49 @@ final class PDFTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(narrowClampedLeft, margin)
         XCTAssertLessThanOrEqual(narrowRightEdge, narrowContainerWidth - margin)
     }
+
+    func testCalculateSectionNoteCounts() {
+        let sec1_1 = PDFOutlineItem(title: "Section 1.1", pageIndex: 13)
+        let sec1_2 = PDFOutlineItem(title: "Section 1.2", pageIndex: 16)
+        let ch1 = PDFOutlineItem(title: "Chapter 1", pageIndex: 10, children: [sec1_1, sec1_2])
+        let ch2 = PDFOutlineItem(title: "Chapter 2", pageIndex: 23)
+        let fourPrinciples = PDFOutlineItem(title: "The Four Principles", pageIndex: 35)
+        let ch3 = PDFOutlineItem(title: "Chapter 3", pageIndex: 35)
+
+        let items = [ch1, ch2, fourPrinciples, ch3]
+
+        let topicId = UUID()
+        var cards: [NoteCard] = []
+        // 2 cards on page 10 (ch1 range: 10..<13)
+        cards.append(NoteCard(topicId: topicId, startPage: 10))
+        cards.append(NoteCard(topicId: topicId, startPage: 10))
+        // 1 card on page 11 (ch1 range: 10..<13)
+        cards.append(NoteCard(topicId: topicId, startPage: 11))
+        // 4 cards on page 14 (sec1_1 range: 13..<16)
+        for _ in 0..<4 {
+            cards.append(NoteCard(topicId: topicId, startPage: 14))
+        }
+        // 0 cards for sec1_2 (range: 16..<23)
+        // 5 cards on page 24 (ch2 range: 23..<35)
+        for _ in 0..<5 {
+            cards.append(NoteCard(topicId: topicId, startPage: 24))
+        }
+        // 6 cards on page 36 (ch3 range: 35..<100)
+        for _ in 0..<6 {
+            cards.append(NoteCard(topicId: topicId, startPage: 36))
+        }
+
+        let counts = TableOfContentsPopoverView.calculateSectionNoteCounts(
+            items: items,
+            cards: cards,
+            totalPageCount: 100
+        )
+
+        XCTAssertEqual(counts[ch1.id], 3, "Chapter 1 should contain cards on pages 10..<13")
+        XCTAssertEqual(counts[sec1_1.id], 4, "Section 1.1 should contain cards on pages 13..<16")
+        XCTAssertEqual(counts[sec1_2.id], 0, "Section 1.2 should have 0 cards")
+        XCTAssertEqual(counts[ch2.id], 5, "Chapter 2 should contain cards on pages 23..<35")
+        XCTAssertEqual(counts[fourPrinciples.id], 0, "Four Principles with range 35..<35 should have 0 cards")
+        XCTAssertEqual(counts[ch3.id], 6, "Chapter 3 should contain cards on pages 35..<100")
+    }
 }

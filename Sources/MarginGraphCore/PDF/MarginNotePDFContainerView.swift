@@ -578,6 +578,8 @@ public struct MarginNotePDFContainerView: View {
                         TableOfContentsPopoverView(
                             items: manager.outline,
                             currentPageIndex: currentPageIndex,
+                            cards: cards,
+                            totalPageCount: max(manager.pageCount, totalPageCount),
                             onJumpToPage: { page in
                                 navigateToHistoryPage(page)
                                 withAnimation(.easeInOut(duration: 0.15)) {

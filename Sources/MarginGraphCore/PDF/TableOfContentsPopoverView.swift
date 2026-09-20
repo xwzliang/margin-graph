@@ -4,6 +4,8 @@ import AppKit
 public struct TableOfContentsPopoverView: View {
     public var items: [PDFOutlineItem]
     public var currentPageIndex: Int
+    public var cards: [NoteCard]
+    public var totalPageCount: Int
     public var onJumpToPage: (Int) -> Void
 
     @State private var query: String = ""
@@ -13,14 +15,86 @@ public struct TableOfContentsPopoverView: View {
     public init(
         items: [PDFOutlineItem],
         currentPageIndex: Int,
+        cards: [NoteCard] = [],
+        totalPageCount: Int = 1,
         onJumpToPage: @escaping (Int) -> Void
     ) {
         self.items = items
         self.currentPageIndex = currentPageIndex
+        self.cards = cards
+        self.totalPageCount = totalPageCount
         self.onJumpToPage = onJumpToPage
         // By default expand top-level items that have children
         let initialExpanded = Set(items.filter { !$0.children.isEmpty }.map { $0.id })
         self._expandedItemIDs = State(initialValue: initialExpanded)
+    }
+
+    public var noteCounts: [UUID: Int] {
+        Self.calculateSectionNoteCounts(items: items, cards: cards, totalPageCount: totalPageCount)
+    }
+
+    public static func calculateSectionNoteCounts(
+        items: [PDFOutlineItem],
+        cards: [NoteCard],
+        totalPageCount: Int
+    ) -> [UUID: Int] {
+        func preorder(_ list: [PDFOutlineItem]) -> [PDFOutlineItem] {
+            var result: [PDFOutlineItem] = []
+            for item in list {
+                result.append(item)
+                result.append(contentsOf: preorder(item.children))
+            }
+            return result
+        }
+
+        func effectivePage(_ item: PDFOutlineItem) -> Int? {
+            if let p = item.pageIndex { return p }
+            for child in item.children {
+                if let cp = effectivePage(child) { return cp }
+            }
+            return nil
+        }
+
+        let flat = preorder(items)
+        guard !flat.isEmpty else { return [:] }
+
+        var cardCountByPage: [Int: Int] = [:]
+        for card in cards {
+            if let page = card.startPage ?? card.highlightRects.first?.page ?? card.excerptSegments.first?.rects.first?.page {
+                cardCountByPage[page, default: 0] += 1
+            }
+        }
+
+        var counts: [UUID: Int] = [:]
+
+        for i in 0..<flat.count {
+            let item = flat[i]
+            guard let startPage = effectivePage(item) else {
+                counts[item.id] = 0
+                continue
+            }
+
+            var nextStartPage = totalPageCount
+            for j in (i + 1)..<flat.count {
+                if let nextP = effectivePage(flat[j]) {
+                    nextStartPage = nextP
+                    break
+                }
+            }
+
+            let endPage = max(startPage, nextStartPage)
+            if startPage == endPage {
+                counts[item.id] = 0
+            } else {
+                var sum = 0
+                for p in startPage..<endPage {
+                    sum += cardCountByPage[p, default: 0]
+                }
+                counts[item.id] = sum
+            }
+        }
+
+        return counts
     }
 
     private struct FlattenedOutlineRow: Identifiable {
@@ -142,7 +216,7 @@ public struct TableOfContentsPopoverView: View {
                             let isCurrent = row.item.pageIndex == currentPageIndex
                             let isHovered = hoveredItemID == row.id
 
-                            HStack(spacing: 6) {
+                            HStack(alignment: .top, spacing: 6) {
                                 // Indentation
                                 if row.depth > 0 {
                                     Spacer()
@@ -164,17 +238,26 @@ public struct TableOfContentsPopoverView: View {
                                             .frame(width: 14, height: 18)
                                     }
                                     .buttonStyle(.plain)
+                                    .padding(.top, 1)
                                 } else {
                                     Spacer()
                                         .frame(width: 14)
                                 }
 
-                                // Title
-                                Text(row.item.title)
-                                    .font(.system(size: 12, weight: isCurrent ? .bold : .regular))
-                                    .foregroundStyle(isCurrent ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.primary)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
+                                // Title & Note Count
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(row.item.title)
+                                        .font(.system(size: 12, weight: isCurrent ? .bold : .regular))
+                                        .foregroundStyle(isCurrent ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.primary)
+                                        .lineLimit(1)
+                                        .truncationMode(.tail)
+
+                                    if let count = noteCounts[row.id], count > 0 {
+                                        Text("\(count) note(s)")
+                                            .font(.system(size: 10.5))
+                                            .foregroundStyle(Color(red: 0.20, green: 0.50, blue: 0.90))
+                                    }
+                                }
 
                                 Spacer()
 
@@ -183,6 +266,7 @@ public struct TableOfContentsPopoverView: View {
                                     Text("\(page + 1)")
                                         .font(.system(size: 10.5, weight: isCurrent ? .bold : .regular))
                                         .foregroundStyle(isCurrent ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.secondary)
+                                        .padding(.top, 1)
                                 }
                             }
                             .padding(.horizontal, 10)
@@ -212,7 +296,7 @@ public struct TableOfContentsPopoverView: View {
                     }
                     .padding(6)
                 }
-                .frame(maxHeight: 340)
+                .frame(maxHeight: 380)
             }
         }
         .frame(maxWidth: .infinity)
