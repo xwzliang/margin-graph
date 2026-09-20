@@ -215,6 +215,6 @@ public struct TableOfContentsPopoverView: View {
                 .frame(maxHeight: 340)
             }
         }
-        .frame(width: 310)
+        .frame(maxWidth: .infinity)
     }
 }

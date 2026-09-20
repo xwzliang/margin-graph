@@ -47,6 +47,13 @@ public enum MarginNotePDFTool: String, CaseIterable, Identifiable {
     }
 }
 
+private struct PDFToolbarButtonFrameKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
 public struct MarginNotePDFContainerView: View {
     public var manager: PDFDocumentManager
     public var cards: [NoteCard]
@@ -84,6 +91,8 @@ public struct MarginNotePDFContainerView: View {
     @State private var bookmarkedPages: Set<Int> = []
     @State private var showBookmarksPopover: Bool = false
     @State private var showTableOfContentsPopover: Bool = false
+    @State private var tocButtonFrame: CGRect? = nil
+    @State private var bookmarksButtonFrame: CGRect? = nil
     @State private var displayMode: PDFReaderDisplayMode = .continuous
     @State private var pageHistory: [Int] = []
     @State private var historyIndex: Int = 0
@@ -145,9 +154,11 @@ public struct MarginNotePDFContainerView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Row 1: PDF Annotation Toolbar (MarginNote 3 standard)
-            HStack(spacing: 12) {
+        GeometryReader { containerGeometry in
+            ZStack(alignment: .topLeading) {
+                VStack(spacing: 0) {
+                    // Row 1: PDF Annotation Toolbar (MarginNote 3 standard)
+                    HStack(spacing: 12) {
                 // Main Tools Group
                 HStack(spacing: 6) {
                     toolButton(.hand)
@@ -198,7 +209,12 @@ public struct MarginNotePDFContainerView: View {
 
                     // Table of Contents button
                     Button {
-                        showTableOfContentsPopover.toggle()
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showTableOfContentsPopover.toggle()
+                            if showTableOfContentsPopover {
+                                showBookmarksPopover = false
+                            }
+                        }
                     } label: {
                         Image(systemName: "list.bullet.rectangle")
                             .font(.system(size: 13, weight: showTableOfContentsPopover ? .semibold : .regular))
@@ -211,16 +227,14 @@ public struct MarginNotePDFContainerView: View {
                     }
                     .buttonStyle(.plain)
                     .marginNoteTooltip("Table of Contents")
-                    .popover(isPresented: $showTableOfContentsPopover, arrowEdge: .bottom) {
-                        TableOfContentsPopoverView(
-                            items: manager.outline,
-                            currentPageIndex: currentPageIndex,
-                            onJumpToPage: { page in
-                                navigateToHistoryPage(page)
-                                showTableOfContentsPopover = false
-                            }
-                        )
-                    }
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: PDFToolbarButtonFrameKey.self,
+                                value: ["toc": geo.frame(in: .named("PDFContainerSpace"))]
+                            )
+                        }
+                    )
 
                     // Bookmarks: Direct toggle + Dropdown for listing and deleting
                     HStack(spacing: 2) {
@@ -244,7 +258,12 @@ public struct MarginNotePDFContainerView: View {
                         .marginNoteTooltip(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark" : "Bookmark")
 
                         Button {
-                            showBookmarksPopover.toggle()
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showBookmarksPopover.toggle()
+                                if showBookmarksPopover {
+                                    showTableOfContentsPopover = false
+                                }
+                            }
                         } label: {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 8, weight: .bold))
@@ -254,23 +273,14 @@ public struct MarginNotePDFContainerView: View {
                         }
                         .buttonStyle(.plain)
                         .marginNoteTooltip("Bookmarks List")
-                        .popover(isPresented: $showBookmarksPopover, arrowEdge: .bottom) {
-                            BookmarksPopoverView(
-                                bookmarkedPages: $bookmarkedPages,
-                                currentPageIndex: currentPageIndex,
-                                manager: manager,
-                                onJumpToPage: { page in
-                                    navigateToHistoryPage(page)
-                                    showBookmarksPopover = false
-                                },
-                                onToggleBookmark: { page, isBookmarked in
-                                    onToggleBookmark?(page, isBookmarked)
-                                },
-                                onDeleteBookmark: { page in
-                                    onToggleBookmark?(page, false)
-                                }
-                            )
-                        }
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: PDFToolbarButtonFrameKey.self,
+                                    value: ["bookmarks": geo.frame(in: .named("PDFContainerSpace"))]
+                                )
+                            }
+                        )
                     }
 
                     // More options menu
@@ -548,6 +558,78 @@ public struct MarginNotePDFContainerView: View {
                         )
                         .padding(.bottom, 24)
                         .transition(.opacity)
+                    }
+                }
+            }
+            .frame(width: containerGeometry.size.width, height: containerGeometry.size.height)
+
+                // In-Window Popovers (strictly contained within window boundaries)
+                if showTableOfContentsPopover {
+                    InWindowPopoverContainer(
+                        anchorFrame: tocButtonFrame ?? CGRect(x: containerGeometry.size.width - 100, y: 7, width: 24, height: 24),
+                        containerWidth: containerGeometry.size.width,
+                        popoverWidth: 320,
+                        onDismiss: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showTableOfContentsPopover = false
+                            }
+                        }
+                    ) {
+                        TableOfContentsPopoverView(
+                            items: manager.outline,
+                            currentPageIndex: currentPageIndex,
+                            onJumpToPage: { page in
+                                navigateToHistoryPage(page)
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showTableOfContentsPopover = false
+                                }
+                            }
+                        )
+                    }
+                    .transition(.opacity)
+                    .zIndex(200)
+                }
+
+                if showBookmarksPopover {
+                    InWindowPopoverContainer(
+                        anchorFrame: bookmarksButtonFrame ?? CGRect(x: containerGeometry.size.width - 60, y: 7, width: 24, height: 24),
+                        containerWidth: containerGeometry.size.width,
+                        popoverWidth: 280,
+                        onDismiss: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showBookmarksPopover = false
+                            }
+                        }
+                    ) {
+                        BookmarksPopoverView(
+                            bookmarkedPages: $bookmarkedPages,
+                            currentPageIndex: currentPageIndex,
+                            manager: manager,
+                            onJumpToPage: { page in
+                                navigateToHistoryPage(page)
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showBookmarksPopover = false
+                                }
+                            },
+                            onToggleBookmark: { page, isBookmarked in
+                                onToggleBookmark?(page, isBookmarked)
+                            },
+                            onDeleteBookmark: { page in
+                                onToggleBookmark?(page, false)
+                            }
+                        )
+                    }
+                    .transition(.opacity)
+                    .zIndex(200)
+                }
+            }
+            .coordinateSpace(name: "PDFContainerSpace")
+            .onPreferenceChange(PDFToolbarButtonFrameKey.self) { frames in
+                if let f = frames["toc"] {
+                    tocButtonFrame = f
+                }
+                if let f = frames["bookmarks"] {
+                    bookmarksButtonFrame = f
                 }
             }
         }
@@ -811,7 +893,7 @@ public struct BookmarksPopoverView: View {
                 }
             }
         }
-        .frame(width: 270)
+        .frame(maxWidth: .infinity)
     }
 }
 

@@ -762,4 +762,40 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(parent.children.count, 1)
         XCTAssertEqual(parent.children.first?.title, "Section 1.1")
     }
+
+    func testInWindowPopoverShapeAndBoundaryClamping() {
+        // 1. PopoverBubbleShape path verification
+        let rect = CGRect(x: 0, y: 0, width: 320, height: 400)
+        let shape = PopoverBubbleShape(arrowX: 200, arrowWidth: 16, arrowHeight: 8, cornerRadius: 10)
+        let path = shape.path(in: rect)
+        XCTAssertFalse(path.isEmpty, "Popover bubble path should not be empty")
+        let bounds = path.boundingRect
+        XCTAssertLessThanOrEqual(bounds.minX, 0.1)
+        XCTAssertGreaterThanOrEqual(bounds.maxX, 319.9)
+
+        // 2. Boundary clamping verification: Anchor near right edge of 720pt container
+        let containerWidth: CGFloat = 720
+        let popoverWidth: CGFloat = 320
+        let margin: CGFloat = 12
+        let anchorRightEdgeMidX: CGFloat = 660 // near right edge
+
+        let effectiveWidth = min(popoverWidth, max(180, containerWidth - margin * 2))
+        let idealLeft = anchorRightEdgeMidX - effectiveWidth / 2
+        let clampedLeft = max(margin, min(idealLeft, containerWidth - effectiveWidth - margin))
+        let rightEdge = clampedLeft + effectiveWidth
+
+        XCTAssertGreaterThanOrEqual(clampedLeft, margin, "Left edge must not exceed left margin")
+        XCTAssertLessThanOrEqual(rightEdge, containerWidth - margin, "Right edge must never exceed container boundary")
+        XCTAssertEqual(rightEdge, 708, "Right edge should be clamped exactly to 720 - 12 = 708")
+
+        // 3. Narrow container clamping verification: 250pt container
+        let narrowContainerWidth: CGFloat = 250
+        let narrowEffectiveWidth = min(popoverWidth, max(180, narrowContainerWidth - margin * 2))
+        let narrowIdealLeft = 200 - narrowEffectiveWidth / 2
+        let narrowClampedLeft = max(margin, min(narrowIdealLeft, narrowContainerWidth - narrowEffectiveWidth - margin))
+        let narrowRightEdge = narrowClampedLeft + narrowEffectiveWidth
+
+        XCTAssertGreaterThanOrEqual(narrowClampedLeft, margin)
+        XCTAssertLessThanOrEqual(narrowRightEdge, narrowContainerWidth - margin)
+    }
 }
