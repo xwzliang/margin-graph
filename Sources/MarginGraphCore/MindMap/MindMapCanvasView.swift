@@ -83,150 +83,166 @@ public struct MindMapCanvasView: View {
             let frames = displayFrames(layout: layout)
             let visibleCards = cards.filter { layout.visibleCardIDs.contains($0.id) }
 
-            ZStack(alignment: .topLeading) {
-                canvasBackgroundView
-
-                // Subtle grid with pan and deselect
-                grid
-                    .contentShape(Rectangle())
-                    .gesture(panGesture)
-                    .onTapGesture {
-                        onSelect(nil)
-                    }
-
-                // Tree connectors and links
-                Canvas { context, _ in
-                    drawConnectors(context: &context, frames: frames, visible: layout.visibleCardIDs)
+            canvasZStack(proxy: proxy, layout: layout, frames: frames, visibleCards: visibleCards)
+                .coordinateSpace(name: "MindMapCanvas")
+                .onChange(of: cards) { _, newCards in
+                    layoutResult = TreeLayout.layout(cards: newCards)
                 }
-                .allowsHitTesting(false)
-
-                // Note Cards with Viewport Culling
-                cardsView(visibleCards: visibleCards, frames: frames, staticFrames: layout.frames, canvasSize: proxy.size)
-
-                // Main MindMap Floating Header (MarginNote 3 signature)
-                HStack {
-                    Spacer()
-                    mainMindMapHeader
-                    Spacer()
+                .clipped()
+                .focusable()
+                .focusEffectDisabled()
+                .modifier(MindMapKeyboardHandler(
+                    selectedCardID: selectedCardID,
+                    cards: cards,
+                    frames: frames,
+                    visibleCardIDs: layout.visibleCardIDs,
+                    visibleCards: visibleCards,
+                    onDeleteCard: onDeleteCard,
+                    onNewSibling: onNewSibling,
+                    onNewChild: onNewChild,
+                    onEditCard: onEditCard,
+                    onSelect: onSelect,
+                    viewport: $viewport
+                ))
+                .onAppear {
+                    viewport.viewportSize = proxy.size
+                    viewport.zoomToFit(nodes: Array(frames.values))
                 }
-                .padding(.top, 8)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .allowsHitTesting(false)
-
-                // Bottom-left Mode Toggles (MarginNote 3 signature Drag & Select stacked buttons)
-                bottomLeftControls
-
-                // MiniMapView at bottom-right (toggleable)
-                if showMiniMap {
-                    MiniMapView(
-                        cards: visibleCards,
-                        frames: frames,
-                        viewport: $viewport,
-                        canvasSize: proxy.size,
-                        onClose: {
-                            withAnimation(.easeInOut(duration: 0.2)) {
-                                showMiniMap = false
-                            }
+                .onChange(of: proxy.size) { _, size in
+                    viewport.viewportSize = size
+                }
+                .onChange(of: selectedCardID) { _, newID in
+                    if let newID, let frame = frames[newID] {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            viewport.center(on: frame)
                         }
-                    )
-                    .frame(width: 150, height: 100)
-                    .padding(16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                } else {
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) {
-                            showMiniMap = true
-                        }
-                    } label: {
-                        Image(systemName: "map")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
-                            .frame(width: 32, height: 32)
-                            .background(
-                                Circle()
-                                    .fill(Color(white: 0.98).opacity(0.95))
-                                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                                    .overlay(
-                                        Circle().stroke(Color.black.opacity(0.08), lineWidth: 1)
-                                    )
-                            )
                     }
-                    .buttonStyle(.plain)
-                    .help("Show Overview Window")
-                    .padding(16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
-
-                // Draggable Vertical & Horizontal Scrollbars
-                scrollBars(proxy: proxy, frames: frames)
-            }
-            .coordinateSpace(name: "MindMapCanvas")
-            .onChange(of: cards) { _, newCards in
-                layoutResult = TreeLayout.layout(cards: newCards)
-            }
-            .clipped()
-            .focusable()
-            .focusEffectDisabled()
-            .onKeyPress(.delete) {
-                if let id = selectedCardID {
-                    onDeleteCard?(id)
-                    return .handled
+                .simultaneousGesture(magnifyGesture(proxy: proxy))
+                .onReceive(NotificationCenter.default.publisher(for: .marginGraphZoomIn)) { _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        viewport.zoomIn()
+                    }
                 }
-                return .ignored
-            }
-            .onKeyPress(.return) {
-                if let id = selectedCardID {
-                    onNewSibling?(id)
-                    return .handled
+                .onReceive(NotificationCenter.default.publisher(for: .marginGraphZoomOut)) { _ in
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        viewport.zoomOut()
+                    }
                 }
-                return .ignored
-            }
-            .onKeyPress(.tab) {
-                if let id = selectedCardID {
-                    onNewChild?(id)
-                    return .handled
-                }
-                return .ignored
-            }
-            .onKeyPress(.space) {
-                if let id = selectedCardID, let card = cards.first(where: { $0.id == id }) {
-                    onEditCard?(card)
-                    return .handled
-                }
-                return .ignored
-            }
-            .onAppear {
-                viewport.viewportSize = proxy.size
-                viewport.zoomToFit(nodes: Array(frames.values))
-            }
-            .onChange(of: proxy.size) { _, size in
-                viewport.viewportSize = size
-            }
-            .onChange(of: selectedCardID) { _, newID in
-                if let newID, let frame = frames[newID] {
+                .onReceive(NotificationCenter.default.publisher(for: .marginGraphZoomReset)) { _ in
                     withAnimation(.easeInOut(duration: 0.25)) {
-                        viewport.center(on: frame)
+                        viewport.resetZoom()
                     }
                 }
+        }
+    }
+
+    private func magnifyGesture(proxy: GeometryProxy) -> some Gesture {
+        MagnifyGesture()
+            .onChanged { value in
+                if zoomStart == nil { zoomStart = viewport.zoomScale }
+                let oldScale = viewport.zoomScale
+                viewport.zoomScale = (zoomStart ?? oldScale) * value.magnification
+                let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                let canvasCenter = CGPoint(
+                    x: (center.x - viewport.panOffset.x) / oldScale,
+                    y: (center.y - viewport.panOffset.y) / oldScale
+                )
+                viewport.panOffset = CGPoint(
+                    x: center.x - canvasCenter.x * viewport.zoomScale,
+                    y: center.y - canvasCenter.y * viewport.zoomScale
+                )
             }
-            .simultaneousGesture(
-                MagnifyGesture()
-                    .onChanged { value in
-                        if zoomStart == nil { zoomStart = viewport.zoomScale }
-                        let oldScale = viewport.zoomScale
-                        viewport.zoomScale = (zoomStart ?? oldScale) * value.magnification
-                        let center = CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                        let canvasCenter = CGPoint(
-                            x: (center.x - viewport.panOffset.x) / oldScale,
-                            y: (center.y - viewport.panOffset.y) / oldScale
-                        )
-                        viewport.panOffset = CGPoint(
-                            x: center.x - canvasCenter.x * viewport.zoomScale,
-                            y: center.y - canvasCenter.y * viewport.zoomScale
-                        )
+            .onEnded { _ in zoomStart = nil }
+    }
+
+    @ViewBuilder
+    private func canvasZStack(
+        proxy: GeometryProxy,
+        layout: TreeLayoutResult,
+        frames: [UUID: CGRect],
+        visibleCards: [NoteCard]
+    ) -> some View {
+        ZStack(alignment: .topLeading) {
+            canvasBackgroundView
+
+            // Subtle grid with pan and deselect
+            grid
+                .contentShape(Rectangle())
+                .gesture(panGesture)
+                .onTapGesture {
+                    onSelect(nil)
+                }
+
+            // Tree connectors and links
+            Canvas { context, _ in
+                drawConnectors(context: &context, frames: frames, visible: layout.visibleCardIDs)
+            }
+            .allowsHitTesting(false)
+
+            // Note Cards with Viewport Culling
+            cardsView(visibleCards: visibleCards, frames: frames, staticFrames: layout.frames, canvasSize: proxy.size)
+
+            // Main MindMap Floating Header (MarginNote 3 signature)
+            HStack {
+                Spacer()
+                mainMindMapHeader
+                Spacer()
+            }
+            .padding(.top, 8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .zIndex(150)
+
+            // Bottom-left Mode Toggles (MarginNote 3 signature Drag & Select stacked buttons)
+            bottomLeftControls
+                .zIndex(150)
+
+            // MiniMapView at bottom-right (toggleable)
+            if showMiniMap {
+                MiniMapView(
+                    cards: visibleCards,
+                    frames: frames,
+                    viewport: $viewport,
+                    canvasSize: proxy.size,
+                    onClose: {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showMiniMap = false
+                        }
                     }
-                    .onEnded { _ in zoomStart = nil }
-            )
+                )
+                .frame(width: 150, height: 100)
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .zIndex(150)
+            } else {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showMiniMap = true
+                    }
+                } label: {
+                    Image(systemName: "map")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+                        .frame(width: 32, height: 32)
+                        .background(
+                            Circle()
+                                .fill(Color(white: 0.98).opacity(0.95))
+                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                                .overlay(
+                                    Circle().stroke(Color.black.opacity(0.08), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .help("Show Overview Window")
+                .padding(16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                .zIndex(150)
+            }
+
+            // Draggable Vertical & Horizontal Scrollbars
+            scrollBars(proxy: proxy, frames: frames)
+                .zIndex(160)
         }
     }
 
@@ -288,6 +304,12 @@ public struct MindMapCanvasView: View {
                     onMerge: {},
                     onBranchStyle: {
                         onChangeColor?(card.id, (card.colorIndex + 1) % 6)
+                    },
+                    onChangeColor: { newColor in
+                        onChangeColor?(card.id, newColor)
+                    },
+                    onDelete: {
+                        onDeleteCard?(card.id)
                     }
                 )
                 .frame(width: frame.width, height: frame.height + extraHeight)
@@ -305,6 +327,9 @@ public struct MindMapCanvasView: View {
                 .zIndex(isBeingDragged ? 100 : (isTargeted ? 50 : 1))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
                 .gesture(nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames))
+                .contextMenu {
+                    cardContextMenu(for: card)
+                }
                 .position(
                     x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).x,
                     y: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).y
@@ -335,54 +360,158 @@ public struct MindMapCanvasView: View {
         }
     }
 
-    private var bottomLeftControls: some View {
-        VStack(spacing: 8) {
-            Button {
-                canvasMode = "Drag"
-            } label: {
-                Text("Drag")
-                    .font(.system(size: 11, weight: canvasMode == "Drag" ? .bold : .regular))
-                    .foregroundStyle(canvasMode == "Drag" ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle()
-                            .fill(Color(white: 0.98).opacity(0.95))
-                            .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                            .overlay(
-                                Circle()
-                                    .stroke(canvasMode == "Drag" ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.35) : Color.black.opacity(0.08), lineWidth: 1)
-                            )
-                    )
+    @ViewBuilder
+    private func cardContextMenu(for card: NoteCard) -> some View {
+        Button("Edit Card") {
+            onEditCard?(card)
+        }
+        Divider()
+        Button("Copy Title") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(card.title, forType: .string)
+        }
+        Button("Copy Note Content") {
+            NSPasteboard.general.clearContents()
+            let content = !card.highlightText.isEmpty ? card.highlightText : (!card.notesText.isEmpty ? card.notesText : card.title)
+            NSPasteboard.general.setString(content, forType: .string)
+        }
+        Divider()
+        Button("Copy Deep Link") {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(card.deepLinkURL.absoluteString, forType: .string)
+        }
+        Divider()
+        Menu("Card Color") {
+            let colorNames = ["Yellow", "Green", "Blue", "Red", "Purple", "Orange"]
+            ForEach(0..<6, id: \.self) { idx in
+                Button {
+                    onChangeColor?(card.id, idx)
+                } label: {
+                    let isCurrent = card.colorIndex == idx
+                    Text(isCurrent ? "✓ \(colorNames[idx])" : colorNames[idx])
+                }
             }
-            .buttonStyle(.plain)
-            .allowsHitTesting(true)
-            .help("Pan / Drag Canvas")
+        }
+        Divider()
+        Button(role: .destructive) {
+            onDeleteCard?(card.id)
+        } label: {
+            Label("Delete Note", systemImage: "trash")
+        }
+    }
 
-            Button {
-                canvasMode = "Select"
-            } label: {
-                Text("Select")
-                    .font(.system(size: 11, weight: canvasMode == "Select" ? .bold : .regular))
-                    .foregroundStyle(canvasMode == "Select" ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
-                    .frame(width: 36, height: 36)
-                    .background(
-                        Circle()
-                            .fill(Color(white: 0.98).opacity(0.95))
-                            .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                            .overlay(
-                                Circle()
-                                    .stroke(canvasMode == "Select" ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.35) : Color.black.opacity(0.08), lineWidth: 1)
-                            )
-                    )
+    private var bottomLeftControls: some View {
+        HStack(alignment: .bottom, spacing: 10) {
+            // Mode buttons (Drag / Select)
+            VStack(spacing: 8) {
+                Button {
+                    canvasMode = "Drag"
+                } label: {
+                    Text("Drag")
+                        .font(.system(size: 11, weight: canvasMode == "Drag" ? .bold : .regular))
+                        .foregroundStyle(canvasMode == "Drag" ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle()
+                                .fill(Color(white: 0.98).opacity(0.95))
+                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                                .overlay(
+                                    Circle()
+                                        .stroke(canvasMode == "Drag" ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.35) : Color.black.opacity(0.08), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Pan / Drag Canvas")
+
+                Button {
+                    canvasMode = "Select"
+                } label: {
+                    Text("Select")
+                        .font(.system(size: 11, weight: canvasMode == "Select" ? .bold : .regular))
+                        .foregroundStyle(canvasMode == "Select" ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle()
+                                .fill(Color(white: 0.98).opacity(0.95))
+                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                                .overlay(
+                                    Circle()
+                                        .stroke(canvasMode == "Select" ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.35) : Color.black.opacity(0.08), lineWidth: 1)
+                                )
+                        )
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Multi-Select Cards")
             }
-            .buttonStyle(.plain)
-            .allowsHitTesting(true)
-            .help("Multi-Select Cards")
+
+            // Zoom controls pill
+            HStack(spacing: 0) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        viewport.zoomOut()
+                    }
+                } label: {
+                    Image(systemName: "minus")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(Color(white: 0.35))
+                        .frame(width: 25, height: 26)
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Zoom Out (⌘-)")
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        viewport.resetZoom()
+                    }
+                } label: {
+                    Text("\(Int(viewport.zoomScale * 100))%")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Color(white: 0.30))
+                        .frame(width: 34, height: 26)
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Reset Zoom (100%)")
+
+                Button {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        viewport.zoomIn()
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(Color(white: 0.35))
+                        .frame(width: 25, height: 26)
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Zoom In (⌘+)")
+
+                Divider()
+                    .frame(height: 12)
+
+                Button {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        viewport.zoomToFit(nodes: Array(layoutResult.frames.values))
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(Color(white: 0.35))
+                        .frame(width: 25, height: 26)
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Zoom to Fit (⌘0)")
+            }
+            .background(
+                Capsule()
+                    .fill(Color(white: 0.98).opacity(0.95))
+                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                    .overlay(Capsule().stroke(Color.black.opacity(0.08), lineWidth: 1))
+            )
         }
         .padding(.leading, 16)
         .padding(.bottom, 20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-        .allowsHitTesting(false)
     }
 
     private var mainMindMapHeader: some View {
@@ -750,6 +879,100 @@ public struct MindMapCanvasView: View {
             ty: viewport.panOffset.y
         ))
     }
+
+    public enum ArrowDirection: Sendable {
+        case up, down, left, right
+    }
+
+    nonisolated public static func nextCardID(
+        from currentID: UUID,
+        direction: ArrowDirection,
+        cards: [NoteCard],
+        frames: [UUID: CGRect],
+        visibleCardIDs: Set<UUID>
+    ) -> UUID? {
+        guard let currentFrame = frames[currentID],
+              let currentCard = cards.first(where: { $0.id == currentID }) else {
+            return nil
+        }
+
+        let visibleCards = cards.filter { visibleCardIDs.contains($0.id) && frames[$0.id] != nil }
+
+        switch direction {
+        case .right:
+            let children = visibleCards
+                .filter { $0.groupNoteId == currentID }
+                .sorted { (frames[$0.id]?.minY ?? 0) < (frames[$1.id]?.minY ?? 0) }
+            if let firstChild = children.first {
+                return firstChild.id
+            }
+            let rightCandidates = visibleCards.filter {
+                guard let f = frames[$0.id], $0.id != currentID else { return false }
+                return f.midX > currentFrame.midX + 20
+            }
+            return rightCandidates.min(by: { a, b in
+                let fa = frames[a.id]!
+                let fb = frames[b.id]!
+                let distA = (fa.midX - currentFrame.midX) + abs(fa.midY - currentFrame.midY) * 2.0
+                let distB = (fb.midX - currentFrame.midX) + abs(fb.midY - currentFrame.midY) * 2.0
+                return distA < distB
+            })?.id
+
+        case .left:
+            if let parentID = currentCard.groupNoteId, visibleCardIDs.contains(parentID) {
+                return parentID
+            }
+            let leftCandidates = visibleCards.filter {
+                guard let f = frames[$0.id], $0.id != currentID else { return false }
+                return f.midX < currentFrame.midX - 20
+            }
+            return leftCandidates.min(by: { a, b in
+                let fa = frames[a.id]!
+                let fb = frames[b.id]!
+                let distA = (currentFrame.midX - fa.midX) + abs(fa.midY - currentFrame.midY) * 2.0
+                let distB = (currentFrame.midX - fb.midX) + abs(fb.midY - currentFrame.midY) * 2.0
+                return distA < distB
+            })?.id
+
+        case .down:
+            let siblings = visibleCards
+                .filter { $0.groupNoteId == currentCard.groupNoteId }
+                .sorted { (frames[$0.id]?.midY ?? 0) < (frames[$1.id]?.midY ?? 0) }
+            if let idx = siblings.firstIndex(where: { $0.id == currentID }), idx + 1 < siblings.count {
+                return siblings[idx + 1].id
+            }
+            let belowCandidates = visibleCards.filter {
+                guard let f = frames[$0.id], $0.id != currentID else { return false }
+                return f.midY > currentFrame.midY + 5
+            }
+            return belowCandidates.min(by: { a, b in
+                let fa = frames[a.id]!
+                let fb = frames[b.id]!
+                let distA = abs(fa.midX - currentFrame.midX) * 1.5 + (fa.midY - currentFrame.midY)
+                let distB = abs(fb.midX - currentFrame.midX) * 1.5 + (fb.midY - currentFrame.midY)
+                return distA < distB
+            })?.id
+
+        case .up:
+            let siblings = visibleCards
+                .filter { $0.groupNoteId == currentCard.groupNoteId }
+                .sorted { (frames[$0.id]?.midY ?? 0) < (frames[$1.id]?.midY ?? 0) }
+            if let idx = siblings.firstIndex(where: { $0.id == currentID }), idx > 0 {
+                return siblings[idx - 1].id
+            }
+            let aboveCandidates = visibleCards.filter {
+                guard let f = frames[$0.id], $0.id != currentID else { return false }
+                return f.midY < currentFrame.midY - 5
+            }
+            return aboveCandidates.min(by: { a, b in
+                let fa = frames[a.id]!
+                let fb = frames[b.id]!
+                let distA = abs(fa.midX - currentFrame.midX) * 1.5 + (currentFrame.midY - fa.midY)
+                let distB = abs(fb.midX - currentFrame.midX) * 1.5 + (currentFrame.midY - fb.midY)
+                return distA < distB
+            })?.id
+        }
+    }
 }
 
 private struct MiniMapView: View {
@@ -914,5 +1137,118 @@ private struct ScrollWheelCatcherView: NSViewRepresentable {
                 monitor = nil
             }
         }
+    }
+}
+
+private struct MindMapKeyboardHandler: ViewModifier {
+    let selectedCardID: UUID?
+    let cards: [NoteCard]
+    let frames: [UUID: CGRect]
+    let visibleCardIDs: Set<UUID>
+    let visibleCards: [NoteCard]
+    let onDeleteCard: ((UUID) -> Void)?
+    let onNewSibling: ((UUID) -> Void)?
+    let onNewChild: ((UUID) -> Void)?
+    let onEditCard: ((NoteCard) -> Void)?
+    let onSelect: (NoteCard?) -> Void
+    @Binding var viewport: CanvasViewport
+
+    func body(content: Content) -> some View {
+        content
+            .onKeyPress(.delete) {
+                if let id = selectedCardID {
+                    onDeleteCard?(id)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.return) {
+                if let id = selectedCardID {
+                    onNewSibling?(id)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.tab) {
+                if let id = selectedCardID {
+                    onNewChild?(id)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.space) {
+                if let id = selectedCardID, let card = cards.first(where: { $0.id == id }) {
+                    onEditCard?(card)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.rightArrow) {
+                if let curID = selectedCardID {
+                    if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .right, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
+                       let targetCard = cards.first(where: { $0.id == targetID }) {
+                        onSelect(targetCard)
+                        return .handled
+                    }
+                } else if let first = visibleCards.first {
+                    onSelect(first)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.leftArrow) {
+                if let curID = selectedCardID {
+                    if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .left, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
+                       let targetCard = cards.first(where: { $0.id == targetID }) {
+                        onSelect(targetCard)
+                        return .handled
+                    }
+                } else if let first = visibleCards.first {
+                    onSelect(first)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.downArrow) {
+                if let curID = selectedCardID {
+                    if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .down, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
+                       let targetCard = cards.first(where: { $0.id == targetID }) {
+                        onSelect(targetCard)
+                        return .handled
+                    }
+                } else if let first = visibleCards.first {
+                    onSelect(first)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress(.upArrow) {
+                if let curID = selectedCardID {
+                    if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .up, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
+                       let targetCard = cards.first(where: { $0.id == targetID }) {
+                        onSelect(targetCard)
+                        return .handled
+                    }
+                } else if let first = visibleCards.first {
+                    onSelect(first)
+                    return .handled
+                }
+                return .ignored
+            }
+            .onKeyPress { press in
+                if press.modifiers.contains(.command) {
+                    if press.characters == "+" || press.characters == "=" {
+                        withAnimation(.easeOut(duration: 0.2)) { viewport.zoomIn() }
+                        return .handled
+                    } else if press.characters == "-" {
+                        withAnimation(.easeOut(duration: 0.2)) { viewport.zoomOut() }
+                        return .handled
+                    } else if press.characters == "0" {
+                        withAnimation(.easeInOut(duration: 0.25)) { viewport.zoomToFit(nodes: Array(frames.values)) }
+                        return .handled
+                    }
+                }
+                return .ignored
+            }
     }
 }

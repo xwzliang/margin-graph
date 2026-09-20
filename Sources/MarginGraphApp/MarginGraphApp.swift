@@ -1573,6 +1573,59 @@ struct MarginGraphApp: App {
                 .keyboardShortcut("z", modifiers: [.command, .shift])
                 .disabled(!model.canRedo)
             }
+
+            CommandMenu("View") {
+                Button("Document Only (1-View)") {
+                    model.workspaceMode = .readerOnly
+                }
+                .keyboardShortcut("1", modifiers: .command)
+
+                Button("Split View (2-View)") {
+                    model.workspaceMode = .splitView
+                }
+                .keyboardShortcut("2", modifiers: .command)
+
+                Button("Three View (3-View)") {
+                    model.workspaceMode = .threeView
+                }
+                .keyboardShortcut("3", modifiers: .command)
+
+                Button("MindMap Only") {
+                    model.workspaceMode = .mindMapOnly
+                }
+                .keyboardShortcut("4", modifiers: .command)
+
+                Divider()
+
+                Button(model.isOutlineVisible ? "Hide Outline" : "Show Outline") {
+                    model.isOutlineVisible.toggle()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .option])
+
+                Divider()
+
+                Button("Zoom In") {
+                    NotificationCenter.default.post(name: .marginGraphZoomIn, object: nil)
+                }
+                .keyboardShortcut("+", modifiers: .command)
+
+                Button("Zoom Out") {
+                    NotificationCenter.default.post(name: .marginGraphZoomOut, object: nil)
+                }
+                .keyboardShortcut("-", modifiers: .command)
+
+                Button("Actual Size") {
+                    NotificationCenter.default.post(name: .marginGraphZoomReset, object: nil)
+                }
+                .keyboardShortcut("0", modifiers: .command)
+            }
+
+            CommandMenu("Go") {
+                Button("Go to Page...") {
+                    NotificationCenter.default.post(name: .marginGraphGoToPage, object: nil)
+                }
+                .keyboardShortcut("g", modifiers: .command)
+            }
         }
     }
 }

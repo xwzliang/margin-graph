@@ -68,3 +68,10 @@ public struct MarginNoteTheme {
     public static let badgePDFRed = Color(red: 0.85, green: 0.25, blue: 0.20)
     public static let badgeGray = Color(red: 0.72, green: 0.70, blue: 0.66)
 }
+
+public extension Notification.Name {
+    static let marginGraphGoToPage = Notification.Name("marginGraphGoToPage")
+    static let marginGraphZoomIn = Notification.Name("marginGraphZoomIn")
+    static let marginGraphZoomOut = Notification.Name("marginGraphZoomOut")
+    static let marginGraphZoomReset = Notification.Name("marginGraphZoomReset")
+}

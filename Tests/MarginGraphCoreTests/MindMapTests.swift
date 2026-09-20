@@ -271,4 +271,95 @@ final class MindMapTests: XCTestCase {
         XCTAssertLessThan(f1.minY, fInserted.minY)
         XCTAssertLessThan(fInserted.minY, f2.minY)
     }
+
+    func testArrowKeyNavigation() throws {
+        let topicId = UUID()
+        let root = NoteCard(id: UUID(), topicId: topicId, title: "Root")
+        let childA = NoteCard(id: UUID(), topicId: topicId, title: "Child A", groupNoteId: root.id)
+        let childB = NoteCard(id: UUID(), topicId: topicId, title: "Child B", groupNoteId: root.id)
+        let grandchild = NoteCard(id: UUID(), topicId: topicId, title: "Grandchild", groupNoteId: childA.id)
+
+        let allCards = [root, childA, childB, grandchild]
+        let layout = TreeLayout.layout(cards: allCards)
+
+        // 1. Right arrow from root should select its first child (childA)
+        let rightFromRoot = MindMapCanvasView.nextCardID(
+            from: root.id,
+            direction: .right,
+            cards: allCards,
+            frames: layout.frames,
+            visibleCardIDs: layout.visibleCardIDs
+        )
+        XCTAssertEqual(rightFromRoot, childA.id, "Right from root should navigate to first child")
+
+        // 2. Down arrow from childA should select next sibling (childB)
+        let downFromChildA = MindMapCanvasView.nextCardID(
+            from: childA.id,
+            direction: .down,
+            cards: allCards,
+            frames: layout.frames,
+            visibleCardIDs: layout.visibleCardIDs
+        )
+        XCTAssertEqual(downFromChildA, childB.id, "Down from childA should navigate to next sibling childB")
+
+        // 3. Up arrow from childB should select previous sibling (childA)
+        let upFromChildB = MindMapCanvasView.nextCardID(
+            from: childB.id,
+            direction: .up,
+            cards: allCards,
+            frames: layout.frames,
+            visibleCardIDs: layout.visibleCardIDs
+        )
+        XCTAssertEqual(upFromChildB, childA.id, "Up from childB should navigate to previous sibling childA")
+
+        // 4. Right arrow from childA should select its child (grandchild)
+        let rightFromChildA = MindMapCanvasView.nextCardID(
+            from: childA.id,
+            direction: .right,
+            cards: allCards,
+            frames: layout.frames,
+            visibleCardIDs: layout.visibleCardIDs
+        )
+        XCTAssertEqual(rightFromChildA, grandchild.id, "Right from childA should navigate to grandchild")
+
+        // 5. Left arrow from grandchild should select parent (childA)
+        let leftFromGrandchild = MindMapCanvasView.nextCardID(
+            from: grandchild.id,
+            direction: .left,
+            cards: allCards,
+            frames: layout.frames,
+            visibleCardIDs: layout.visibleCardIDs
+        )
+        XCTAssertEqual(leftFromGrandchild, childA.id, "Left from grandchild should navigate to parent childA")
+
+        // 6. Left arrow from childA should select root
+        let leftFromChildA = MindMapCanvasView.nextCardID(
+            from: childA.id,
+            direction: .left,
+            cards: allCards,
+            frames: layout.frames,
+            visibleCardIDs: layout.visibleCardIDs
+        )
+        XCTAssertEqual(leftFromChildA, root.id, "Left from childA should navigate to root")
+    }
+
+    func testViewportZoomInZoomOutReset() {
+        var viewport = CanvasViewport(
+            panOffset: CGPoint(x: 100, y: 100),
+            zoomScale: 1.0,
+            viewportSize: CGSize(width: 800, height: 600)
+        )
+
+        viewport.zoomIn(factor: 1.2)
+        XCTAssertEqual(viewport.zoomScale, 1.2, accuracy: 0.001)
+
+        viewport.zoomOut(factor: 1.2)
+        XCTAssertEqual(viewport.zoomScale, 1.0, accuracy: 0.001)
+
+        viewport.zoomIn(factor: 1.5)
+        XCTAssertEqual(viewport.zoomScale, 1.5, accuracy: 0.001)
+
+        viewport.resetZoom()
+        XCTAssertEqual(viewport.zoomScale, 1.0, accuracy: 0.001)
+    }
 }

@@ -245,4 +245,24 @@ public struct CanvasViewport: Equatable, Sendable {
             y: screenCenter.y - canvasPoint.y * targetScale
         )
     }
+
+    public mutating func zoomIn(factor: CGFloat = 1.15) {
+        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        zoom(by: factor, around: center)
+    }
+
+    public mutating func zoomOut(factor: CGFloat = 1.15) {
+        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        zoom(by: 1.0 / factor, around: center)
+    }
+
+    public mutating func resetZoom() {
+        let center = CGPoint(x: viewportSize.width / 2, y: viewportSize.height / 2)
+        let canvasPoint = screenToCanvas(center)
+        zoomScale = 1.0
+        panOffset = CGPoint(
+            x: center.x - canvasPoint.x,
+            y: center.y - canvasPoint.y
+        )
+    }
 }

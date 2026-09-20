@@ -173,9 +173,13 @@ public struct TableOfContentsPopoverView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color.secondary)
 
-                TextField("Search contents…", text: $query)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 11.5))
+                FocusableSearchField(
+                    text: $query,
+                    placeholder: "Search contents…",
+                    onSubmit: {},
+                    onCancel: { query = "" }
+                )
+                .frame(height: 20)
 
                 if !query.isEmpty {
                     Button {

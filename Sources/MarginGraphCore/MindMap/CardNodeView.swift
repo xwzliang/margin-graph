@@ -13,6 +13,8 @@ public struct CardNodeView: View {
     public var onLink: (() -> Void)?
     public var onMerge: (() -> Void)?
     public var onBranchStyle: (() -> Void)?
+    public var onChangeColor: ((Int) -> Void)?
+    public var onDelete: (() -> Void)?
 
     public init(
         card: NoteCard,
@@ -25,7 +27,9 @@ public struct CardNodeView: View {
         onComment: (() -> Void)? = nil,
         onLink: (() -> Void)? = nil,
         onMerge: (() -> Void)? = nil,
-        onBranchStyle: (() -> Void)? = nil
+        onBranchStyle: (() -> Void)? = nil,
+        onChangeColor: ((Int) -> Void)? = nil,
+        onDelete: (() -> Void)? = nil
     ) {
         self.card = card
         self.isSelected = isSelected
@@ -38,6 +42,8 @@ public struct CardNodeView: View {
         self.onLink = onLink
         self.onMerge = onMerge
         self.onBranchStyle = onBranchStyle
+        self.onChangeColor = onChangeColor
+        self.onDelete = onDelete
     }
 
     private var cardColors: (background: Color, border: Color, accent: Color) {
@@ -257,6 +263,24 @@ public struct CardNodeView: View {
             Button("Copy Deep Link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(card.deepLinkURL.absoluteString, forType: .string)
+            }
+            Divider()
+            Menu("Card Color") {
+                let colorNames = ["Yellow", "Green", "Blue", "Red", "Purple", "Orange"]
+                ForEach(0..<6, id: \.self) { idx in
+                    Button {
+                        onChangeColor?(idx)
+                    } label: {
+                        let isCurrent = card.colorIndex == idx
+                        Text(isCurrent ? "✓ \(colorNames[idx])" : colorNames[idx])
+                    }
+                }
+            }
+            Divider()
+            Button(role: .destructive) {
+                onDelete?()
+            } label: {
+                Label("Delete Note", systemImage: "trash")
             }
         }
     }
