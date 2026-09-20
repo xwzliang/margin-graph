@@ -251,6 +251,9 @@ public struct NotebookCardView: View {
             }
             .frame(width: 148)
             .contentShape(Rectangle())
+            .onTapGesture {
+                onOpen()
+            }
         }
         .buttonStyle(.plain)
     }

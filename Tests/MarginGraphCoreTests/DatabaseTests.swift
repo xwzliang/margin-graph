@@ -179,4 +179,63 @@ final class DatabaseTests: XCTestCase {
         let afterRemove = try db.getBookmarks(for: md5)
         XCTAssertEqual(afterRemove, [11])
     }
+
+    func testCardCountsByTopicAndDueCardCounts() throws {
+        let db = try Database(inMemory: true)
+        let topic1 = Topic(title: "Topic 1")
+        let topic2 = Topic(title: "Topic 2")
+        try db.insertTopic(topic1)
+        try db.insertTopic(topic2)
+
+        XCTAssertEqual(try db.totalCardCount(), 0)
+
+        let card1 = NoteCard(topicId: topic1.id, title: "Card 1")
+        let card2 = NoteCard(topicId: topic1.id, title: "Card 2")
+        let card3 = NoteCard(topicId: topic2.id, title: "Card 3")
+        try db.insertCard(card1)
+        try db.insertCard(card2)
+        try db.insertCard(card3)
+
+        XCTAssertEqual(try db.totalCardCount(), 3)
+
+        let counts = try db.cardCountsByTopic()
+        XCTAssertEqual(counts[topic1.id], 2)
+        XCTAssertEqual(counts[topic2.id], 1)
+
+        let dueCounts = try db.dueCardCountsByTopic()
+        XCTAssertEqual(dueCounts[topic1.id], 2)
+        XCTAssertEqual(dueCounts[topic2.id], 1)
+
+        // Set card1 to future due date
+        let futureReview = ReviewItem(cardId: card1.id, dueDate: Date().addingTimeInterval(86400))
+        try db.insertReviewItem(futureReview)
+
+        let dueAfterReview = try db.dueCardCountsByTopic()
+        XCTAssertEqual(dueAfterReview[topic1.id], 1)
+        XCTAssertEqual(dueAfterReview[topic2.id], 1)
+    }
+
+    func testMultipleBookmarksListingAndDeletion() throws {
+        let db = try Database(inMemory: true)
+        let md5 = "test_doc_multiple_bookmarks"
+
+        for page in [15, 2, 8, 20, 5] {
+            try db.setBookmark(md5: md5, pageIndex: page, isBookmarked: true)
+        }
+
+        let bookmarks = try db.getBookmarks(for: md5)
+        XCTAssertEqual(bookmarks.sorted(), [2, 5, 8, 15, 20])
+
+        // Delete page 8
+        try db.setBookmark(md5: md5, pageIndex: 8, isBookmarked: false)
+        let afterDelete8 = try db.getBookmarks(for: md5)
+        XCTAssertEqual(afterDelete8.sorted(), [2, 5, 15, 20])
+
+        // Delete all remaining
+        for p in afterDelete8 {
+            try db.setBookmark(md5: md5, pageIndex: p, isBookmarked: false)
+        }
+        let afterDeleteAll = try db.getBookmarks(for: md5)
+        XCTAssertTrue(afterDeleteAll.isEmpty)
+    }
 }

@@ -362,9 +362,49 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    public func totalCardCount() throws -> Int {
+        try withStatement("SELECT count(*) FROM cards") { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+            return Int(sqlite3_column_int(statement, 0))
+        }
+    }
+
+    public func cardCountsByTopic() throws -> [UUID: Int] {
+        try withStatement("SELECT topic_id, count(*) FROM cards WHERE topic_id IS NOT NULL GROUP BY topic_id") { statement in
+            var results: [UUID: Int] = [:]
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let topicIDStr = text(statement, 0), let topicID = UUID(uuidString: topicIDStr) {
+                    results[topicID] = Int(sqlite3_column_int(statement, 1))
+                }
+            }
+            return results
+        }
+    }
+
+    public func dueCardCountsByTopic(asOf date: Date = Date()) throws -> [UUID: Int] {
+        let sql = """
+        SELECT c.topic_id, count(*)
+        FROM cards c
+        LEFT JOIN review_items r ON c.id = r.card_id
+        WHERE c.topic_id IS NOT NULL AND (r.due_date IS NULL OR r.due_date <= ?)
+        GROUP BY c.topic_id
+        """
+        return try withStatement(sql) { statement in
+            bind(date.timeIntervalSince1970, to: 1, in: statement)
+            var results: [UUID: Int] = [:]
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let topicIDStr = text(statement, 0), let topicID = UUID(uuidString: topicIDStr) {
+                    results[topicID] = Int(sqlite3_column_int(statement, 1))
+                }
+            }
+            return results
+        }
+    }
+
     public func cardsForTopic(id: UUID) throws -> [NoteCard] {
         try cards(sql: "SELECT * FROM cards WHERE topic_id=? ORDER BY created_at", values: [id.uuidString])
     }
+
 
     public func childCards(parentId: UUID?, topicId: UUID) throws -> [NoteCard] {
         if let parentId {

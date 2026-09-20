@@ -292,6 +292,16 @@ public enum PDFHighlightResolver {
         return normalizedBlocks.joined(separator: "\n\n")
     }
 
+    nonisolated(unsafe) private static var resolvedLineRectsCache: [UUID: [HighlightRect]] = [:]
+
+    public static func invalidateLineRectsCache(for cardID: UUID? = nil) {
+        if let cardID {
+            resolvedLineRectsCache.removeValue(forKey: cardID)
+        } else {
+            resolvedLineRectsCache.removeAll()
+        }
+    }
+
     public static func lineRects(for card: NoteCard, in document: PDFDocument) -> [HighlightRect] {
         let segRects = card.effectiveSegments.flatMap(\.rects).filter {
             $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
@@ -302,6 +312,10 @@ public enum PDFHighlightResolver {
             $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
         }
         if !stored.isEmpty { return deduplicate(stored) }
+
+        if let cached = resolvedLineRectsCache[card.id], !cached.isEmpty {
+            return cached
+        }
 
         if let pageIndex = card.startPage,
            pageIndex >= 0,
@@ -318,15 +332,21 @@ public enum PDFHighlightResolver {
             if bounds.width > 0, bounds.height > 0 {
                 if let selection = page.selection(for: bounds) {
                     let resolved = lineRects(from: selection, document: document)
-                    if !resolved.isEmpty { return deduplicate(resolved) }
+                    if !resolved.isEmpty {
+                        let result = deduplicate(resolved)
+                        resolvedLineRectsCache[card.id] = result
+                        return result
+                    }
                 }
-                return [HighlightRect(
+                let fallback = [HighlightRect(
                     page: pageIndex,
                     x: bounds.minX,
                     y: bounds.minY,
                     width: bounds.width,
                     height: bounds.height
                 )]
+                resolvedLineRectsCache[card.id] = fallback
+                return fallback
             }
         }
 
@@ -343,7 +363,11 @@ public enum PDFHighlightResolver {
             let resolved = candidates.flatMap { selection in
                 lineRects(from: selection, document: document)
             }
-            if !resolved.isEmpty { return deduplicate(resolved) }
+            if !resolved.isEmpty {
+                let result = deduplicate(resolved)
+                resolvedLineRectsCache[card.id] = result
+                return result
+            }
         }
 
         return []
@@ -652,6 +676,24 @@ public struct PDFReaderView: NSViewRepresentable {
         return view
     }
 
+    static func highlightsEqual(_ a: [NoteCard], _ b: [NoteCard]) -> Bool {
+        guard a.count == b.count else { return false }
+        for i in 0..<a.count {
+            let ca = a[i]
+            let cb = b[i]
+            if ca.id != cb.id ||
+               ca.colorIndex != cb.colorIndex ||
+               ca.highlightRects != cb.highlightRects ||
+               ca.emphasisRects != cb.emphasisRects ||
+               ca.emphasisList != cb.emphasisList ||
+               ca.startPage != cb.startPage ||
+               ca.highlightText != cb.highlightText {
+                return false
+            }
+        }
+        return true
+    }
+
     public func updateNSView(_ view: InteractivePDFView, context: Context) {
         context.coordinator.parent = self
         if view.document !== manager.document {
@@ -664,7 +706,7 @@ public struct PDFReaderView: NSViewRepresentable {
         view.backgroundColor = NSColor(red: 0.80, green: 0.80, blue: 0.82, alpha: 1.0)
         view.autoScales = true
         configure(view)
-        let cardsChanged = context.coordinator.lastCards != cards ||
+        let cardsChanged = !Self.highlightsEqual(context.coordinator.lastCards, cards) ||
                            context.coordinator.lastDocument !== view.document
         let selectionChanged = context.coordinator.lastSelectedCardID != selectedCardID
         let toolbarOwnerChanged = context.coordinator.lastToolbarOwner != activeToolbarOwner

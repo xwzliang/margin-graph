@@ -31,7 +31,8 @@ public struct MindMapCanvasView: View {
     @State private var isDraggingHScroll = false
     @State private var hScrollStartPanX: CGFloat = 0
     @State private var isHoveringScrollbars = false
-    @State private var showMiniMap = false
+    @State private var showMiniMap = true
+    @State private var layoutResult: TreeLayoutResult
 
     public init(
         cards: [NoteCard],
@@ -71,11 +72,12 @@ public struct MindMapCanvasView: View {
         self.onEditCard = onEditCard
         self.onNewSibling = onNewSibling
         self.onNewChild = onNewChild
+        self._layoutResult = State(initialValue: TreeLayout.layout(cards: cards))
     }
 
     public var body: some View {
         GeometryReader { proxy in
-            let layout = TreeLayout.layout(cards: cards)
+            let layout = layoutResult
             let frames = displayFrames(layout: layout)
             let visibleCards = cards.filter { layout.visibleCardIDs.contains($0.id) }
 
@@ -96,8 +98,8 @@ public struct MindMapCanvasView: View {
                 }
                 .allowsHitTesting(false)
 
-                // Note Cards
-                cardsView(visibleCards: visibleCards, frames: frames)
+                // Note Cards with Viewport Culling
+                cardsView(visibleCards: visibleCards, frames: frames, canvasSize: proxy.size)
 
                 // Main MindMap Floating Header (MarginNote 3 signature)
                 HStack {
@@ -115,17 +117,49 @@ public struct MindMapCanvasView: View {
                 // MiniMapView at bottom-right (toggleable)
                 if showMiniMap {
                     MiniMapView(
-                        frames: Array(frames.values),
+                        cards: visibleCards,
+                        frames: frames,
                         viewport: $viewport,
-                        canvasSize: proxy.size
+                        canvasSize: proxy.size,
+                        onClose: {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showMiniMap = false
+                            }
+                        }
                     )
-                    .frame(width: 140, height: 90)
+                    .frame(width: 150, height: 100)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                } else {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            showMiniMap = true
+                        }
+                    } label: {
+                        Image(systemName: "map")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+                            .frame(width: 32, height: 32)
+                            .background(
+                                Circle()
+                                    .fill(Color(white: 0.98).opacity(0.95))
+                                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                                    .overlay(
+                                        Circle().stroke(Color.black.opacity(0.08), lineWidth: 1)
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show Overview Window")
                     .padding(16)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
 
                 // Draggable Vertical & Horizontal Scrollbars
                 scrollBars(proxy: proxy, frames: frames)
+            }
+            .onChange(of: cards) { _, newCards in
+                layoutResult = TreeLayout.layout(cards: newCards)
             }
             .clipped()
             .focusable()
@@ -214,8 +248,21 @@ public struct MindMapCanvasView: View {
     }
 
     @ViewBuilder
-    private func cardsView(visibleCards: [NoteCard], frames: [UUID: CGRect]) -> some View {
-        ForEach(visibleCards, id: \.id) { card in
+    private func cardsView(visibleCards: [NoteCard], frames: [UUID: CGRect], canvasSize: CGSize) -> some View {
+        let visibleCanvasRect = CGRect(
+            x: -viewport.panOffset.x / viewport.zoomScale,
+            y: -viewport.panOffset.y / viewport.zoomScale,
+            width: canvasSize.width / viewport.zoomScale,
+            height: canvasSize.height / viewport.zoomScale
+        ).insetBy(dx: -150, dy: -150)
+
+        let culledCards = visibleCards.filter { card in
+            if card.id == selectedCardID { return true }
+            guard let frame = frames[card.id] else { return false }
+            return frame.intersects(visibleCanvasRect)
+        }
+
+        ForEach(culledCards, id: \.id) { card in
             if let frame = frames[card.id] {
                 let isCardSelected = selectedCardID == card.id
                 let extraHeight: CGFloat = isCardSelected ? 28 : 0
@@ -576,14 +623,17 @@ public struct MindMapCanvasView: View {
 }
 
 private struct MiniMapView: View {
-    let frames: [CGRect]
+    let cards: [NoteCard]
+    let frames: [UUID: CGRect]
     @Binding var viewport: CanvasViewport
     let canvasSize: CGSize
+    var onClose: (() -> Void)? = nil
 
     var body: some View {
+        let allFrames = Array(frames.values)
         Canvas { context, size in
-            guard let first = frames.first else { return }
-            let bounds = frames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
+            guard let first = allFrames.first else { return }
+            let bounds = allFrames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
             let sx = size.width / max(1, bounds.width)
             let sy = size.height / max(1, bounds.height)
             let scale = min(sx, sy)
@@ -593,14 +643,17 @@ private struct MiniMapView: View {
             let offsetX = (size.width - contentWidth) / 2.0
             let offsetY = (size.height - contentHeight) / 2.0
 
-            for frame in frames {
+            let cardColorsByID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, NSColor(MarginNoteTheme.cardColors(for: $0.colorIndex).accent)) })
+
+            for (cardID, frame) in frames {
                 let rect = CGRect(
                     x: offsetX + (frame.minX - bounds.minX) * scale,
                     y: offsetY + (frame.minY - bounds.minY) * scale,
                     width: max(2, frame.width * scale),
                     height: max(2, frame.height * scale)
                 )
-                context.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(Color(red: 0.65, green: 0.60, blue: 0.52).opacity(0.6)))
+                let accent = cardColorsByID[cardID].map { Color(nsColor: $0) } ?? Color(red: 0.65, green: 0.60, blue: 0.52)
+                context.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(accent.opacity(0.8)))
             }
 
             let visibleOrigin = viewport.screenToCanvas(.zero)
@@ -611,29 +664,44 @@ private struct MiniMapView: View {
                 width: (visibleEnd.x - visibleOrigin.x) * scale,
                 height: (visibleEnd.y - visibleOrigin.y) * scale
             )
-            context.stroke(Path(visible), with: .color(Color(red: 0.20, green: 0.50, blue: 0.85)), lineWidth: 1.5)
+            context.fill(Path(visible), with: .color(Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12)))
+            context.stroke(Path(visible), with: .color(Color(red: 0.15, green: 0.45, blue: 0.85)), lineWidth: 1.5)
         }
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(white: 0.96).opacity(0.85))
+                .fill(Color(white: 0.96).opacity(0.88))
         )
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(red: 0.80, green: 0.76, blue: 0.70), lineWidth: 0.8))
         .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
+        .overlay(alignment: .topTrailing) {
+            if let onClose {
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(Color(white: 0.45))
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(Color.white.opacity(0.85)))
+                }
+                .buttonStyle(.plain)
+                .padding(4)
+                .help("Hide Overview Window")
+            }
+        }
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { gesture in
-                    guard let first = frames.first else { return }
-                    let bounds = frames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
-                    let sx = 140.0 / max(1, bounds.width)
-                    let sy = 90.0 / max(1, bounds.height)
+                    guard let first = allFrames.first else { return }
+                    let bounds = allFrames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
+                    let sx = 150.0 / max(1, bounds.width)
+                    let sy = 100.0 / max(1, bounds.height)
                     let scale = min(sx, sy)
                     guard scale > 0 else { return }
 
                     let contentWidth = bounds.width * scale
                     let contentHeight = bounds.height * scale
-                    let offsetX = (140.0 - contentWidth) / 2.0
-                    let offsetY = (90.0 - contentHeight) / 2.0
+                    let offsetX = (150.0 - contentWidth) / 2.0
+                    let offsetY = (100.0 - contentHeight) / 2.0
 
                     let canvasX = bounds.minX + (gesture.location.x - offsetX) / scale
                     let canvasY = bounds.minY + (gesture.location.y - offsetY) / scale

@@ -64,10 +64,15 @@ final class AppModel: ObservableObject {
         mediaStorage = try! MediaStorage()
         autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
-        if selectedTopicID == nil {
+        if let ahrens = topics.first(where: { $0.title.contains("Ahrens") }) {
+            selectedTopicID = ahrens.id
+        } else if selectedTopicID == nil {
             selectedTopicID = topics.first?.id
         }
         reloadStudySet()
+        if selectedTopicID != nil {
+            isInStudyWorkspace = true
+        }
 
         NotificationCenter.default.addObserver(forName: .NSUndoManagerDidUndoChange, object: undoManager, queue: .main) { [weak self] _ in
             self?.objectWillChange.send()
@@ -95,12 +100,11 @@ final class AppModel: ObservableObject {
     func autoImportLiveMarginNoteIfEmpty() {
         let existingTopics = (try? database.allTopics()) ?? []
         let existingDocs = (try? database.allDocuments()) ?? []
+        let totalCards = (try? database.totalCardCount()) ?? 0
         let ahrensTopic = existingTopics.first(where: { $0.title.contains("Ahrens") })
-        let ahrensCards = (try? database.cardsForTopic(id: ahrensTopic?.id ?? UUID())) ?? []
+        let ahrensCards = ahrensTopic != nil ? ((try? database.cardsForTopic(id: ahrensTopic!.id)) ?? []) : []
         let hasHighlightRects = ahrensCards.contains { !$0.highlightRects.isEmpty }
-        let existingCards = existingTopics.flatMap { (try? database.cardsForTopic(id: $0.id)) ?? [] }
-        let colorsNeedRefresh = !existingCards.isEmpty && existingCards.allSatisfy { $0.colorIndex == 0 }
-        let needsImport = existingTopics.isEmpty || !hasHighlightRects || colorsNeedRefresh || existingDocs.contains(where: { $0.filePath.isEmpty })
+        let needsImport = existingTopics.isEmpty || totalCards == 0 || !hasHighlightRects || existingDocs.contains(where: { $0.filePath.isEmpty })
         guard needsImport else { return }
 
         let liveCandidates = [
@@ -122,18 +126,20 @@ final class AppModel: ObservableObject {
         topics = (try? database.allTopics()) ?? []
         documents = (try? database.allDocuments()) ?? []
 
-        var counts: [UUID: Int] = [:]
+        let counts = (try? database.cardCountsByTopic()) ?? [:]
+        let dueCounts = (try? database.dueCardCountsByTopic()) ?? [:]
+
         var decks: [ReviewDeckItem] = []
+        decks.reserveCapacity(topics.count)
 
         for topic in topics {
-            let cards = (try? database.cardsForTopic(id: topic.id)) ?? []
-            counts[topic.id] = cards.count
-            let due = (try? database.dueCardsForTopic(id: topic.id)) ?? []
+            let total = counts[topic.id] ?? 0
+            let due = dueCounts[topic.id] ?? 0
             decks.append(ReviewDeckItem(
                 id: topic.id,
                 title: topic.title,
-                dueCount: due.count,
-                totalCount: cards.count,
+                dueCount: due,
+                totalCount: total,
                 topicId: topic.id
             ))
         }

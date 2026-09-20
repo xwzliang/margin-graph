@@ -67,6 +67,7 @@ public struct MarginNotePDFContainerView: View {
     @State private var currentMatchIndex: Int = 0
     @State private var totalMatches: Int = 0
     @State private var bookmarkedPages: Set<Int> = []
+    @State private var showBookmarksPopover: Bool = false
     @State private var displayMode: PDFReaderDisplayMode = .continuous
     @State private var pageHistory: [Int] = []
     @State private var historyIndex: Int = 0
@@ -175,33 +176,56 @@ public struct MarginNotePDFContainerView: View {
                     .buttonStyle(.plain)
                     .help("Search in Document")
 
-                    // Bookmarks ribbon menu
-                    Menu {
-                        Button(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark (Page \(currentPageIndex + 1))" : "Bookmark Page \(currentPageIndex + 1)") {
-                            let willBookmark = !bookmarkedPages.contains(currentPageIndex)
-                            if willBookmark {
+                    // Bookmarks: Direct toggle + Dropdown for listing and deleting
+                    HStack(spacing: 2) {
+                        Button {
+                            let isBookmarked = bookmarkedPages.contains(currentPageIndex)
+                            let newBookmarked = !isBookmarked
+                            if newBookmarked {
                                 bookmarkedPages.insert(currentPageIndex)
                             } else {
                                 bookmarkedPages.remove(currentPageIndex)
                             }
-                            onToggleBookmark?(currentPageIndex, willBookmark)
+                            onToggleBookmark?(currentPageIndex, newBookmarked)
+                        } label: {
+                            Image(systemName: bookmarkedPages.contains(currentPageIndex) ? "bookmark.fill" : "bookmark")
+                                .font(.system(size: 13))
+                                .foregroundStyle(bookmarkedPages.contains(currentPageIndex) ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
+                                .frame(width: 20, height: 24)
+                                .contentShape(Rectangle())
                         }
-                        if !bookmarkedPages.isEmpty {
-                            Divider()
-                            ForEach(Array(bookmarkedPages.sorted()), id: \.self) { page in
-                                Button("Page \(page + 1)") {
+                        .buttonStyle(.plain)
+                        .help(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark for Page \(currentPageIndex + 1)" : "Bookmark Page \(currentPageIndex + 1)")
+
+                        Button {
+                            showBookmarksPopover.toggle()
+                        } label: {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 8, weight: .bold))
+                                .foregroundStyle(Color(white: 0.45))
+                                .frame(width: 12, height: 24)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help("List Bookmarks")
+                        .popover(isPresented: $showBookmarksPopover, arrowEdge: .bottom) {
+                            BookmarksPopoverView(
+                                bookmarkedPages: $bookmarkedPages,
+                                currentPageIndex: currentPageIndex,
+                                manager: manager,
+                                onJumpToPage: { page in
                                     currentPageIndex = page
+                                    showBookmarksPopover = false
+                                },
+                                onToggleBookmark: { page, isBookmarked in
+                                    onToggleBookmark?(page, isBookmarked)
+                                },
+                                onDeleteBookmark: { page in
+                                    onToggleBookmark?(page, false)
                                 }
-                            }
+                            )
                         }
-                    } label: {
-                        Image(systemName: bookmarkedPages.contains(currentPageIndex) ? "bookmark.fill" : "bookmark")
-                            .font(.system(size: 13))
-                            .foregroundStyle(bookmarkedPages.contains(currentPageIndex) ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .help("Bookmarks")
 
                     // More options menu
                     Menu {
@@ -503,3 +527,195 @@ public struct MarginNotePDFContainerView: View {
         .buttonStyle(.plain)
     }
 }
+
+public struct BookmarksPopoverView: View {
+    @Binding public var bookmarkedPages: Set<Int>
+    public var currentPageIndex: Int
+    public var manager: PDFDocumentManager
+    public var onJumpToPage: (Int) -> Void
+    public var onToggleBookmark: (Int, Bool) -> Void
+    public var onDeleteBookmark: (Int) -> Void
+
+    @State private var hoveredPage: Int? = nil
+
+    public init(
+        bookmarkedPages: Binding<Set<Int>>,
+        currentPageIndex: Int,
+        manager: PDFDocumentManager,
+        onJumpToPage: @escaping (Int) -> Void,
+        onToggleBookmark: @escaping (Int, Bool) -> Void,
+        onDeleteBookmark: @escaping (Int) -> Void
+    ) {
+        self._bookmarkedPages = bookmarkedPages
+        self.currentPageIndex = currentPageIndex
+        self.manager = manager
+        self.onJumpToPage = onJumpToPage
+        self.onToggleBookmark = onToggleBookmark
+        self.onDeleteBookmark = onDeleteBookmark
+    }
+
+    private func pageSnippet(for page: Int) -> String? {
+        guard let pdfPage = manager.document.page(at: page),
+              let text = pdfPage.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty else { return nil }
+        let lines = text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if let first = lines.first {
+            return first.count > 45 ? String(first.prefix(42)) + "..." : first
+        }
+        return nil
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Label("Bookmarks (\(bookmarkedPages.count))", systemImage: "bookmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+
+                Spacer()
+
+                let isCurrentBookmarked = bookmarkedPages.contains(currentPageIndex)
+                Button {
+                    let willBookmark = !isCurrentBookmarked
+                    if willBookmark {
+                        bookmarkedPages.insert(currentPageIndex)
+                    } else {
+                        bookmarkedPages.remove(currentPageIndex)
+                    }
+                    onToggleBookmark(currentPageIndex, willBookmark)
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: isCurrentBookmarked ? "bookmark.slash" : "bookmark.fill")
+                            .font(.system(size: 10))
+                        Text(isCurrentBookmarked ? "Unbookmark" : "Bookmark")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(
+                        isCurrentBookmarked
+                            ? Color.red.opacity(0.12)
+                            : Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12),
+                        in: RoundedRectangle(cornerRadius: 4)
+                    )
+                    .foregroundStyle(
+                        isCurrentBookmarked
+                            ? Color.red
+                            : Color(red: 0.15, green: 0.45, blue: 0.85)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(isCurrentBookmarked ? "Remove bookmark for Page \(currentPageIndex + 1)" : "Bookmark Page \(currentPageIndex + 1)")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+
+            Divider()
+
+            // Bookmark items
+            if bookmarkedPages.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "bookmark")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Color.secondary.opacity(0.5))
+                    Text("No Bookmarks in this document")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Color.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 24)
+            } else {
+                ScrollView {
+                    VStack(spacing: 1) {
+                        ForEach(Array(bookmarkedPages.sorted()), id: \.self) { page in
+                            let isCurrent = page == currentPageIndex
+                            HStack(spacing: 8) {
+                                Image(systemName: "bookmark.fill")
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 4) {
+                                        Text("Page \(page + 1)")
+                                            .font(.system(size: 12, weight: isCurrent ? .bold : .medium))
+                                            .foregroundStyle(isCurrent ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.primary)
+                                        if isCurrent {
+                                            Text("(current)")
+                                                .font(.system(size: 9))
+                                                .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+                                        }
+                                    }
+
+                                    if let snippet = pageSnippet(for: page) {
+                                        Text(snippet)
+                                            .font(.system(size: 10))
+                                            .foregroundStyle(Color.secondary)
+                                            .lineLimit(1)
+                                    }
+                                }
+
+                                Spacer()
+
+                                Button {
+                                    bookmarkedPages.remove(page)
+                                    onDeleteBookmark(page)
+                                } label: {
+                                    Image(systemName: "trash")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(hoveredPage == page ? Color.red : Color.secondary.opacity(0.6))
+                                        .frame(width: 22, height: 22)
+                                        .background(hoveredPage == page ? Color.red.opacity(0.1) : Color.clear, in: RoundedRectangle(cornerRadius: 3))
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+                                .help("Delete Bookmark")
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(isCurrent ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.08) : (hoveredPage == page ? Color.black.opacity(0.04) : Color.clear))
+                            )
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                onJumpToPage(page)
+                            }
+                            .onHover { isHovered in
+                                if isHovered { hoveredPage = page }
+                                else if hoveredPage == page { hoveredPage = nil }
+                            }
+                        }
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 220)
+
+                if bookmarkedPages.count > 1 {
+                    Divider()
+                    HStack {
+                        Spacer()
+                        Button("Delete All Bookmarks") {
+                            let toDelete = bookmarkedPages
+                            bookmarkedPages.removeAll()
+                            for page in toDelete {
+                                onDeleteBookmark(page)
+                            }
+                        }
+                        .font(.system(size: 10))
+                        .foregroundStyle(Color.red.opacity(0.85))
+                        .buttonStyle(.plain)
+                        .contentShape(Rectangle())
+                        Spacer()
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+        .frame(width: 270)
+    }
+}
+
