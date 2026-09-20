@@ -161,4 +161,22 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(updated?.emphasisList, ["key highlighted text", "matters", "This is some"])
         XCTAssertEqual(updated?.emphasisRects.count, 2)
     }
+
+    func testPDFBookmarksDatabasePersistence() throws {
+        let db = try Database(inMemory: true)
+        let md5 = "fake_doc_md5_12345"
+
+        let initial = try db.getBookmarks(for: md5)
+        XCTAssertTrue(initial.isEmpty)
+
+        try db.setBookmark(md5: md5, pageIndex: 3, isBookmarked: true)
+        try db.setBookmark(md5: md5, pageIndex: 11, isBookmarked: true)
+
+        let afterAdd = try db.getBookmarks(for: md5)
+        XCTAssertEqual(afterAdd, [3, 11])
+
+        try db.setBookmark(md5: md5, pageIndex: 3, isBookmarked: false)
+        let afterRemove = try db.getBookmarks(for: md5)
+        XCTAssertEqual(afterRemove, [11])
+    }
 }

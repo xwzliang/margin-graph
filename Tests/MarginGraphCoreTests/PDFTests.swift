@@ -705,4 +705,20 @@ final class PDFTests: XCTestCase {
             }
         }
     }
+
+    func testRangesOfPhraseWithHyphenationAndParagraphBreak() {
+        let cardText = "Until now, writing and note-taking techniques were usually taught without much regard to the overarching workflow. This book aims to change that."
+        let rawPdfPhrase = "overarching work-\nflow. This book"
+
+        let matches = PDFHighlightResolver.rangesOfPhrase(rawPdfPhrase, in: cardText)
+        XCTAssertEqual(matches.count, 1)
+        if let first = matches.first {
+            XCTAssertEqual(String(cardText[first]), "overarching workflow. This book")
+        }
+
+        let multilineCard = "First paragraph ends.\n\nSecond paragraph begins here with important ideas."
+        let crossParaPhrase = "ends.\nSecond paragraph"
+        let crossMatches = PDFHighlightResolver.rangesOfPhrase(crossParaPhrase, in: multilineCard)
+        XCTAssertEqual(crossMatches.count, 1)
+    }
 }

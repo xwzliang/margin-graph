@@ -90,6 +90,10 @@ public final class Database: @unchecked Sendable {
             repetitions INTEGER NOT NULL, due_date REAL NOT NULL, last_reviewed REAL
         );
         CREATE INDEX IF NOT EXISTS idx_review_due ON review_items(due_date);
+        CREATE TABLE IF NOT EXISTS document_bookmarks(
+            document_md5 TEXT NOT NULL, page_index INTEGER NOT NULL, created_at REAL NOT NULL,
+            PRIMARY KEY(document_md5, page_index)
+        );
         """)
         if try !hasColumn("highlight_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN highlight_rects TEXT NOT NULL DEFAULT '[]';")
@@ -108,7 +112,9 @@ public final class Database: @unchecked Sendable {
     private func hasColumn(_ column: String, in table: String) throws -> Bool {
         try withStatement("PRAGMA table_info(\(table))") { statement in
             while sqlite3_step(statement) == SQLITE_ROW {
-                if text(statement, 1) == column { return true }
+                if let name = text(statement, 1), name == column {
+                    return true
+                }
             }
             return false
         }
@@ -125,7 +131,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private func withStatement<T>(_ sql: String, _ body: (OpaquePointer) throws -> T) throws -> T {
+    internal func withStatement<T>(_ sql: String, _ body: (OpaquePointer) throws -> T) throws -> T {
         try queue.sync {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
@@ -136,7 +142,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private func bind(_ value: String?, to index: Int32, in statement: OpaquePointer) {
+    internal func bind(_ value: String?, to index: Int32, in statement: OpaquePointer) {
         if let value {
             sqlite3_bind_text(statement, index, value, -1, transient)
         } else {
@@ -144,27 +150,27 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private func bind(_ value: Int?, to index: Int32, in statement: OpaquePointer) {
+    internal func bind(_ value: Int?, to index: Int32, in statement: OpaquePointer) {
         if let value { sqlite3_bind_int64(statement, index, sqlite3_int64(value)) }
         else { sqlite3_bind_null(statement, index) }
     }
 
-    private func bind(_ value: Double?, to index: Int32, in statement: OpaquePointer) {
+    internal func bind(_ value: Double?, to index: Int32, in statement: OpaquePointer) {
         if let value { sqlite3_bind_double(statement, index, value) }
         else { sqlite3_bind_null(statement, index) }
     }
 
-    private func text(_ statement: OpaquePointer, _ column: Int32) -> String? {
+    internal func text(_ statement: OpaquePointer, _ column: Int32) -> String? {
         guard sqlite3_column_type(statement, column) != SQLITE_NULL,
               let pointer = sqlite3_column_text(statement, column) else { return nil }
         return String(cString: pointer)
     }
 
-    private func int(_ statement: OpaquePointer, _ column: Int32) -> Int? {
+    internal func int(_ statement: OpaquePointer, _ column: Int32) -> Int? {
         sqlite3_column_type(statement, column) == SQLITE_NULL ? nil : Int(sqlite3_column_int64(statement, column))
     }
 
-    private func double(_ statement: OpaquePointer, _ column: Int32) -> Double? {
+    internal func double(_ statement: OpaquePointer, _ column: Int32) -> Double? {
         sqlite3_column_type(statement, column) == SQLITE_NULL ? nil : sqlite3_column_double(statement, column)
     }
 

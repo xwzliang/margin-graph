@@ -478,18 +478,38 @@ public enum PDFHighlightResolver {
         let clean = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !clean.isEmpty, !text.isEmpty else { return [] }
 
-        var result: [Range<String.Index>] = []
-        let tokens = clean.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
-        if !tokens.isEmpty {
-            let pattern = tokens.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: #"(?:-\s*|\s+)"#)
-            if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
-                let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
-                let matches = regex.matches(in: text, options: [], range: fullRange)
-                for m in matches {
-                    if let r = Range(m.range, in: text) {
-                        result.append(r)
+        func matchTokens(from input: String) -> [Range<String.Index>] {
+            var found: [Range<String.Index>] = []
+            let tokens = input.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+            if !tokens.isEmpty {
+                var tokenPatterns: [String] = []
+                for t in tokens {
+                    if t.hasSuffix("-") && t.count > 1 {
+                        let base = String(t.dropLast())
+                        tokenPatterns.append("(?:" + NSRegularExpression.escapedPattern(for: t) + "|" + NSRegularExpression.escapedPattern(for: base) + ")")
+                    } else {
+                        tokenPatterns.append(NSRegularExpression.escapedPattern(for: t))
                     }
                 }
+                let pattern = tokenPatterns.joined(separator: #"(?:-\s*|\s+)"#)
+                if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                    let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+                    let matches = regex.matches(in: text, options: [], range: fullRange)
+                    for m in matches {
+                        if let r = Range(m.range, in: text) {
+                            found.append(r)
+                        }
+                    }
+                }
+            }
+            return found
+        }
+
+        var result = matchTokens(from: clean)
+        if result.isEmpty {
+            let normalized = normalizeExcerptParagraphs(clean)
+            if normalized != clean {
+                result = matchTokens(from: normalized)
             }
         }
         if result.isEmpty {
@@ -1267,6 +1287,7 @@ public final class InteractivePDFView: PDFView {
 
     func renderEmphasisSelectionHighlight(_ emp: EmphasisHitInfo) {
         clearEmphasisSelectionHighlight()
+        clearHandles()
         guard let document else { return }
         for r in emp.rects {
             guard let page = document.page(at: r.page) else { continue }
@@ -1277,6 +1298,14 @@ public final class InteractivePDFView: PDFView {
                 contents: "MarginGraph-emphasis-selected-highlight"
             )
             page.addAnnotation(annot)
+        }
+        if let first = emp.rects.first, let last = emp.rects.last,
+           let firstPage = document.page(at: first.page),
+           let lastPage = document.page(at: last.page) {
+            let startPt = endpoint(for: first, start: true)
+            let endPt = endpoint(for: last, start: false)
+            addHandle(to: firstPage, at: startPt, lineHeight: CGFloat(first.height), accent: MarginNoteTheme.nsCursorColor, isStart: true)
+            addHandle(to: lastPage, at: endPt, lineHeight: CGFloat(last.height), accent: MarginNoteTheme.nsCursorColor, isStart: false)
         }
         setNeedsDisplay(bounds)
     }
@@ -1856,9 +1885,14 @@ public final class InteractivePDFView: PDFView {
             let initialTargetID = selectedCardID ?? hitInfo?.card.id
 
             if let (card, segment) = hitInfo {
-                if selectedCardID == card.id, let hitEmphasis = emphasisHit(in: card, on: page, at: pagePoint) {
+                if let hitEmphasis = emphasisHit(in: card, on: page, at: pagePoint) {
                     clearPendingSelection()
                     clearBrackets()
+                    targetCardID = nil
+                    selectedCardID = card.id
+                    selectedSegmentID = segment.id
+                    activeToolbarOwner = .pdf
+                    selectCardHandler?(card.id)
                     selectedEmphasisPhrase = hitEmphasis
                     renderEmphasisSelectionHighlight(hitEmphasis)
                     if let doc = document, let p = doc.page(at: hitEmphasis.hitLine.page) {
@@ -1868,6 +1902,7 @@ public final class InteractivePDFView: PDFView {
                 }
 
                 selectedEmphasisPhrase = nil
+                clearEmphasisSelectionHighlight()
                 clearPendingSelection()
                 clearBrackets()
                 targetCardID = nil
@@ -2580,6 +2615,24 @@ public final class InteractivePDFView: PDFView {
         let pageIndex = document.index(for: page)
         guard pageIndex != NSNotFound else { return nil }
 
+        // 1. Direct hit check on stored card.emphasisRects
+        if !card.emphasisRects.isEmpty {
+            for rect in card.emphasisRects where rect.page == pageIndex {
+                let rBox = CGRect(x: rect.x, y: rect.y - 4, width: rect.width, height: rect.height + 8).insetBy(dx: -4, dy: -3)
+                if rBox.contains(point) {
+                    let matchedPhrase = card.emphasisList.first(where: { phrase in
+                        let pRects = PDFHighlightResolver.lineRects(forPhrase: phrase, in: card, in: document)
+                        return pRects.contains(where: { $0.page == rect.page && abs($0.y - rect.y) < 2.0 && abs($0.x - rect.x) < 4.0 })
+                    }) ?? card.emphasisList.first ?? ""
+                    let phraseRects = card.emphasisRects.filter { e in
+                        card.emphasisRects.count == 1 || abs(e.y - rect.y) < 60
+                    }
+                    return EmphasisHitInfo(cardID: card.id, text: matchedPhrase, rects: phraseRects.isEmpty ? [rect] : phraseRects, hitLine: rect)
+                }
+            }
+        }
+
+        // 2. Fallback resolution via lineRects(forPhrase:)
         for phrase in card.emphasisList where !phrase.isEmpty {
             let phraseRects = PDFHighlightResolver.lineRects(forPhrase: phrase, in: card, in: document)
             if let hitRect = phraseRects.first(where: { r in

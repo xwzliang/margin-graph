@@ -37,6 +37,8 @@ final class AppModel: ObservableObject {
     @Published var reviewDecks: [ReviewDeckItem] = []
     @Published var isReviewPresented = false
     @Published var editingCard: NoteCard? = nil
+    @Published var documentBookmarks: Set<Int> = []
+    @Published var isManagingDocuments = false
 
     let database: Database
     let mediaStorage: MediaStorage
@@ -250,7 +252,93 @@ final class AppModel: ObservableObject {
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
         activeDocument = document
         manager = loaded
+        loadBookmarks()
         reloadDocumentCards()
+    }
+
+    func loadBookmarks() {
+        guard let md5 = activeDocument?.md5 else {
+            documentBookmarks = []
+            return
+        }
+        documentBookmarks = (try? database.getBookmarks(for: md5)) ?? []
+    }
+
+    func toggleBookmark(pageIndex: Int, isBookmarked: Bool) {
+        guard let md5 = activeDocument?.md5 else { return }
+        try? database.setBookmark(md5: md5, pageIndex: pageIndex, isBookmarked: isBookmarked)
+        if isBookmarked {
+            documentBookmarks.insert(pageIndex)
+        } else {
+            documentBookmarks.remove(pageIndex)
+        }
+        objectWillChange.send()
+    }
+
+    func addCardLink(from sourceID: UUID, to targetID: UUID, label: String = "") {
+        guard let topicID = selectedTopicID else { return }
+        let link = CardLink(topicId: topicID, sourceCardId: sourceID, targetCardId: targetID, label: label)
+        try? database.insertLink(link)
+        links = (try? database.linksForTopic(id: topicID)) ?? []
+        objectWillChange.send()
+    }
+
+    func mergeCards(sourceID: UUID, into targetID: UUID) {
+        guard let source = try? database.getCard(id: sourceID),
+              let target = try? database.getCard(id: targetID) else { return }
+        var merged = target
+        if !source.highlightText.isEmpty {
+            if merged.highlightText.isEmpty {
+                merged.highlightText = source.highlightText
+            } else {
+                merged.highlightText += "\n\n" + source.highlightText
+            }
+        }
+        if !source.notesText.isEmpty {
+            if merged.notesText.isEmpty {
+                merged.notesText = source.notesText
+            } else {
+                merged.notesText += "\n" + source.notesText
+            }
+        }
+        for seg in source.effectiveSegments {
+            if !merged.excerptSegments.contains(where: { $0.id == seg.id }) {
+                merged.excerptSegments.append(seg)
+            }
+        }
+        for emp in source.emphasisList {
+            if !merged.emphasisList.contains(emp) {
+                merged.emphasisList.append(emp)
+            }
+        }
+        for r in source.emphasisRects {
+            merged.emphasisRects.append(r)
+        }
+        merged.updatedAt = Date()
+        registerCardUndo(oldCard: target, newCard: merged, actionName: "Merge Cards")
+        try? database.updateCard(merged)
+        try? database.deleteCard(id: sourceID)
+        reloadStudySet()
+        selectedCardID = targetID
+        objectWillChange.send()
+    }
+
+    func addComment(to cardID: UUID, comment: String) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        let trimmed = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var card = oldCard
+        if card.notesText.isEmpty {
+            card.notesText = trimmed
+        } else {
+            card.notesText += "\n" + trimmed
+        }
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Add Comment")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        objectWillChange.send()
     }
 
     func attachExistingDocument(_ document: Document) {
@@ -665,6 +753,44 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
     }
 
+    func createChildCard(under parentID: UUID) {
+        let topic = ensureTopic()
+        var newCard = NoteCard(
+            topicId: topic.id,
+            title: "New Note",
+            groupNoteId: parentID,
+            colorIndex: 0
+        )
+        if let parent = try? database.getCard(id: parentID) {
+            newCard.colorIndex = parent.colorIndex
+            newCard.bookMD5 = parent.bookMD5
+            newCard.startPage = parent.startPage
+        }
+        try? database.insertCard(newCard)
+        selectedCardID = newCard.id
+        reloadStudySet()
+        editingCard = newCard
+        objectWillChange.send()
+    }
+
+    func createSiblingCard(after siblingID: UUID) {
+        let topic = ensureTopic()
+        let sibling = try? database.getCard(id: siblingID)
+        var newCard = NoteCard(
+            topicId: topic.id,
+            title: "New Note",
+            groupNoteId: sibling?.groupNoteId,
+            colorIndex: sibling?.colorIndex ?? 0
+        )
+        newCard.bookMD5 = sibling?.bookMD5
+        newCard.startPage = sibling?.startPage
+        try? database.insertCard(newCard)
+        selectedCardID = newCard.id
+        reloadStudySet()
+        editingCard = newCard
+        objectWillChange.send()
+    }
+
     func reorder(cardID: UUID, before siblingID: UUID?) {
         try? database.reorderCard(id: cardID, before: siblingID)
         reloadStudySet()
@@ -1039,33 +1165,39 @@ struct StudyWorkspaceView: View {
                         }
                     }
 
-                    // Circular < > split view divider handle (MarginNote 3 signature)
-                    HStack(spacing: 0) {
+                    // Circular < • > split view divider handle (MarginNote 3 signature)
+                    HStack(spacing: 1) {
                         Button {
                             if model.workspaceMode == .splitView {
                                 model.workspaceMode = .readerOnly
+                            } else {
+                                model.workspaceMode = .splitView
                             }
                         } label: {
                             Image(systemName: "chevron.left")
-                                .font(.system(size: 8.5, weight: .bold))
+                                .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(Color(white: 0.35))
-                                .frame(width: 14, height: 22)
+                                .frame(width: 13, height: 22)
                         }
                         .buttonStyle(.plain)
                         .help("Collapse MindMap (1-View)")
 
-                        Divider()
-                            .frame(height: 12)
+                        Circle()
+                            .fill(Color(white: 0.50))
+                            .frame(width: 3.5, height: 3.5)
+                            .padding(.horizontal, 1)
 
                         Button {
                             if model.workspaceMode == .splitView {
                                 model.workspaceMode = .mindMapOnly
+                            } else {
+                                model.workspaceMode = .splitView
                             }
                         } label: {
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 8.5, weight: .bold))
+                                .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(Color(white: 0.35))
-                                .frame(width: 14, height: 22)
+                                .frame(width: 13, height: 22)
                         }
                         .buttonStyle(.plain)
                         .help("Collapse Document (MindMap Only)")
@@ -1098,6 +1230,24 @@ struct StudyWorkspaceView: View {
                 },
                 onDelete: { id in
                     model.delete(cardID: id)
+                }
+            )
+        }
+        .sheet(isPresented: $model.isManagingDocuments) {
+            StudyDocumentManagementSheet(
+                documents: model.studyDocuments,
+                activeDocument: model.activeDocument,
+                onSwitchDocument: { doc in
+                    model.switchToDocument(doc)
+                },
+                onDetachDocument: { doc in
+                    model.detachDocument(doc)
+                },
+                onAddDocument: {
+                    model.openPDFPicker(attachToTopic: true)
+                },
+                onDismiss: {
+                    model.isManagingDocuments = false
                 }
             )
         }
@@ -1170,6 +1320,12 @@ struct StudyWorkspaceView: View {
                 },
                 onEditCard: { card in
                     model.editingCard = card
+                },
+                onNewSibling: { cardID in
+                    model.createSiblingCard(after: cardID)
+                },
+                onNewChild: { cardID in
+                    model.createChildCard(under: cardID)
                 }
             )
         }
@@ -1199,11 +1355,15 @@ struct StudyWorkspaceView: View {
                 jumpTarget: model.jumpTarget,
                 studyDocuments: model.studyDocuments,
                 activeDocument: model.activeDocument,
+                bookmarks: model.documentBookmarks,
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
                 },
                 onManageDocuments: {
-                    model.openPDFPicker(attachToTopic: true)
+                    model.isManagingDocuments = true
+                },
+                onToggleBookmark: { page, isBookmarked in
+                    model.toggleBookmark(pageIndex: page, isBookmarked: isBookmarked)
                 },
                 onExcerpt: { excerpt in
                     model.createExcerpt(excerpt)

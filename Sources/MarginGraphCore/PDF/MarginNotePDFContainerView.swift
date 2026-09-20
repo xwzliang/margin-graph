@@ -21,8 +21,8 @@ public enum MarginNotePDFTool: String, CaseIterable, Identifiable {
         case .hand: return "hand.draw"
         case .text: return "character.cursor.ibeam"
         case .marquee: return "rectangle.dashed"
-        case .lasso: return "lasso"
-        case .crop: return "bolt"
+        case .lasso: return "point.topleft.down.to.point.bottomright.curvepath"
+        case .crop: return "bolt.fill"
         case .pen: return "pencil.tip"
         case .highlighter: return "highlighter"
         case .eraser: return "eraser"
@@ -55,6 +55,8 @@ public struct MarginNotePDFContainerView: View {
     public var onMerge: ((UUID, String, [HighlightRect]) -> Void)?
     public var onEmphasize: ((UUID, String, [HighlightRect]) -> Void)?
     public var onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)?
+    public var bookmarks: Set<Int>
+    public var onToggleBookmark: ((Int, Bool) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -78,8 +80,10 @@ public struct MarginNotePDFContainerView: View {
         jumpTarget: PDFJumpTarget? = nil,
         studyDocuments: [Document] = [],
         activeDocument: Document? = nil,
+        bookmarks: Set<Int> = [],
         onSwitchDocument: ((Document) -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
+        onToggleBookmark: ((Int, Bool) -> Void)? = nil,
         onExcerpt: @escaping (PDFExcerpt) -> Void,
         onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)? = nil,
         onEditCard: ((UUID) -> Void)? = nil,
@@ -101,8 +105,10 @@ public struct MarginNotePDFContainerView: View {
         self.jumpTarget = jumpTarget
         self.studyDocuments = studyDocuments
         self.activeDocument = activeDocument
+        self.bookmarks = bookmarks
         self.onSwitchDocument = onSwitchDocument
         self.onManageDocuments = onManageDocuments
+        self.onToggleBookmark = onToggleBookmark
         self.onExcerpt = onExcerpt
         self.onCreateCardWithColor = onCreateCardWithColor
         self.onEditCard = onEditCard
@@ -116,6 +122,7 @@ public struct MarginNotePDFContainerView: View {
         self.onMerge = onMerge
         self.onEmphasize = onEmphasize
         self.onDeleteEmphasis = onDeleteEmphasis
+        self._bookmarkedPages = State(initialValue: bookmarks)
     }
 
     public var body: some View {
@@ -171,11 +178,13 @@ public struct MarginNotePDFContainerView: View {
                     // Bookmarks ribbon menu
                     Menu {
                         Button(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark (Page \(currentPageIndex + 1))" : "Bookmark Page \(currentPageIndex + 1)") {
-                            if bookmarkedPages.contains(currentPageIndex) {
-                                bookmarkedPages.remove(currentPageIndex)
-                            } else {
+                            let willBookmark = !bookmarkedPages.contains(currentPageIndex)
+                            if willBookmark {
                                 bookmarkedPages.insert(currentPageIndex)
+                            } else {
+                                bookmarkedPages.remove(currentPageIndex)
                             }
+                            onToggleBookmark?(currentPageIndex, willBookmark)
                         }
                         if !bookmarkedPages.isEmpty {
                             Divider()
@@ -214,11 +223,11 @@ public struct MarginNotePDFContainerView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
-            .background(Color(white: 0.96))
+            .background(MarginNoteTheme.headerBarBackground)
             .overlay(
                 Rectangle()
                     .frame(height: 0.5)
-                    .foregroundStyle(Color(red: 0.85, green: 0.82, blue: 0.77)),
+                    .foregroundStyle(MarginNoteTheme.separatorColor),
                 alignment: .bottom
             )
 
@@ -443,6 +452,10 @@ public struct MarginNotePDFContainerView: View {
         }
         .onAppear {
             totalPageCount = manager.pageCount
+            bookmarkedPages = bookmarks
+        }
+        .onChange(of: bookmarks) { _, newBookmarks in
+            bookmarkedPages = newBookmarks
         }
         .onChange(of: jumpTarget) { _, target in
             if let target {
@@ -469,14 +482,23 @@ public struct MarginNotePDFContainerView: View {
         return Button {
             activeTool = tool
         } label: {
-            Image(systemName: tool.icon)
-                .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
-                .frame(width: 26, height: 26)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
-                )
+            ZStack(alignment: .bottom) {
+                Image(systemName: tool.icon)
+                    .font(.system(size: 13, weight: isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
+                    .frame(width: 26, height: 26)
+
+                if tool == .highlighter {
+                    Circle()
+                        .fill(highlightColor)
+                        .frame(width: 4, height: 4)
+                        .offset(y: -2.5)
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
+            )
         }
         .buttonStyle(.plain)
     }
