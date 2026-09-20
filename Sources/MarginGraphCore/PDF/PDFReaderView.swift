@@ -602,6 +602,7 @@ public struct PDFReaderView: NSViewRepresentable {
     public var onMerge: ((UUID, String, [HighlightRect]) -> Void)?
     public var onEmphasize: ((UUID, String, [HighlightRect]) -> Void)?
     public var onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)?
+    public var onScroll: (() -> Void)?
     public var searchQuery: String = ""
     public var searchMatchIndex: Int = 0
     public var onSearchResultCount: ((Int) -> Void)? = nil
@@ -631,7 +632,8 @@ public struct PDFReaderView: NSViewRepresentable {
         onAddToComments: ((UUID, String) -> Void)? = nil,
         onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onEmphasize: ((UUID, String, [HighlightRect]) -> Void)? = nil,
-        onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil
+        onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil,
+        onScroll: (() -> Void)? = nil
     ) {
         self.manager = manager
         self.displayMode = displayMode
@@ -658,6 +660,7 @@ public struct PDFReaderView: NSViewRepresentable {
         self.onMerge = onMerge
         self.onEmphasize = onEmphasize
         self.onDeleteEmphasis = onDeleteEmphasis
+        self.onScroll = onScroll
     }
 
     public func makeCoordinator() -> Coordinator {
@@ -778,6 +781,7 @@ public struct PDFReaderView: NSViewRepresentable {
         view.mergeHandler = onMerge
         view.emphasizeHandler = onEmphasize
         view.deleteEmphasisHandler = onDeleteEmphasis
+        view.onScroll = onScroll
         view.excerptFactory = { pageIndex, bounds, text in
             PDFExcerpt(
                 bookMD5: manager.md5,
@@ -958,6 +962,7 @@ public struct PDFReaderView: NSViewRepresentable {
                     if idx != NSNotFound && self.parent.currentPageIndex != idx {
                         self.lastPageIndex = idx
                         self.parent.currentPageIndex = idx
+                        self.parent.onScroll?()
                     }
                 }
             }
@@ -965,6 +970,7 @@ public struct PDFReaderView: NSViewRepresentable {
     }
 
     public static func dismantleNSView(_ nsView: InteractivePDFView, coordinator: Coordinator) {
+        nsView.removeScrollObserver()
         if let observer = coordinator.observer {
             NotificationCenter.default.removeObserver(observer)
             coordinator.observer = nil
@@ -1037,6 +1043,8 @@ public final class InteractivePDFView: PDFView {
     var hasPendingSelection: Bool { pendingSelection != nil }
     private var toolbarHostingView: NSHostingView<AnyView>?
     private var scrollObserver: NSObjectProtocol?
+    var onScroll: (() -> Void)?
+    private var lastClipOrigin: CGPoint? = nil
 
     private struct HandleDrag {
         var cardID: UUID? // nil for pendingSelection
@@ -1073,6 +1081,13 @@ public final class InteractivePDFView: PDFView {
         true
     }
 
+    public override func scrollWheel(with event: NSEvent) {
+        if event.type == .scrollWheel {
+            super.scrollWheel(with: event)
+        }
+        onScroll?()
+    }
+
     public override func hitTest(_ point: NSPoint) -> NSView? {
         if let toolbar = toolbarHostingView, !toolbar.isHidden {
             let p = toolbar.convert(point, from: self)
@@ -1103,12 +1118,24 @@ public final class InteractivePDFView: PDFView {
             queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                self?.updateToolbarPosition()
+                guard let self else { return }
+                self.updateToolbarPosition()
+                if let clip = self.pdfScrollView?.contentView {
+                    let currentOrigin = clip.bounds.origin
+                    if let last = self.lastClipOrigin {
+                        if currentOrigin != last {
+                            self.lastClipOrigin = currentOrigin
+                            self.onScroll?()
+                        }
+                    } else {
+                        self.lastClipOrigin = currentOrigin
+                    }
+                }
             }
         }
     }
 
-    private func removeScrollObserver() {
+    func removeScrollObserver() {
         if let scrollObserver {
             NotificationCenter.default.removeObserver(scrollObserver)
             self.scrollObserver = nil
@@ -1117,6 +1144,9 @@ public final class InteractivePDFView: PDFView {
 
     public override func layout() {
         super.layout()
+        if scrollObserver == nil && window != nil {
+            setupScrollObserver()
+        }
         updateToolbarPosition()
     }
 

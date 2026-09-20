@@ -939,9 +939,7 @@ struct StudyWorkspaceHeaderView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Row 1: Study Tools (symmetrical with PDF tools row)
-            HStack(spacing: 12) {
+        HStack(spacing: 12) {
                 // Back button (<) to Library
                 Button {
                     model.exitStudyWorkspace()
@@ -1029,7 +1027,10 @@ struct StudyWorkspaceHeaderView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                .frame(width: 26, height: 26)
                 .help("Share / Export")
+
+                Spacer()
 
                 // More Options Menu (...)
                 Menu {
@@ -1057,9 +1058,8 @@ struct StudyWorkspaceHeaderView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
+                .frame(width: 26, height: 26)
                 .help("Notebook Settings")
-
-                Spacer()
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
@@ -1070,7 +1070,6 @@ struct StudyWorkspaceHeaderView: View {
                     .foregroundStyle(MarginNoteTheme.separatorColor),
                 alignment: .bottom
             )
-        }
     }
 }
 
@@ -1158,17 +1157,19 @@ struct StudyWorkspaceView: View {
                             outlinePane
                                 .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
                             mindMapPane
-                                .frame(minWidth: 340)
+                                .frame(minWidth: 340, idealWidth: 600, maxWidth: .infinity)
                             pdfPane
-                                .frame(minWidth: 380)
+                                .frame(minWidth: 380, idealWidth: 600, maxWidth: .infinity)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         HSplitView {
                             mindMapPane
-                                .frame(minWidth: 360)
+                                .frame(minWidth: 360, idealWidth: 720, maxWidth: .infinity)
                             pdfPane
-                                .frame(minWidth: 400)
+                                .frame(minWidth: 400, idealWidth: 720, maxWidth: .infinity)
                         }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
 
                     // Circular < • > split view divider handle (MarginNote 3 signature)
@@ -1217,17 +1218,20 @@ struct StudyWorkspaceView: View {
                             .overlay(Capsule().stroke(Color(white: 0.82), lineWidth: 0.75))
                     )
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             case .threeView:
                 HSplitView {
                     outlinePane
                         .frame(minWidth: 200, idealWidth: 250, maxWidth: 340)
                     mindMapPane
-                        .frame(minWidth: 340)
+                        .frame(minWidth: 340, idealWidth: 600, maxWidth: .infinity)
                     pdfPane
-                        .frame(minWidth: 380)
+                        .frame(minWidth: 380, idealWidth: 600, maxWidth: .infinity)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $model.editingCard) { card in
             CardEditorSheet(
                 card: card,
@@ -1510,7 +1514,7 @@ struct MarginGraphApp: App {
                     }
                 }
             }
-            .frame(minWidth: 1000, minHeight: 650)
+            .frame(minWidth: 1050, maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)
             .preferredColorScheme(.light)
             .sheet(isPresented: $model.isReviewPresented) {
                 FlashcardReviewView(
@@ -1532,8 +1536,25 @@ struct MarginGraphApp: App {
             .onOpenURL { url in
                 model.handleDeepLink(url)
             }
+            .onAppear {
+                DispatchQueue.main.async {
+                    if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+                        if let screen = window.screen ?? NSScreen.main {
+                            let screenRect = screen.visibleFrame
+                            let targetWidth = min(1440, screenRect.width * 0.92)
+                            let targetHeight = min(920, screenRect.height * 0.90)
+                            if window.frame.width < 1250 || window.frame.height < 780 {
+                                let x = screenRect.midX - targetWidth / 2
+                                let y = screenRect.midY - targetHeight / 2
+                                window.setFrame(NSRect(x: x, y: y, width: targetWidth, height: targetHeight), display: true, animate: false)
+                            }
+                        }
+                    }
+                }
+            }
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1440, height: 920)
         .commands {
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") {

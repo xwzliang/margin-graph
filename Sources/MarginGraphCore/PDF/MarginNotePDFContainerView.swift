@@ -72,6 +72,8 @@ public struct MarginNotePDFContainerView: View {
     @State private var pageHistory: [Int] = []
     @State private var historyIndex: Int = 0
     @State private var internalJumpTarget: PDFJumpTarget? = nil
+    @State private var showPageBanner: Bool = false
+    @State private var hideBannerTask: Task<Void, Never>? = nil
 
     public init(
         manager: PDFDocumentManager,
@@ -239,9 +241,11 @@ public struct MarginNotePDFContainerView: View {
                         Image(systemName: "ellipsis")
                             .font(.system(size: 13))
                             .foregroundStyle(Color(white: 0.35))
+                            .frame(width: 26, height: 26)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
+                    .frame(width: 26, height: 26)
                     .help("Document Options")
                 }
             }
@@ -420,7 +424,10 @@ public struct MarginNotePDFContainerView: View {
                     onAddToComments: onAddToComments,
                     onMerge: onMerge,
                     onEmphasize: onEmphasize,
-                    onDeleteEmphasis: onDeleteEmphasis
+                    onDeleteEmphasis: onDeleteEmphasis,
+                    onScroll: {
+                        triggerPageBanner()
+                    }
                 )
                 .background(Color(white: 0.94))
 
@@ -472,6 +479,23 @@ public struct MarginNotePDFContainerView: View {
                     .padding(.bottom, 22)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 }
+
+                // Temporary Page Number Banner on Scroll (MarginNote 3 style)
+                if showPageBanner {
+                    let totalCount = max(manager.pageCount, totalPageCount)
+                    Text("\(currentPageIndex + 1) / \(totalCount)")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(Color.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 5)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4.5)
+                                .fill(Color(red: 0.77, green: 0.77, blue: 0.77).opacity(0.95))
+                                .shadow(color: Color.black.opacity(0.08), radius: 2, y: 1)
+                        )
+                        .padding(.bottom, 24)
+                        .transition(.opacity)
+                }
             }
         }
         .onAppear {
@@ -492,6 +516,24 @@ public struct MarginNotePDFContainerView: View {
                     historyIndex = pageHistory.count - 1
                 }
                 currentPageIndex = page
+            }
+        }
+        .onDisappear {
+            hideBannerTask?.cancel()
+        }
+    }
+
+    private func triggerPageBanner() {
+        withAnimation(.easeIn(duration: 0.15)) {
+            showPageBanner = true
+        }
+        hideBannerTask?.cancel()
+        hideBannerTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if !Task.isCancelled {
+                withAnimation(.easeOut(duration: 0.3)) {
+                    showPageBanner = false
+                }
             }
         }
     }

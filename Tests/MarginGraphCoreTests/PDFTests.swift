@@ -721,4 +721,28 @@ final class PDFTests: XCTestCase {
         let crossMatches = PDFHighlightResolver.rangesOfPhrase(crossParaPhrase, in: multilineCard)
         XCTAssertEqual(crossMatches.count, 1)
     }
+
+    func testPDFReaderViewScrollTriggerAndBannerCallback() {
+        var scrollCount = 0
+        let view = InteractivePDFView()
+        view.onScroll = {
+            scrollCount += 1
+        }
+
+        // Simulate scroll wheel event
+        if let event = NSEvent.otherEvent(
+            with: .applicationDefined,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            subtype: 0,
+            data1: 0,
+            data2: 0
+        ) {
+            view.scrollWheel(with: event)
+        }
+        XCTAssertEqual(scrollCount, 1)
+    }
 }
