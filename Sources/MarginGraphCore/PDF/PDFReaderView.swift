@@ -666,6 +666,7 @@ public struct PDFReaderView: NSViewRepresentable {
 
     public func makeNSView(context: Context) -> InteractivePDFView {
         let view = InteractivePDFView()
+        view.focusRingType = .none
         view.autoScales = true
         view.displaysPageBreaks = true
         view.pageBreakMargins = NSEdgeInsets(top: 0.5, left: 0, bottom: 0.5, right: 0)
@@ -1052,6 +1053,16 @@ public final class InteractivePDFView: PDFView {
 
     private var pdfScrollView: NSScrollView? {
         subviews.first(where: { $0 is NSScrollView }) as? NSScrollView
+    }
+
+    public override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.focusRingType = .none
+    }
+
+    public required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        self.focusRingType = .none
     }
 
     public override func acceptsFirstMouse(for event: NSEvent?) -> Bool {

@@ -163,6 +163,7 @@ public struct MindMapCanvasView: View {
             }
             .clipped()
             .focusable()
+            .focusEffectDisabled()
             .onKeyPress(.delete) {
                 if let id = selectedCardID {
                     onDeleteCard?(id)
@@ -734,6 +735,16 @@ private struct ScrollWheelCatcherView: NSViewRepresentable {
         var onScroll: ((CGFloat, CGFloat) -> Void)?
         var onZoom: ((CGFloat, CGPoint) -> Void)?
         private var monitor: Any?
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            self.focusRingType = .none
+        }
+
+        required init?(coder: NSCoder) {
+            super.init(coder: coder)
+            self.focusRingType = .none
+        }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
