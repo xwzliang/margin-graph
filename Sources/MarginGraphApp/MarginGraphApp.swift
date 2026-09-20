@@ -950,7 +950,7 @@ struct StudyWorkspaceHeaderView: View {
                         .frame(width: 26, height: 26)
                 }
                 .buttonStyle(.plain)
-                .help("Back to Notebooks")
+                .marginNoteTooltip("Back to Notebooks")
 
                 // Undo / Redo
                 HStack(spacing: 2) {
@@ -964,7 +964,7 @@ struct StudyWorkspaceHeaderView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canUndo)
-                    .help("Undo (⌘Z)")
+                    .marginNoteTooltip("Undo (⌘Z)")
 
                     Button {
                         model.redo()
@@ -976,7 +976,7 @@ struct StudyWorkspaceHeaderView: View {
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canRedo)
-                    .help("Redo (⇧⌘Z)")
+                    .marginNoteTooltip("Redo (⇧⌘Z)")
                 }
 
                 // Outline Toggle
@@ -993,7 +993,7 @@ struct StudyWorkspaceHeaderView: View {
                         )
                 }
                 .buttonStyle(.plain)
-                .help("Toggle Outline")
+                .marginNoteTooltip("Toggle Outline")
 
                 // Card Notes List / Editor Toggle
                 Button {
@@ -1010,7 +1010,7 @@ struct StudyWorkspaceHeaderView: View {
                         .frame(width: 26, height: 26)
                 }
                 .buttonStyle(.plain)
-                .help("Edit Card")
+                .marginNoteTooltip("Edit Card")
 
                 // Export / Share Menu
                 Menu {
@@ -1028,7 +1028,7 @@ struct StudyWorkspaceHeaderView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .frame(width: 26, height: 26)
-                .help("Share / Export")
+                .marginNoteTooltip("Share / Export")
 
                 Spacer()
 
@@ -1059,7 +1059,7 @@ struct StudyWorkspaceHeaderView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .frame(width: 26, height: 26)
-                .help("Notebook Settings")
+                .marginNoteTooltip("Notebook Settings")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 7)
@@ -1070,6 +1070,7 @@ struct StudyWorkspaceHeaderView: View {
                     .foregroundStyle(MarginNoteTheme.separatorColor),
                 alignment: .bottom
             )
+            .zIndex(100)
     }
 }
 
@@ -1538,7 +1539,10 @@ struct MarginGraphApp: App {
             }
             .onAppear {
                 DispatchQueue.main.async {
+                    NSApp.setActivationPolicy(.regular)
+                    NSApp.activate(ignoringOtherApps: true)
                     if let window = NSApp.windows.first(where: { $0.canBecomeMain }) {
+                        window.makeKeyAndOrderFront(nil)
                         if let screen = window.screen ?? NSScreen.main {
                             let screenRect = screen.visibleFrame
                             let targetWidth = min(1440, screenRect.width * 0.92)

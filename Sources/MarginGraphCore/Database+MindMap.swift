@@ -15,6 +15,7 @@ public extension Database {
             }
         }
         card.groupNoteId = parentID
+        card.mindPos = nil
         card.updatedAt = Date()
         try updateCard(card)
     }

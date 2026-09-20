@@ -159,6 +159,9 @@ public enum TreeLayout {
     }
 
     private static func cardOrder(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
+        if let ly = lhs.mindPos?.y, let ry = rhs.mindPos?.y, ly != ry {
+            return ly < ry
+        }
         if lhs.startPage != rhs.startPage {
             return (lhs.startPage ?? 0) < (rhs.startPage ?? 0)
         }

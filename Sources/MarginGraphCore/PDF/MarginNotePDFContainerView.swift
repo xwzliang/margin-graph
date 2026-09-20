@@ -30,6 +30,21 @@ public enum MarginNotePDFTool: String, CaseIterable, Identifiable {
         case .list: return "list.bullet.rectangle"
         }
     }
+
+    public var tooltipTitle: String {
+        switch self {
+        case .hand: return "Hand / Drag"
+        case .text: return "Text Excerpt"
+        case .marquee: return "Rect Excerpt"
+        case .lasso: return "Lasso Excerpt"
+        case .crop: return "Crop Excerpt"
+        case .pen: return "Pen"
+        case .highlighter: return "Highlighter"
+        case .eraser: return "Eraser"
+        case .textbox: return "Text Box"
+        case .list: return "Select Area"
+        }
+    }
 }
 
 public struct MarginNotePDFContainerView: View {
@@ -68,6 +83,7 @@ public struct MarginNotePDFContainerView: View {
     @State private var totalMatches: Int = 0
     @State private var bookmarkedPages: Set<Int> = []
     @State private var showBookmarksPopover: Bool = false
+    @State private var showTableOfContentsPopover: Bool = false
     @State private var displayMode: PDFReaderDisplayMode = .continuous
     @State private var pageHistory: [Int] = []
     @State private var historyIndex: Int = 0
@@ -160,7 +176,9 @@ public struct MarginNotePDFContainerView: View {
                     // Search button
                     Button {
                         isSearching.toggle()
-                        if !isSearching {
+                        if isSearching {
+                            NSApp.activate(ignoringOtherApps: true)
+                        } else {
                             searchQuery = ""
                             totalMatches = 0
                             currentMatchIndex = 0
@@ -176,7 +194,33 @@ public struct MarginNotePDFContainerView: View {
                             )
                     }
                     .buttonStyle(.plain)
-                    .help("Search in Document")
+                    .marginNoteTooltip("Search")
+
+                    // Table of Contents button
+                    Button {
+                        showTableOfContentsPopover.toggle()
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                            .font(.system(size: 13, weight: showTableOfContentsPopover ? .semibold : .regular))
+                            .foregroundStyle(showTableOfContentsPopover ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
+                            .frame(width: 24, height: 24)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(showTableOfContentsPopover ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12) : Color.clear)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .marginNoteTooltip("Table of Contents")
+                    .popover(isPresented: $showTableOfContentsPopover, arrowEdge: .bottom) {
+                        TableOfContentsPopoverView(
+                            items: manager.outline,
+                            currentPageIndex: currentPageIndex,
+                            onJumpToPage: { page in
+                                navigateToHistoryPage(page)
+                                showTableOfContentsPopover = false
+                            }
+                        )
+                    }
 
                     // Bookmarks: Direct toggle + Dropdown for listing and deleting
                     HStack(spacing: 2) {
@@ -197,7 +241,7 @@ public struct MarginNotePDFContainerView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark for Page \(currentPageIndex + 1)" : "Bookmark Page \(currentPageIndex + 1)")
+                        .marginNoteTooltip(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark" : "Bookmark")
 
                         Button {
                             showBookmarksPopover.toggle()
@@ -209,14 +253,14 @@ public struct MarginNotePDFContainerView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .help("List Bookmarks")
+                        .marginNoteTooltip("Bookmarks List")
                         .popover(isPresented: $showBookmarksPopover, arrowEdge: .bottom) {
                             BookmarksPopoverView(
                                 bookmarkedPages: $bookmarkedPages,
                                 currentPageIndex: currentPageIndex,
                                 manager: manager,
                                 onJumpToPage: { page in
-                                    currentPageIndex = page
+                                    navigateToHistoryPage(page)
                                     showBookmarksPopover = false
                                 },
                                 onToggleBookmark: { page, isBookmarked in
@@ -246,7 +290,7 @@ public struct MarginNotePDFContainerView: View {
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
                     .frame(width: 26, height: 26)
-                    .help("Document Options")
+                    .marginNoteTooltip("Document Options")
                 }
             }
             .padding(.horizontal, 14)
@@ -258,6 +302,7 @@ public struct MarginNotePDFContainerView: View {
                     .foregroundStyle(MarginNoteTheme.separatorColor),
                 alignment: .bottom
             )
+            .zIndex(100)
 
             // Search Bar Overlay (when search is active)
             if isSearching {
@@ -266,14 +311,22 @@ public struct MarginNotePDFContainerView: View {
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
 
-                    TextField("Search in document…", text: $searchQuery)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 12))
-                        .onSubmit {
+                    FocusableSearchField(
+                        text: $searchQuery,
+                        placeholder: "Search in document…",
+                        onSubmit: {
                             if totalMatches > 0 {
                                 currentMatchIndex = (currentMatchIndex + 1) % totalMatches
                             }
+                        },
+                        onCancel: {
+                            searchQuery = ""
+                            isSearching = false
+                            totalMatches = 0
+                            currentMatchIndex = 0
                         }
+                    )
+                    .frame(height: 20)
 
                     if totalMatches > 0 {
                         Text("\(currentMatchIndex + 1) of \(totalMatches)")
@@ -567,6 +620,7 @@ public struct MarginNotePDFContainerView: View {
             )
         }
         .buttonStyle(.plain)
+        .marginNoteTooltip(tool.tooltipTitle)
     }
 }
 

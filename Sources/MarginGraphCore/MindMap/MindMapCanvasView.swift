@@ -32,6 +32,8 @@ public struct MindMapCanvasView: View {
     @State private var hScrollStartPanX: CGFloat = 0
     @State private var isHoveringScrollbars = false
     @State private var showMiniMap = true
+    @State private var draggingCardID: UUID? = nil
+    @State private var hoverTargetCardID: UUID? = nil
     @State private var layoutResult: TreeLayoutResult
 
     public init(
@@ -99,7 +101,7 @@ public struct MindMapCanvasView: View {
                 .allowsHitTesting(false)
 
                 // Note Cards with Viewport Culling
-                cardsView(visibleCards: visibleCards, frames: frames, canvasSize: proxy.size)
+                cardsView(visibleCards: visibleCards, frames: frames, staticFrames: layout.frames, canvasSize: proxy.size)
 
                 // Main MindMap Floating Header (MarginNote 3 signature)
                 HStack {
@@ -158,6 +160,7 @@ public struct MindMapCanvasView: View {
                 // Draggable Vertical & Horizontal Scrollbars
                 scrollBars(proxy: proxy, frames: frames)
             }
+            .coordinateSpace(name: "MindMapCanvas")
             .onChange(of: cards) { _, newCards in
                 layoutResult = TreeLayout.layout(cards: newCards)
             }
@@ -249,7 +252,7 @@ public struct MindMapCanvasView: View {
     }
 
     @ViewBuilder
-    private func cardsView(visibleCards: [NoteCard], frames: [UUID: CGRect], canvasSize: CGSize) -> some View {
+    private func cardsView(visibleCards: [NoteCard], frames: [UUID: CGRect], staticFrames: [UUID: CGRect], canvasSize: CGSize) -> some View {
         let visibleCanvasRect = CGRect(
             x: -viewport.panOffset.x / viewport.zoomScale,
             y: -viewport.panOffset.y / viewport.zoomScale,
@@ -258,7 +261,7 @@ public struct MindMapCanvasView: View {
         ).insetBy(dx: -150, dy: -150)
 
         let culledCards = visibleCards.filter { card in
-            if card.id == selectedCardID { return true }
+            if card.id == selectedCardID || card.id == draggingCardID || card.id == hoverTargetCardID { return true }
             guard let frame = frames[card.id] else { return false }
             return frame.intersects(visibleCanvasRect)
         }
@@ -266,6 +269,8 @@ public struct MindMapCanvasView: View {
         ForEach(culledCards, id: \.id) { card in
             if let frame = frames[card.id] {
                 let isCardSelected = selectedCardID == card.id
+                let isTargeted = hoverTargetCardID == card.id
+                let isBeingDragged = draggingCardID == card.id
                 let extraHeight: CGFloat = isCardSelected ? 28 : 0
                 CardNodeView(
                     card: card,
@@ -286,15 +291,47 @@ public struct MindMapCanvasView: View {
                     }
                 )
                 .frame(width: frame.width, height: frame.height + extraHeight)
+                .overlay {
+                    // Bright blue selection border on target card (MarginNote 3 style)
+                    if isTargeted {
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(red: 0.05, green: 0.35, blue: 1.0), lineWidth: 3.2)
+                    }
+                }
+                .opacity(isBeingDragged ? 0.78 : 1.0)
+                .shadow(color: isBeingDragged ? Color.black.opacity(0.25) : Color.clear, radius: 10, y: 5)
                 .scaleEffect(viewport.zoomScale)
                 .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale)
+                .zIndex(isBeingDragged ? 100 : (isTargeted ? 50 : 1))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
-                .gesture(nodeDrag(card: card, frame: frame, frames: frames))
+                .gesture(nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames))
                 .position(
                     x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).x,
                     y: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).y
                 )
             }
+        }
+
+        // Red "Become child" floating banner (MarginNote 3 signature)
+        if let targetID = hoverTargetCardID,
+           let targetFrame = frames[targetID] {
+            Text("Become child")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 3.5)
+                        .fill(Color(red: 0.95, green: 0.20, blue: 0.20))
+                        .shadow(color: Color.black.opacity(0.35), radius: 4, y: 2)
+                )
+                .scaleEffect(viewport.zoomScale)
+                .position(
+                    x: viewport.canvasToScreen(CGPoint(x: targetFrame.midX, y: targetFrame.midY)).x,
+                    y: viewport.canvasToScreen(CGPoint(x: targetFrame.midX, y: targetFrame.midY)).y
+                )
+                .zIndex(200)
+                .allowsHitTesting(false)
         }
     }
 
@@ -429,19 +466,24 @@ public struct MindMapCanvasView: View {
         return result
     }
 
-    private func nodeDrag(card: NoteCard, frame: CGRect, frames: [UUID: CGRect]) -> some Gesture {
-        DragGesture(minimumDistance: 0)
+    private func nodeDrag(card: NoteCard, initialFrame: CGRect, staticFrames: [UUID: CGRect]) -> some Gesture {
+        DragGesture(coordinateSpace: .named("MindMapCanvas"))
             .onChanged { value in
                 let distance = hypot(value.translation.width, value.translation.height)
                 if distance > 3 {
+                    draggingCardID = card.id
                     let canvasDelta = CGPoint(
                         x: value.translation.width / viewport.zoomScale,
                         y: value.translation.height / viewport.zoomScale
                     )
-                    dragLocations[card.id] = CGPoint(
-                        x: frame.minX + canvasDelta.x,
-                        y: frame.minY + canvasDelta.y
+                    let currentOrigin = CGPoint(
+                        x: initialFrame.minX + canvasDelta.x,
+                        y: initialFrame.minY + canvasDelta.y
                     )
+                    dragLocations[card.id] = currentOrigin
+
+                    let draggedRect = CGRect(origin: currentOrigin, size: initialFrame.size)
+                    hoverTargetCardID = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
                 }
             }
             .onEnded { value in
@@ -450,20 +492,107 @@ public struct MindMapCanvasView: View {
                 if distance <= 3 {
                     print("[MindMap] nodeDrag calling onSelect(\(card.title))")
                     onSelect(card)
+                    draggingCardID = nil
+                    hoverTargetCardID = nil
                     return
                 }
-                let dropPoint = dragLocations[card.id] ?? frame.origin
-                let target = frames.first {
-                    $0.key != card.id && $0.value.insetBy(dx: -16, dy: -16).contains(dropPoint)
-                }?.key
-                if let target {
-                    onReparent(card.id, target)
-                    dragLocations[card.id] = nil
-                } else if let position = dragLocations[card.id] {
-                    onMove(card.id, position)
-                    dragLocations[card.id] = nil
+
+                let finalOrigin = dragLocations[card.id] ?? initialFrame.origin
+                let draggedRect = CGRect(origin: finalOrigin, size: initialFrame.size)
+                let overlapTarget = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
+
+                if let overlapTarget {
+                    // 1. Overlap: Become child of target card (Image 2 & 3)
+                    onReparent(card.id, overlapTarget)
+                    onToggleFold(overlapTarget, false)
+                    onSelect(card)
+                } else {
+                    // 2. No overlap: Put into nearest card location and move other cards to make space
+                    insertNearNearestLocation(card: card, droppedRect: draggedRect, frames: staticFrames)
+                    onSelect(card)
+                }
+
+                dragLocations[card.id] = nil
+                draggingCardID = nil
+                hoverTargetCardID = nil
+            }
+    }
+
+    private func findOverlapTarget(draggedID: UUID, draggedRect: CGRect, frames: [UUID: CGRect]) -> UUID? {
+        var descendants = Set<UUID>()
+        var queue = [draggedID]
+        while !queue.isEmpty {
+            let curr = queue.removeFirst()
+            for c in cards where c.groupNoteId == curr {
+                if descendants.insert(c.id).inserted {
+                    queue.append(c.id)
                 }
             }
+        }
+
+        var bestTarget: UUID? = nil
+        var maxIntersectionArea: CGFloat = 0
+
+        for other in cards where other.id != draggedID && !descendants.contains(other.id) {
+            guard let otherFrame = frames[other.id] else { continue }
+            let hitTargetFrame = otherFrame.insetBy(dx: -12, dy: -12)
+            let intersection = draggedRect.intersection(hitTargetFrame)
+            if !intersection.isNull && intersection.width > 0 && intersection.height > 0 {
+                let area = intersection.width * intersection.height
+                if area > maxIntersectionArea {
+                    maxIntersectionArea = area
+                    bestTarget = other.id
+                }
+            }
+        }
+        return bestTarget
+    }
+
+    private func insertNearNearestLocation(card: NoteCard, droppedRect: CGRect, frames: [UUID: CGRect]) {
+        let otherCards = cards.filter { $0.id != card.id }
+        guard !otherCards.isEmpty else {
+            onMove(card.id, droppedRect.origin)
+            return
+        }
+
+        let dropCenter = CGPoint(x: droppedRect.midX, y: droppedRect.midY)
+        var closestCard: NoteCard = otherCards[0]
+        var minDistance: CGFloat = .greatestFiniteMagnitude
+
+        for other in otherCards {
+            guard let f = frames[other.id] else { continue }
+            let otherCenter = CGPoint(x: f.midX, y: f.midY)
+            let dist = hypot(dropCenter.x - otherCenter.x, dropCenter.y - otherCenter.y)
+            if dist < minDistance {
+                minDistance = dist
+                closestCard = other
+            }
+        }
+
+        let targetGroupID = closestCard.groupNoteId
+        let siblings = otherCards.filter { $0.groupNoteId == targetGroupID }
+        let sortedSiblings = siblings.sorted { (frames[$0.id]?.minY ?? 0) < (frames[$1.id]?.minY ?? 0) }
+
+        var insertIndex = sortedSiblings.count
+        for (idx, sib) in sortedSiblings.enumerated() {
+            let sibMidY = frames[sib.id]?.midY ?? 0
+            if dropCenter.y < sibMidY {
+                insertIndex = idx
+                break
+            }
+        }
+
+        if card.groupNoteId != targetGroupID {
+            onReparent(card.id, targetGroupID)
+        }
+
+        var newOrder = sortedSiblings
+        newOrder.insert(card, at: insertIndex)
+
+        for (idx, c) in newOrder.enumerated() {
+            let yPosition = CGFloat(idx * 100)
+            onMove(c.id, CGPoint(x: 0, y: yPosition))
+        }
     }
 
     private func drawConnectors(

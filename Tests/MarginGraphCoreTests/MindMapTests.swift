@@ -203,4 +203,72 @@ final class MindMapTests: XCTestCase {
             XCTAssertEqual(String(textWithSpace[first]), "Having read more does not automatically")
         }
     }
+
+    func testCardReparentingBecomesChildAndPlacesToRight() throws {
+        let topicId = UUID()
+        var parentCard = NoteCard(
+            id: UUID(),
+            topicId: topicId,
+            title: "Parent Note",
+            notesText: "Root note content",
+            groupNoteId: nil
+        )
+        var childCard = NoteCard(
+            id: UUID(),
+            topicId: topicId,
+            title: "Child Note",
+            notesText: "Becomes child of parent",
+            groupNoteId: nil
+        )
+
+        // Initial layout: both are roots, placed vertically in column
+        let initialLayout = TreeLayout.layout(cards: [parentCard, childCard])
+        let initialParentFrame = try XCTUnwrap(initialLayout.frames[parentCard.id])
+        let initialChildFrame = try XCTUnwrap(initialLayout.frames[childCard.id])
+        XCTAssertEqual(initialParentFrame.minX, initialChildFrame.minX, "Roots share the same column X")
+
+        // Reparent: child becomes child of parent
+        childCard.groupNoteId = parentCard.id
+        let reparentedLayout = TreeLayout.layout(cards: [parentCard, childCard])
+        let reparentedParentFrame = try XCTUnwrap(reparentedLayout.frames[parentCard.id])
+        let reparentedChildFrame = try XCTUnwrap(reparentedLayout.frames[childCard.id])
+
+        // Child should be placed to the right of parent
+        XCTAssertGreaterThan(reparentedChildFrame.minX, reparentedParentFrame.maxX, "Child should be placed to the right of parent")
+
+        // Connector path should exist between parent and child
+        let path = reparentedLayout.connectorPath(parentID: parentCard.id, childID: childCard.id)
+        XCTAssertNotNil(path, "Connector path should exist between parent and reparented child")
+    }
+
+    func testCardOrderingByMindPosYSpacesOutInTreeLayout() throws {
+        let topicId = UUID()
+        let card1 = NoteCard(
+            id: UUID(),
+            topicId: topicId,
+            title: "Card 1",
+            mindPos: CGPoint(x: 0, y: 100)
+        )
+        let card2 = NoteCard(
+            id: UUID(),
+            topicId: topicId,
+            title: "Card 2",
+            mindPos: CGPoint(x: 0, y: 300)
+        )
+        let insertedCard = NoteCard(
+            id: UUID(),
+            topicId: topicId,
+            title: "Inserted Card",
+            mindPos: CGPoint(x: 0, y: 200) // Inserted between card1 and card2
+        )
+
+        let layout = TreeLayout.layout(cards: [card1, card2, insertedCard])
+        let f1 = try XCTUnwrap(layout.frames[card1.id])
+        let fInserted = try XCTUnwrap(layout.frames[insertedCard.id])
+        let f2 = try XCTUnwrap(layout.frames[card2.id])
+
+        // Verify vertical order: f1.minY < fInserted.minY < f2.minY
+        XCTAssertLessThan(f1.minY, fInserted.minY)
+        XCTAssertLessThan(fInserted.minY, f2.minY)
+    }
 }

@@ -745,4 +745,21 @@ final class PDFTests: XCTestCase {
         }
         XCTAssertEqual(scrollCount, 1)
     }
+
+    func testTableOfContentsOutlineLoadingAndFiltering() throws {
+        let pdfPath = "/Users/broliang/Library/Containers/QReader.MarginStudyMac/Data/Documents/Ahrens_2017_How-to-take-smart-notes.pdf"
+        let manager = try PDFDocumentManager(url: URL(fileURLWithPath: pdfPath))
+        XCTAssertEqual(manager.outline.count, 50, "PDF should have 50 table of contents items")
+
+        // First item verification
+        let first = try XCTUnwrap(manager.outline.first)
+        XCTAssertFalse(first.title.isEmpty)
+        XCTAssertNotNil(first.pageIndex)
+
+        // Nested outline structure test with custom items
+        let child = PDFOutlineItem(title: "Section 1.1", pageIndex: 3)
+        let parent = PDFOutlineItem(title: "Chapter 1", pageIndex: 2, children: [child])
+        XCTAssertEqual(parent.children.count, 1)
+        XCTAssertEqual(parent.children.first?.title, "Section 1.1")
+    }
 }
