@@ -537,4 +537,172 @@ final class PDFTests: XCTestCase {
         )
         XCTAssertFalse(view.checkIfPendingWithinTarget(pendingOutside, targetCardID: card.id))
     }
+
+    private func makeMultiLineSyntheticPDF(at url: URL, lines: [String]) throws {
+        guard let consumer = CGDataConsumer(url: url as CFURL) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        context.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 16, nil)
+        let attributes = [kCTFontAttributeName: font] as CFDictionary
+
+        var y: CGFloat = 700
+        for lineStr in lines {
+            let attributed = CFAttributedStringCreate(nil, lineStr as CFString, attributes)!
+            let line = CTLineCreateWithAttributedString(attributed)
+            context.textPosition = CGPoint(x: 60, y: y)
+            CTLineDraw(line, context)
+            y -= 25
+        }
+
+        context.endPDFPage()
+        context.closePDF()
+    }
+
+    func testEmphasisPhraseLineRectResolutionInsideCardHighlight() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-EmphasisMultiLine-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let textLines = [
+            "Until now, writing and note-taking techniques were usually taught",
+            "without much regard to the overarching workflow. This book aims",
+            "to change that."
+        ]
+        try makeMultiLineSyntheticPDF(at: url, lines: textLines)
+        guard let doc = PDFDocument(url: url) else {
+            XCTFail("Failed to load PDF")
+            return
+        }
+
+        let fullText = textLines.joined(separator: " ")
+        let card = NoteCard(
+            topicId: UUID(),
+            title: "Test Card",
+            highlightText: fullText,
+            startPage: 0
+        )
+
+        // Resolve phrase that is strictly on line 2: "the overarching workflow"
+        let rects = PDFHighlightResolver.lineRects(forPhrase: "the overarching workflow", in: card, in: doc)
+        XCTAssertEqual(rects.count, 1)
+        XCTAssertEqual(rects.first?.page, 0)
+        XCTAssertLessThan(rects.first?.width ?? 0, 250)
+
+        // Unrelated phrase should return empty
+        let emptyRects = PDFHighlightResolver.lineRects(forPhrase: "completely absent phrase", in: card, in: doc)
+        XCTAssertTrue(emptyRects.isEmpty)
+    }
+
+    func testEmphasisToolbarModeAndHitTesting() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+        let url = tempDir.appendingPathComponent("hit_test_\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let textLines = [
+            "Having read more does not automatically mean having more ideas.",
+            "Especially in the beginning, it means having fewer ideas."
+        ]
+        try makeMultiLineSyntheticPDF(at: url, lines: textLines)
+        guard let doc = PDFDocument(url: url) else {
+            XCTFail("Failed to load PDF")
+            return
+        }
+
+        var card = NoteCard(
+            topicId: UUID(),
+            title: "Emphasis Test Card",
+            highlightText: textLines.joined(separator: " "),
+            startPage: 0,
+            emphasisList: ["does not automatically"]
+        )
+
+        let phraseRects = PDFHighlightResolver.lineRects(forPhrase: "does not automatically", in: card, in: doc)
+        XCTAssertFalse(phraseRects.isEmpty)
+        card.emphasisRects = phraseRects
+
+        let view = InteractivePDFView()
+        view.document = doc
+        view.cards = [card]
+        view.selectedCardID = card.id
+
+        let mode = PDFPopoverMode.emphasisSelection(phrase: "does not automatically")
+        XCTAssertEqual(mode, .emphasisSelection(phrase: "does not automatically"))
+    }
+
+    func testRealPDFCardEmphasis() throws {
+        let pdfPath = "/Users/broliang/Library/Containers/QReader.MarginStudyMac/Data/Documents/Ahrens_2017_How-to-take-smart-notes.pdf"
+        guard FileManager.default.fileExists(atPath: pdfPath),
+              let doc = PDFDocument(url: URL(fileURLWithPath: pdfPath)) else {
+            return
+        }
+
+        let phrase = "It is not so important who you are, but what you do. Doing the work required and doing it in a smart way leads, somehow unsurprisingly, to success. At first glance, this is both good and bad news. The good news is that we wouldn’t be able to do much about our IQ anyway, while it seems to be within our control to have more self-discipline with a little bit of willpower. The bad news is that we do not have this kind of control over ourselves. Self-discipline or self-control is not that easy to achieve with willpower alone. Willpower is, as far as we know today, [2] a limited resource that depletes quickly and is also not that much up for improvement over the long term (Baumeister, Bratslavsky, Muraven, and Tice, 1998; Muraven, Tice, and Baumeister, 1998; Schmeichel, Vohs, and Baumeister, 2003; Moller, 2006). And who would want to flog oneself to work,"
+        
+        let card = NoteCard(
+            topicId: UUID(),
+            title: "Willpower",
+            highlightText: phrase,
+            startPage: 9,
+            endPage: 10,
+            emphasisList: [phrase]
+        )
+
+        if let p9 = doc.page(at: 9), let str1 = p9.string,
+           let p10 = doc.page(at: 10), let str2 = p10.string {
+            let tokens = phrase.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+            print("Total tokens: \(tokens.count)")
+
+            var low = 1
+            var high = tokens.count - 1
+            var bestSplit: Int? = nil
+
+            func matchesPrefix(_ count: Int) -> NSRange? {
+                let sub = Array(tokens[0..<count])
+                let pat = sub.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: #"(?:-\s*|\s+)"#)
+                guard let rx = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]) else { return nil }
+                let full = NSRange(str1.startIndex..<str1.endIndex, in: str1)
+                return rx.matches(in: str1, options: [], range: full).last?.range
+            }
+
+            func matchesSuffix(from start: Int) -> NSRange? {
+                let sub = Array(tokens[start...])
+                let pat = sub.map { NSRegularExpression.escapedPattern(for: $0) }.joined(separator: #"(?:-\s*|\s+)"#)
+                guard let rx = try? NSRegularExpression(pattern: pat, options: [.caseInsensitive]) else { return nil }
+                let full = NSRange(str2.startIndex..<str2.endIndex, in: str2)
+                return rx.matches(in: str2, options: [], range: full).first?.range
+            }
+
+            while low <= high {
+                let mid = (low + high) / 2
+                if matchesPrefix(mid) != nil {
+                    bestSplit = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+
+            print("Best split: \(bestSplit ?? -1)")
+            if let split = bestSplit,
+               let r1 = matchesPrefix(split),
+               let r2 = matchesSuffix(from: split) {
+                print("Found match! r1 on p9: \(r1), r2 on p10: \(r2)")
+                let s1 = p9.selection(for: r1)
+                let s2 = p10.selection(for: r2)
+                let rects1 = PDFHighlightResolver.lineRects(from: s1!, document: doc)
+                let rects2 = PDFHighlightResolver.lineRects(from: s2!, document: doc)
+                print("Rects1 count: \(rects1.count), rects2 count: \(rects2.count)")
+                XCTAssertFalse(rects1.isEmpty)
+                XCTAssertFalse(rects2.isEmpty)
+            } else {
+                XCTFail("Could not match across pages")
+            }
+        }
+    }
 }

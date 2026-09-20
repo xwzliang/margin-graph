@@ -9,6 +9,10 @@ public struct CardNodeView: View {
     public var onSelect: () -> Void
     public var onToggleFold: () -> Void
     public var onEdit: (() -> Void)?
+    public var onComment: (() -> Void)?
+    public var onLink: (() -> Void)?
+    public var onMerge: (() -> Void)?
+    public var onBranchStyle: (() -> Void)?
 
     public init(
         card: NoteCard,
@@ -17,7 +21,11 @@ public struct CardNodeView: View {
         mediaStorage: MediaStorage? = nil,
         onSelect: @escaping () -> Void,
         onToggleFold: @escaping () -> Void,
-        onEdit: (() -> Void)? = nil
+        onEdit: (() -> Void)? = nil,
+        onComment: (() -> Void)? = nil,
+        onLink: (() -> Void)? = nil,
+        onMerge: (() -> Void)? = nil,
+        onBranchStyle: (() -> Void)? = nil
     ) {
         self.card = card
         self.isSelected = isSelected
@@ -26,6 +34,10 @@ public struct CardNodeView: View {
         self.onSelect = onSelect
         self.onToggleFold = onToggleFold
         self.onEdit = onEdit
+        self.onComment = onComment
+        self.onLink = onLink
+        self.onMerge = onMerge
+        self.onBranchStyle = onBranchStyle
     }
 
     private var cardColors: (background: Color, border: Color, accent: Color) {
@@ -33,8 +45,7 @@ public struct CardNodeView: View {
     }
 
     public var body: some View {
-        Button(action: onSelect) {
-            VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
                 // 1. Accent Header Section (Title & chevron)
                 if !card.title.isEmpty {
                     HStack(alignment: .top, spacing: 5) {
@@ -140,6 +151,74 @@ public struct CardNodeView: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .background(MarginNoteTheme.cardBodyBackground)
                 }
+
+                // 3. Docked Bottom Action Bar (MarginNote 3 signature)
+                if isSelected {
+                    HStack(spacing: 8) {
+                        Button {
+                            onComment?()
+                        } label: {
+                            Image(systemName: "text.bubble")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add Comment")
+
+                        Button {
+                            onLink?()
+                        } label: {
+                            Image(systemName: "link")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Link")
+
+                        Button {
+                            onMerge?()
+                        } label: {
+                            Image(systemName: "arrow.triangle.merge")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Merge")
+
+                        Button {
+                            onBranchStyle?()
+                        } label: {
+                            Image(systemName: "network")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Branch Style")
+
+                        Spacer()
+
+                        // Blue folded triangle corner
+                        Path { p in
+                            p.move(to: CGPoint(x: 12, y: 0))
+                            p.addLine(to: CGPoint(x: 12, y: 12))
+                            p.addLine(to: CGPoint(x: 0, y: 12))
+                            p.closeSubpath()
+                        }
+                        .fill(Color(red: 0.15, green: 0.45, blue: 0.85))
+                        .frame(width: 12, height: 12)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color(white: 0.94))
+                }
             }
             .background(MarginNoteTheme.cardBodyBackground)
             .clipShape(RoundedRectangle(cornerRadius: 7))
@@ -154,13 +233,12 @@ public struct CardNodeView: View {
             .shadow(color: isSelected ? Color(red: 0.10, green: 0.40, blue: 0.85).opacity(0.20) : .black.opacity(0.14), radius: isSelected ? 8 : 6, x: 0, y: isSelected ? 4 : 3)
             .shadow(color: .black.opacity(0.06), radius: 1.5, x: 0, y: 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
-        }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            TapGesture(count: 2).onEnded {
+            .onTapGesture(count: 2) {
                 onEdit?()
             }
-        )
+            .onTapGesture(count: 1) {
+                onSelect()
+            }
         .contextMenu {
             Button("Edit Card") {
                 onEdit?()
@@ -186,14 +264,13 @@ public struct CardNodeView: View {
     private var styledExcerptText: AttributedString {
         var attr = AttributedString(card.highlightText)
         for emphasis in card.emphasisList where !emphasis.isEmpty {
-            var searchRange = attr.startIndex..<attr.endIndex
-            while let range = attr[searchRange].range(of: emphasis) {
-                attr[range].font = .system(size: 11.5, weight: .heavy)
-                attr[range].underlineStyle = Text.LineStyle(pattern: .dot, color: Color(MarginNoteTheme.cursorBlue))
-                if range.upperBound < attr.endIndex {
-                    searchRange = range.upperBound..<attr.endIndex
-                } else {
-                    break
+            let ranges = PDFHighlightResolver.rangesOfPhrase(emphasis, in: card.highlightText)
+            for strRange in ranges {
+                if let lower = AttributedString.Index(strRange.lowerBound, within: attr),
+                   let upper = AttributedString.Index(strRange.upperBound, within: attr) {
+                    let attrRange = lower..<upper
+                    attr[attrRange].font = .system(size: 11.5, weight: .heavy)
+                    attr[attrRange].underlineStyle = Text.LineStyle(pattern: .dot, color: Color(MarginNoteTheme.cursorBlue))
                 }
             }
         }

@@ -183,4 +183,24 @@ final class MindMapTests: XCTestCase {
         XCTAssertEqual(canvasPointBefore.x, canvasPointAfter.x, accuracy: 0.001)
         XCTAssertEqual(canvasPointBefore.y, canvasPointAfter.y, accuracy: 0.001)
     }
+
+    func testRangesOfPhraseCrossLineMatching() {
+        let cardText = "Having read more does not\nautomatically mean having more\nideas."
+        let emphasisPhrase = "Having read more does not automatically"
+
+        let ranges = PDFHighlightResolver.rangesOfPhrase(emphasisPhrase, in: cardText)
+        XCTAssertEqual(ranges.count, 1)
+        if let first = ranges.first {
+            XCTAssertEqual(String(cardText[first]), "Having read more does not\nautomatically")
+        }
+
+        // Reverse: phrase has newline, text has space
+        let textWithSpace = "Having read more does not automatically mean having more ideas."
+        let phraseWithNewline = "Having read more does not\nautomatically"
+        let ranges2 = PDFHighlightResolver.rangesOfPhrase(phraseWithNewline, in: textWithSpace)
+        XCTAssertEqual(ranges2.count, 1)
+        if let first = ranges2.first {
+            XCTAssertEqual(String(textWithSpace[first]), "Having read more does not automatically")
+        }
+    }
 }

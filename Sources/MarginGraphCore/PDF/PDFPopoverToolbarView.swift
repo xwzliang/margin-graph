@@ -4,6 +4,7 @@ import AppKit
 public enum PDFPopoverMode: Equatable {
     case create
     case edit(colorIndex: Int)
+    case emphasisSelection(phrase: String)
 }
 
 public struct PDFPopoverToolbarView: View {
@@ -18,6 +19,10 @@ public struct PDFPopoverToolbarView: View {
     public var onAsTitle: () -> Void
     public var onAddToComments: () -> Void
     public var onMerge: () -> Void
+    public var onResearch: () -> Void
+    public var onComment: () -> Void
+    public var onTag: () -> Void
+    public var onDeleteEmphasis: () -> Void
     public var hasTargetCard: Bool
     public var isWithinTargetHighlight: Bool
 
@@ -33,6 +38,10 @@ public struct PDFPopoverToolbarView: View {
         onAsTitle: @escaping () -> Void = {},
         onAddToComments: @escaping () -> Void = {},
         onMerge: @escaping () -> Void = {},
+        onResearch: @escaping () -> Void = {},
+        onComment: @escaping () -> Void = {},
+        onTag: @escaping () -> Void = {},
+        onDeleteEmphasis: @escaping () -> Void = {},
         hasTargetCard: Bool = false,
         isWithinTargetHighlight: Bool = false
     ) {
@@ -47,6 +56,10 @@ public struct PDFPopoverToolbarView: View {
         self.onAsTitle = onAsTitle
         self.onAddToComments = onAddToComments
         self.onMerge = onMerge
+        self.onResearch = onResearch
+        self.onComment = onComment
+        self.onTag = onTag
+        self.onDeleteEmphasis = onDeleteEmphasis
         self.hasTargetCard = hasTargetCard
         self.isWithinTargetHighlight = isWithinTargetHighlight
     }
@@ -130,13 +143,21 @@ public struct PDFPopoverToolbarView: View {
                         .frame(height: 14)
                         .overlay(Color.white.opacity(0.25))
 
-                    Image(systemName: "text.bubble")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.white.opacity(0.9))
+                    Button(action: onComment) {
+                        Image(systemName: "text.bubble")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add Comment")
 
-                    Image(systemName: "waveform")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.9))
+                    Button(action: onTag) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add Tag")
 
                     Image(systemName: "textformat")
                         .font(.system(size: 11))
@@ -146,63 +167,145 @@ public struct PDFPopoverToolbarView: View {
                         .frame(height: 14)
                         .overlay(Color.white.opacity(0.25))
 
-                    Text("Research")
-                        .font(.system(size: 11.5, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.9))
-                        .padding(.horizontal, 2)
+                    Button(action: onResearch) {
+                        Text("Research")
+                            .font(.system(size: 11.5, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(.horizontal, 2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Research / Look Up")
 
                 case .edit(let currentColorIndex):
-                    // Edit mode (media_1789795405168.png)
-                    Button(action: onEdit) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(.white)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Edit Note")
-
-                    Image(systemName: "paintpalette")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Color.white.opacity(0.9))
-
-                    // 4 Palette colors with active ring
-                    colorSwatches(selectedIdx: currentColorIndex)
-
-                    Image(systemName: "tag")
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(Color.white.opacity(0.85))
-
-                    Image(systemName: "waveform")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Color.white.opacity(0.85))
-
+                    // MarginNote 3 complete highlight action bar
                     Button(action: onCopy) {
-                        Image(systemName: "doc.on.doc")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(Color.white.opacity(0.9))
+                        Text("Copy")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
-                    .help("Copy Content")
 
-                    Button(action: onDelete) {
-                        Image(systemName: "trash")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color(red: 0.95, green: 0.40, blue: 0.40))
+                    Button(action: onEmphasize) {
+                        Text("Emphasize")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
-                    .help("Delete Note")
+
+                    Button(action: onAsTitle) {
+                        Text("As title")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onAddToComments) {
+                        Text("Add to comments")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onMerge) {
+                        Text("Merge")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.plain)
 
                     Divider()
                         .frame(height: 14)
                         .overlay(Color.white.opacity(0.25))
 
-                    Text("Research")
-                        .font(.system(size: 11.5, weight: .regular))
+                    // 5 Palette colors
+                    colorSwatches(selectedIdx: currentColorIndex)
+
+                    Divider()
+                        .frame(height: 14)
+                        .overlay(Color.white.opacity(0.25))
+
+                    Button(action: onComment) {
+                        Image(systemName: "text.bubble")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add Comment")
+
+                    Button(action: onTag) {
+                        Image(systemName: "tag")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Add Tag")
+
+                    Button(action: onResearch) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                    .help("AI Assistant")
+
+                    Image(systemName: "textformat")
+                        .font(.system(size: 11))
                         .foregroundStyle(Color.white.opacity(0.9))
 
-                    Text("Link")
-                        .font(.system(size: 11.5, weight: .regular))
-                        .foregroundStyle(Color.white.opacity(0.9))
+                    Divider()
+                        .frame(height: 14)
+                        .overlay(Color.white.opacity(0.25))
+
+                    Button(action: onResearch) {
+                        Text("Research")
+                            .font(.system(size: 11.5, weight: .regular))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                            .padding(.horizontal, 2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Research / Look Up")
+
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Color(red: 0.95, green: 0.40, blue: 0.40))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete Note")
+
+                case .emphasisSelection:
+                    Button(action: onResearch) {
+                        Text("Research")
+                            .font(.system(size: 11.5, weight: .medium))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Research")
+
+                    Divider()
+                        .frame(height: 14)
+                        .overlay(Color.white.opacity(0.25))
+
+                    Button(action: onDeleteEmphasis) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Delete Emphasis")
                 }
             }
             .padding(.horizontal, 10)
@@ -230,7 +333,7 @@ public struct PDFPopoverToolbarView: View {
     @ViewBuilder
     private func colorSwatches(selectedIdx: Int?) -> some View {
         HStack(spacing: 5) {
-            ForEach(0..<4, id: \.self) { idx in
+            ForEach(0..<5, id: \.self) { idx in
                 let colors = MarginNoteTheme.cardColors(for: idx)
                 Button {
                     onSelectColor(idx)

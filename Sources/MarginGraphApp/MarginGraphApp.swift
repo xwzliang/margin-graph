@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import PDFKit
 import MarginGraphCore
 
 public enum WorkspaceViewMode: String, CaseIterable, Identifiable {
@@ -76,6 +77,17 @@ final class AppModel: ObservableObject {
 
     var selectedTopic: Topic? {
         topics.first(where: { $0.id == selectedTopicID })
+    }
+
+    var activePDFCards: [NoteCard] {
+        var cardMap = [UUID: NoteCard]()
+        for card in mindMapCards {
+            cardMap[card.id] = card
+        }
+        for card in documentCards {
+            cardMap[card.id] = card
+        }
+        return Array(cardMap.values)
     }
 
     func autoImportLiveMarginNoteIfEmpty() {
@@ -269,7 +281,7 @@ final class AppModel: ObservableObject {
     func select(card: NoteCard) {
         print("[App] select card: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
         selectedCardID = card.id
-        activeToolbarOwner = .mindMap
+        activeToolbarOwner = .pdf
         navigateToCard(card)
     }
 
@@ -478,7 +490,11 @@ final class AppModel: ObservableObject {
         if !card.emphasisList.contains(clean) {
             card.emphasisList.append(clean)
         }
-        for r in rects {
+        var resolvedRects = rects
+        if resolvedRects.isEmpty, let path = activeDocument?.filePath, let doc = PDFDocument(url: URL(fileURLWithPath: path)) {
+            resolvedRects = PDFHighlightResolver.lineRects(forPhrase: clean, in: card, in: doc)
+        }
+        for r in resolvedRects {
             if !card.emphasisRects.contains(where: { $0.page == r.page && abs($0.y - r.y) < 1.0 && abs($0.x - r.x) < 2.0 && abs($0.width - r.width) < 2.0 }) {
                 card.emphasisRects.append(r)
             }
@@ -491,6 +507,50 @@ final class AppModel: ObservableObject {
         activeToolbarOwner = .pdf
         objectWillChange.send()
         Swift.print("[App] emphasizeTextInCard cardID=\(cardID) emphasisList=\(card.emphasisList) emphasisRects=\(card.emphasisRects.count)")
+    }
+
+    func deleteEmphasisInCard(cardID: UUID, text: String, rects: [HighlightRect] = []) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        var card = oldCard
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+
+        card.emphasisList.removeAll { emp in
+            emp == clean ||
+            emp.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty } ==
+            clean.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+        }
+
+        var rectsToRemove = rects
+        if let path = activeDocument?.filePath, let doc = PDFDocument(url: URL(fileURLWithPath: path)) {
+            var newEmpRects: [HighlightRect] = []
+            for phrase in card.emphasisList {
+                let pRects = PDFHighlightResolver.lineRects(forPhrase: phrase, in: card, in: doc)
+                for r in pRects {
+                    if !newEmpRects.contains(where: { $0.page == r.page && abs($0.y - r.y) < 1.0 && abs($0.x - r.x) < 2.0 && abs($0.width - r.width) < 2.0 }) {
+                        newEmpRects.append(r)
+                    }
+                }
+            }
+            card.emphasisRects = newEmpRects
+        } else if !rectsToRemove.isEmpty {
+            card.emphasisRects.removeAll { emp in
+                rectsToRemove.contains { r in
+                    r.page == emp.page &&
+                    abs(r.y - emp.y) < 2.0 &&
+                    abs(r.x - emp.x) < 4.0
+                }
+            }
+        }
+
+        card.updatedAt = Date()
+        registerCardUndo(oldCard: oldCard, newCard: card, actionName: "Delete Emphasis")
+        try? database.updateCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        activeToolbarOwner = .pdf
+        objectWillChange.send()
+        Swift.print("[App] deleteEmphasisInCard cardID=\(cardID) text=\(text) remainingEmphasis=\(card.emphasisList)")
     }
 
     func navigateToCard(_ card: NoteCard) {
@@ -724,6 +784,14 @@ final class AppModel: ObservableObject {
         return topic
     }
 
+    func createNewTopic(title: String = "MindMap Layer") -> Topic {
+        let topic = Topic(title: "\(title) \(topics.count + 1)")
+        try? database.insertTopic(topic)
+        reloadLibrary()
+        selectTopic(topic)
+        return topic
+    }
+
     private func reloadDocumentCards() {
         guard let md5 = manager?.md5 else {
             documentCards = []
@@ -739,112 +807,138 @@ struct StudyWorkspaceHeaderView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 12) {
-            // Back button (<) to Library
-            Button {
-                model.exitStudyWorkspace()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .help("Back to Notebooks")
-
-            // Undo / Redo
-            HStack(spacing: 4) {
+        VStack(spacing: 0) {
+            // Row 1: Study Tools (symmetrical with PDF tools row)
+            HStack(spacing: 12) {
+                // Back button (<) to Library
                 Button {
-                    model.undo()
+                    model.exitStudyWorkspace()
                 } label: {
-                    Image(systemName: "arrow.uturn.backward")
-                        .font(.system(size: 12))
-                        .foregroundStyle(model.canUndo ? Color.primary : Color.secondary.opacity(0.35))
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .frame(width: 26, height: 26)
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.canUndo)
-                .help("Undo (⌘Z)")
+                .help("Back to Notebooks")
 
+                // Undo / Redo
+                HStack(spacing: 2) {
+                    Button {
+                        model.undo()
+                    } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 12))
+                            .foregroundStyle(model.canUndo ? Color.primary : Color.secondary.opacity(0.35))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!model.canUndo)
+                    .help("Undo (⌘Z)")
+
+                    Button {
+                        model.redo()
+                    } label: {
+                        Image(systemName: "arrow.uturn.forward")
+                            .font(.system(size: 12))
+                            .foregroundStyle(model.canRedo ? Color.primary : Color.secondary.opacity(0.35))
+                            .frame(width: 24, height: 24)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!model.canRedo)
+                    .help("Redo (⇧⌘Z)")
+                }
+
+                // Outline Toggle
                 Button {
-                    model.redo()
+                    model.isOutlineVisible.toggle()
                 } label: {
-                    Image(systemName: "arrow.uturn.forward")
-                        .font(.system(size: 12))
-                        .foregroundStyle(model.canRedo ? Color.primary : Color.secondary.opacity(0.35))
-                        .frame(width: 24, height: 24)
+                    Image(systemName: "list.bullet")
+                        .font(.system(size: 13, weight: model.isOutlineVisible ? .bold : .regular))
+                        .foregroundStyle(model.isOutlineVisible ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(model.isOutlineVisible ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
+                        )
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.canRedo)
-                .help("Redo (⇧⌘Z)")
+                .help("Toggle Outline")
+
+                // Card Notes List / Editor Toggle
+                Button {
+                    if let selectedID = model.selectedCardID,
+                       let card = model.mindMapCards.first(where: { $0.id == selectedID }) {
+                        model.editingCard = card
+                    } else if let first = model.mindMapCards.first {
+                        model.editingCard = first
+                    }
+                } label: {
+                    Image(systemName: "square.and.pencil")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.secondary)
+                        .frame(width: 26, height: 26)
+                }
+                .buttonStyle(.plain)
+                .help("Edit Card")
+
+                // Export / Share Menu
+                Menu {
+                    Button("Export to Markdown…") { model.exportMarkdown() }
+                    Button("Export to OPML…") { model.exportOPML() }
+                    Button("Export to Anki (TSV)…") { model.exportAnki() }
+                    Divider()
+                    Button("Import MarginNote 3…") { model.importMarginNote() }
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Share / Export")
+
+                // More Options Menu (...)
+                Menu {
+                    Menu("View Mode") {
+                        Button(model.workspaceMode == .readerOnly ? "✓ Document Only (1-View)" : "Document Only (1-View)") {
+                            model.workspaceMode = .readerOnly
+                        }
+                        Button(model.workspaceMode == .splitView ? "✓ Split View (2-View)" : "Split View (2-View)") {
+                            model.workspaceMode = .splitView
+                        }
+                        Button(model.workspaceMode == .threeView ? "✓ Three View (3-View)" : "Three View (3-View)") {
+                            model.workspaceMode = .threeView
+                        }
+                        Button(model.workspaceMode == .mindMapOnly ? "✓ MindMap Only" : "MindMap Only") {
+                            model.workspaceMode = .mindMapOnly
+                        }
+                    }
+                    Divider()
+                    Button("Review Flashcards") { model.startReview() }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .help("Notebook Settings")
+
+                Spacer()
             }
-
-            // Outline Toggle
-            Button {
-                model.isOutlineVisible.toggle()
-            } label: {
-                Image(systemName: "list.bullet")
-                    .font(.system(size: 13, weight: model.isOutlineVisible ? .bold : .regular))
-                    .foregroundStyle(model.isOutlineVisible ? Color(red: 0.18, green: 0.65, blue: 0.65) : Color.secondary)
-                    .frame(width: 28, height: 28)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(model.isOutlineVisible ? Color(red: 0.18, green: 0.65, blue: 0.65).opacity(0.15) : Color.clear)
-                    )
-            }
-            .buttonStyle(.plain)
-            .help("Toggle Outline")
-
-            // Flashcards Review
-            Button {
-                model.startReview()
-            } label: {
-                Image(systemName: "rectangle.stack.badge.play")
-                    .font(.system(size: 13))
-                    .foregroundStyle(Color.secondary)
-                    .frame(width: 28, height: 28)
-            }
-            .buttonStyle(.plain)
-            .help("Review Flashcards")
-
-            // View Modes Picker
-            Picker("", selection: $model.workspaceMode) {
-                Text("1-View").tag(WorkspaceViewMode.readerOnly)
-                Text("2-View").tag(WorkspaceViewMode.splitView)
-                Text("3-View").tag(WorkspaceViewMode.threeView)
-                Text("MindMap").tag(WorkspaceViewMode.mindMapOnly)
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 240)
-
-            // Export Menu
-            Menu {
-                Button("Export to Markdown…") { model.exportMarkdown() }
-                Button("Export to OPML…") { model.exportOPML() }
-                Button("Export to Anki (TSV)…") { model.exportAnki() }
-                Divider()
-                Button("Import MarginNote 3…") { model.importMarginNote() }
-            } label: {
-                Image(systemName: "square.and.arrow.up")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-            }
-            .menuStyle(.borderlessButton)
-
-            Spacer()
-
-            // Document Tabs
-            WorkspaceDocumentTabs(model: model)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(MarginNoteTheme.headerBarBackground)
+            .overlay(
+                Rectangle()
+                    .frame(height: 0.5)
+                    .foregroundStyle(MarginNoteTheme.separatorColor),
+                alignment: .bottom
+            )
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(MarginNoteTheme.headerBarBackground)
-        .overlay(
-            Rectangle()
-                .frame(height: 0.5)
-                .foregroundStyle(MarginNoteTheme.separatorColor),
-            alignment: .bottom
-        )
     }
 }
 
@@ -916,16 +1010,17 @@ struct StudyWorkspaceView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            StudyWorkspaceHeaderView(model: model)
-
-            Group {
-                switch model.workspaceMode {
-                case .readerOnly:
+        Group {
+            switch model.workspaceMode {
+            case .readerOnly:
+                VStack(spacing: 0) {
+                    readerOnlyHeader
                     pdfPane
-                case .mindMapOnly:
-                    mindMapPane
-                case .splitView:
+                }
+            case .mindMapOnly:
+                mindMapPane
+            case .splitView:
+                ZStack {
                     if model.isOutlineVisible {
                         HSplitView {
                             outlinePane
@@ -943,15 +1038,55 @@ struct StudyWorkspaceView: View {
                                 .frame(minWidth: 400)
                         }
                     }
-                case .threeView:
-                    HSplitView {
-                        outlinePane
-                            .frame(minWidth: 200, idealWidth: 250, maxWidth: 340)
-                        mindMapPane
-                            .frame(minWidth: 340)
-                        pdfPane
-                            .frame(minWidth: 380)
+
+                    // Circular < > split view divider handle (MarginNote 3 signature)
+                    HStack(spacing: 0) {
+                        Button {
+                            if model.workspaceMode == .splitView {
+                                model.workspaceMode = .readerOnly
+                            }
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(Color(white: 0.35))
+                                .frame(width: 14, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Collapse MindMap (1-View)")
+
+                        Divider()
+                            .frame(height: 12)
+
+                        Button {
+                            if model.workspaceMode == .splitView {
+                                model.workspaceMode = .mindMapOnly
+                            }
+                        } label: {
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 8.5, weight: .bold))
+                                .foregroundStyle(Color(white: 0.35))
+                                .frame(width: 14, height: 22)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Collapse Document (MindMap Only)")
                     }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(
+                        Capsule()
+                            .fill(Color(white: 0.98))
+                            .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
+                            .overlay(Capsule().stroke(Color(white: 0.82), lineWidth: 0.75))
+                    )
+                }
+            case .threeView:
+                HSplitView {
+                    outlinePane
+                        .frame(minWidth: 200, idealWidth: 250, maxWidth: 340)
+                    mindMapPane
+                        .frame(minWidth: 340)
+                    pdfPane
+                        .frame(minWidth: 380)
                 }
             }
         }
@@ -968,29 +1103,76 @@ struct StudyWorkspaceView: View {
         }
     }
 
-    private var mindMapPane: some View {
-        MindMapCanvasView(
-            cards: model.mindMapCards,
-            links: model.links,
-            selectedCardID: model.selectedCardID,
-            activeToolbarOwner: model.activeToolbarOwner,
-            mediaStorage: model.mediaStorage,
-            onSelect: { card in
-                if let card { model.select(card: card) } else { model.deselect() }
-            },
-            onMove: model.move,
-            onReparent: model.reparent,
-            onToggleFold: model.toggleFold,
-            onChangeColor: { cardID, colorIdx in
-                model.changeCardColor(cardID: cardID, colorIndex: colorIdx)
-            },
-            onDeleteCard: { cardID in
-                model.delete(cardID: cardID)
-            },
-            onEditCard: { card in
-                model.editingCard = card
+    private var readerOnlyHeader: some View {
+        HStack(spacing: 12) {
+            Button {
+                model.exitStudyWorkspace()
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+                    .frame(width: 26, height: 26)
             }
+            .buttonStyle(.plain)
+            .help("Back to Library")
+
+            Button {
+                model.workspaceMode = .splitView
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Color.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Restore Split View")
+
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(MarginNoteTheme.headerBarBackground)
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundStyle(MarginNoteTheme.separatorColor),
+            alignment: .bottom
         )
+    }
+
+    private var mindMapPane: some View {
+        VStack(spacing: 0) {
+            StudyWorkspaceHeaderView(model: model)
+            MindMapCanvasView(
+                cards: model.mindMapCards,
+                links: model.links,
+                selectedCardID: model.selectedCardID,
+                activeToolbarOwner: model.activeToolbarOwner,
+                mediaStorage: model.mediaStorage,
+                topics: model.topics,
+                selectedTopic: model.selectedTopic,
+                onSelectTopic: { topic in
+                    model.selectTopic(topic)
+                },
+                onNewTopic: {
+                    _ = model.createNewTopic()
+                },
+                onSelect: { card in
+                    if let card { model.select(card: card) } else { model.deselect() }
+                },
+                onMove: model.move,
+                onReparent: model.reparent,
+                onToggleFold: model.toggleFold,
+                onChangeColor: { cardID, colorIdx in
+                    model.changeCardColor(cardID: cardID, colorIndex: colorIdx)
+                },
+                onDeleteCard: { cardID in
+                    model.delete(cardID: cardID)
+                },
+                onEditCard: { card in
+                    model.editingCard = card
+                }
+            )
+        }
     }
 
     private var outlinePane: some View {
@@ -1011,10 +1193,18 @@ struct StudyWorkspaceView: View {
         if let manager = model.manager {
             MarginNotePDFContainerView(
                 manager: manager,
-                cards: model.documentCards.isEmpty ? model.mindMapCards : model.documentCards,
+                cards: model.activePDFCards,
                 selectedCardID: model.selectedCardID,
                 activeToolbarOwner: model.activeToolbarOwner,
                 jumpTarget: model.jumpTarget,
+                studyDocuments: model.studyDocuments,
+                activeDocument: model.activeDocument,
+                onSwitchDocument: { doc in
+                    model.switchToDocument(doc)
+                },
+                onManageDocuments: {
+                    model.openPDFPicker(attachToTopic: true)
+                },
                 onExcerpt: { excerpt in
                     model.createExcerpt(excerpt)
                 },
@@ -1060,6 +1250,9 @@ struct StudyWorkspaceView: View {
                 },
                 onEmphasize: { cardID, text, rects in
                     model.emphasizeTextInCard(cardID: cardID, text: text, rects: rects)
+                },
+                onDeleteEmphasis: { cardID, text, rects in
+                    model.deleteEmphasisInCard(cardID: cardID, text: text, rects: rects)
                 }
             )
         } else {

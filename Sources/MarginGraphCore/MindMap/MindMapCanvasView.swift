@@ -7,6 +7,10 @@ public struct MindMapCanvasView: View {
     public var selectedCardID: UUID?
     public var activeToolbarOwner: ToolbarOwner
     public var mediaStorage: MediaStorage?
+    public var topics: [Topic]
+    public var selectedTopic: Topic?
+    public var onSelectTopic: ((Topic) -> Void)?
+    public var onNewTopic: (() -> Void)?
     public var onSelect: (NoteCard?) -> Void
     public var onMove: (UUID, CGPoint) -> Void
     public var onReparent: (UUID, UUID?) -> Void
@@ -25,6 +29,7 @@ public struct MindMapCanvasView: View {
     @State private var isDraggingHScroll = false
     @State private var hScrollStartPanX: CGFloat = 0
     @State private var isHoveringScrollbars = false
+    @State private var showMiniMap = false
 
     public init(
         cards: [NoteCard],
@@ -32,6 +37,10 @@ public struct MindMapCanvasView: View {
         selectedCardID: UUID? = nil,
         activeToolbarOwner: ToolbarOwner = .mindMap,
         mediaStorage: MediaStorage? = nil,
+        topics: [Topic] = [],
+        selectedTopic: Topic? = nil,
+        onSelectTopic: ((Topic) -> Void)? = nil,
+        onNewTopic: (() -> Void)? = nil,
         onSelect: @escaping (NoteCard?) -> Void,
         onMove: @escaping (UUID, CGPoint) -> Void,
         onReparent: @escaping (UUID, UUID?) -> Void,
@@ -45,6 +54,10 @@ public struct MindMapCanvasView: View {
         self.selectedCardID = selectedCardID
         self.activeToolbarOwner = activeToolbarOwner
         self.mediaStorage = mediaStorage
+        self.topics = topics
+        self.selectedTopic = selectedTopic
+        self.onSelectTopic = onSelectTopic
+        self.onNewTopic = onNewTopic
         self.onSelect = onSelect
         self.onMove = onMove
         self.onReparent = onReparent
@@ -96,7 +109,7 @@ public struct MindMapCanvasView: View {
                 .allowsHitTesting(false)
 
                 // Main MindMap Title Header
-                mainMindMapHeader(frames: frames)
+                mainMindMapHeader
 
                 // Note Cards
                 ForEach(visibleCards, id: \.id) { card in
@@ -111,16 +124,16 @@ public struct MindMapCanvasView: View {
                                 onSelect(card)
                             },
                             onToggleFold: { onToggleFold(card.id, !card.isFolded) },
-                            onEdit: { onEditCard?(card) }
+                            onEdit: { onEditCard?(card) },
+                            onComment: { onEditCard?(card) },
+                            onLink: {},
+                            onMerge: {},
+                            onBranchStyle: {}
                         )
                         .frame(width: frame.width, height: frame.height)
                         .scaleEffect(viewport.zoomScale)
                         .frame(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale)
                         .contentShape(RoundedRectangle(cornerRadius: 5 * viewport.zoomScale))
-                        .simultaneousGesture(TapGesture().onEnded {
-                            print("[MindMap] TapGesture onSelect: \(card.title)")
-                            onSelect(card)
-                        })
                         .gesture(nodeDrag(card: card, frame: frame, frames: frames))
                         .position(
                             x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY)).x,
@@ -129,80 +142,40 @@ public struct MindMapCanvasView: View {
                     }
                 }
 
-                // Floating Card Inspector Toolbar
-                if activeToolbarOwner == .mindMap,
-                   let selectedID = selectedCardID,
-                   let selectedCard = cards.first(where: { $0.id == selectedID }),
-                   let frame = frames[selectedID] {
-                    let cardPos = viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.minY))
-                    CardInspectorToolbar(
-                        card: selectedCard,
-                        onEdit: {
-                            onEditCard?(selectedCard)
-                        },
-                        onCopyTitle: {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(selectedCard.title, forType: .string)
-                        },
-                        onCopyContent: {
-                            NSPasteboard.general.clearContents()
-                            let content = !selectedCard.highlightText.isEmpty ? selectedCard.highlightText : (!selectedCard.notesText.isEmpty ? selectedCard.notesText : selectedCard.title)
-                            NSPasteboard.general.setString(content, forType: .string)
-                        },
-                        onChangeColor: { newColor in
-                            onChangeColor?(selectedID, newColor)
-                        },
-                        onDelete: {
-                            onDeleteCard?(selectedID)
-                        },
-                        onLink: {},
-                        onFocus: {}
+                // Bottom-left Mode Toggle (MarginNote 3 signature circular subtle button)
+                Button {
+                    canvasMode = canvasMode == "Drag" ? "Select" : "Drag"
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: canvasMode == "Drag" ? "hand.draw" : "arrow.up.left.and.arrow.down.right")
+                            .font(.system(size: 11))
+                        Text(canvasMode)
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(Color(white: 0.25))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(
+                        Capsule()
+                            .fill(Color(white: 0.98).opacity(0.85))
+                            .shadow(color: .black.opacity(0.10), radius: 4, y: 1)
                     )
-                    .position(x: cardPos.x, y: max(30, cardPos.y - 30 * viewport.zoomScale))
                 }
-
-                // Bottom-left "Drag" / "Select" Mode Control Pill (MarginNote 3 signature)
-                VStack(spacing: 0) {
-                    Button {
-                        canvasMode = "Drag"
-                    } label: {
-                        Text("Drag")
-                            .font(.system(size: 11, weight: canvasMode == "Drag" ? .semibold : .regular))
-                            .foregroundStyle(canvasMode == "Drag" ? .primary : .secondary)
-                            .frame(width: 52, height: 32)
-                    }
-                    .buttonStyle(.plain)
-
-                    Divider()
-                        .frame(width: 40)
-
-                    Button {
-                        canvasMode = "Select"
-                    } label: {
-                        Text("Select")
-                            .font(.system(size: 11, weight: canvasMode == "Select" ? .semibold : .regular))
-                            .foregroundStyle(canvasMode == "Select" ? .primary : .secondary)
-                            .frame(width: 52, height: 32)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .background(
-                    RoundedRectangle(cornerRadius: 18)
-                        .fill(Color(white: 0.98).opacity(0.85))
-                        .shadow(color: .black.opacity(0.12), radius: 6, y: 2)
-                )
-                .padding(16)
+                .buttonStyle(.plain)
+                .padding(14)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
 
-                // MiniMapView at bottom-right
-                MiniMapView(
-                    frames: Array(frames.values),
-                    viewport: $viewport,
-                    canvasSize: proxy.size
-                )
-                .frame(width: 140, height: 90)
-                .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                // MiniMapView at bottom-right (toggleable)
+                if showMiniMap {
+                    MiniMapView(
+                        frames: Array(frames.values),
+                        viewport: $viewport,
+                        canvasSize: proxy.size
+                    )
+                    .frame(width: 140, height: 90)
+                    .padding(16)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
 
                 // Draggable Vertical & Horizontal Scrollbars
                 scrollBars(proxy: proxy, frames: frames)
@@ -243,20 +216,56 @@ public struct MindMapCanvasView: View {
         }
     }
 
-    @ViewBuilder
-    private func mainMindMapHeader(frames: [UUID: CGRect]) -> some View {
-        if let first = frames.values.min(by: { $0.minY < $1.minY }) {
-            let screenPoint = viewport.canvasToScreen(CGPoint(x: first.minX + 30, y: first.minY - 24))
-            HStack(spacing: 4) {
-                Text("Main MindMap")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(white: 0.35))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(Color(white: 0.45))
+    private var mainMindMapHeader: some View {
+        VStack(spacing: 6) {
+            Divider()
+                .opacity(0.4)
+            HStack {
+                Spacer()
+                Menu {
+                    if !topics.isEmpty {
+                        ForEach(Array(topics.enumerated()), id: \.element.id) { index, topic in
+                            Button {
+                                onSelectTopic?(topic)
+                            } label: {
+                                let label = index == 0 ? "Main MindMap" : topic.title
+                                if topic.id == selectedTopic?.id {
+                                    Label(label, systemImage: "checkmark")
+                                } else {
+                                    Text(label)
+                                }
+                            }
+                        }
+                        Divider()
+                    }
+                    if let onNewTopic {
+                        Button("New MindMap Layer / Topic…") {
+                            onNewTopic()
+                        }
+                    }
+                } label: {
+                    let displayTitle: String = {
+                        if let selectedTopic, let first = topics.first, selectedTopic.id != first.id {
+                            return selectedTopic.title
+                        }
+                        return "Main MindMap"
+                    }()
+                    HStack(spacing: 5) {
+                        Text(displayTitle)
+                            .font(.system(size: 13, weight: .regular))
+                            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+                    }
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                Spacer()
             }
-            .position(screenPoint)
         }
+        .padding(.top, 4)
+        .frame(maxWidth: .infinity, alignment: .top)
     }
 
     private var grid: some View {
@@ -304,21 +313,24 @@ public struct MindMapCanvasView: View {
     }
 
     private func nodeDrag(card: NoteCard, frame: CGRect, frames: [UUID: CGRect]) -> some Gesture {
-        DragGesture(minimumDistance: 4)
+        DragGesture(minimumDistance: 0)
             .onChanged { value in
-                let canvasDelta = CGPoint(
-                    x: value.translation.width / viewport.zoomScale,
-                    y: value.translation.height / viewport.zoomScale
-                )
-                dragLocations[card.id] = CGPoint(
-                    x: frame.minX + canvasDelta.x,
-                    y: frame.minY + canvasDelta.y
-                )
+                let distance = hypot(value.translation.width, value.translation.height)
+                if distance > 3 {
+                    let canvasDelta = CGPoint(
+                        x: value.translation.width / viewport.zoomScale,
+                        y: value.translation.height / viewport.zoomScale
+                    )
+                    dragLocations[card.id] = CGPoint(
+                        x: frame.minX + canvasDelta.x,
+                        y: frame.minY + canvasDelta.y
+                    )
+                }
             }
             .onEnded { value in
                 let distance = hypot(value.translation.width, value.translation.height)
                 print("[MindMap] nodeDrag onEnded: card=\(card.title) distance=\(distance)")
-                if distance < 4 {
+                if distance <= 3 {
                     print("[MindMap] nodeDrag calling onSelect(\(card.title))")
                     onSelect(card)
                     return
@@ -332,6 +344,7 @@ public struct MindMapCanvasView: View {
                     dragLocations[card.id] = nil
                 } else if let position = dragLocations[card.id] {
                     onMove(card.id, position)
+                    dragLocations[card.id] = nil
                 }
             }
     }
