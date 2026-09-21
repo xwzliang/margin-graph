@@ -65,11 +65,15 @@ public struct OutlineSidebarView: View {
                 }
                 .menuStyle(.borderlessButton)
             }
-            .padding(10)
+            .padding(.horizontal, 10)
+            .frame(height: MarginNoteTheme.topToolbarHeight)
             .background(Color(white: 0.97))
-
-            Divider()
-                .background(MarginNoteTheme.separatorColor)
+            .overlay(
+                Rectangle()
+                    .frame(height: 0.5)
+                    .foregroundStyle(MarginNoteTheme.separatorColor),
+                alignment: .bottom
+            )
 
             // Rows List
             ScrollView {

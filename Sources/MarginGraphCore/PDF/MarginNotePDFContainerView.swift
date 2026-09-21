@@ -318,7 +318,7 @@ public struct MarginNotePDFContainerView: View {
                 }
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 7)
+            .frame(height: MarginNoteTheme.topToolbarHeight)
             .background(MarginNoteTheme.headerBarBackground)
             .overlay(
                 Rectangle()

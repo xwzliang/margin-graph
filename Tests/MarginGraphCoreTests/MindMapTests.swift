@@ -765,6 +765,10 @@ final class MindMapTests: XCTestCase {
         XCTAssertEqual(screenCenter.x, 400, accuracy: 0.001)
         XCTAssertEqual(screenCenter.y, 300, accuracy: 0.001)
     }
+
+    func testTopToolbarHeightIsStandardized() {
+        XCTAssertEqual(MarginNoteTheme.topToolbarHeight, 44.0)
+    }
 }
 
 

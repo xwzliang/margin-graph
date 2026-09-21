@@ -1440,7 +1440,7 @@ struct StudyWorkspaceHeaderView: View {
                 .marginNoteTooltip("Notebook Settings")
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 7)
+            .frame(height: MarginNoteTheme.topToolbarHeight)
             .background(MarginNoteTheme.headerBarBackground)
             .overlay(
                 Rectangle()
@@ -1983,7 +1983,7 @@ struct StudyWorkspaceView: View {
             Spacer()
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 7)
+        .frame(height: MarginNoteTheme.topToolbarHeight)
         .background(MarginNoteTheme.headerBarBackground)
         .overlay(
             Rectangle()

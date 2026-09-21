@@ -106,6 +106,10 @@ Structure each entry concisely with actionable rules:
   In floating toolbars with multiple buttons and color swatches, SwiftUI may greedily truncate text labels (e.g. displaying `"Sib..."` instead of `"Sibling"`) if the toolbar frame width is constrained.
   **Rule**: Always apply `.fixedSize(horizontal: true, vertical: false)` to button text labels in floating toolbars, and size the toolbar frame with adequate width buffer (e.g. 380px) to prevent truncation.
 
+- **Unified Top Toolbar Height Across Split Panes**:
+  - **Trap**: Relying on vertical padding (`.padding(.vertical, 7)`) for top toolbars across sibling panes (e.g. Outline Sidebar, MindMap View, and PDF View). Sibling view hierarchies often contain buttons or controls of different intrinsic heights (e.g. 32pt in MindMap header vs 28pt in PDF toolbar vs 24pt in search bar). Symmetric vertical padding results in mismatched total bar heights (e.g. 46pt vs 42pt), breaking horizontal alignment of bottom separator lines across the divider.
+  - **Rule**: Standardize top toolbars to an explicit shared height constant (`MarginNoteTheme.topToolbarHeight: CGFloat = 44.0`) with identical bottom overlay separator lines (`Rectangle().frame(height: 0.5).foregroundStyle(MarginNoteTheme.separatorColor), alignment: .bottom`) so all headers align into an unbroken horizontal line across the entire window.
+
 ## Inline Canvas Text Editing & Gesture Disambiguation
 - **Disambiguating Single Tap vs Double Tap on Canvas**:
   In SwiftUI on macOS, attaching both `.onTapGesture(count: 2)` and `.onTapGesture(count: 1)` to the same view without explicit exclusion causes the single-tap gesture to fire immediately on the first click of a double-click sequence, creating a race condition where single-tap deselects or commits state right as double-tap creates a note.
