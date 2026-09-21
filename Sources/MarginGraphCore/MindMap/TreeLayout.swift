@@ -158,7 +158,7 @@ public enum TreeLayout {
         return arrow
     }
 
-    private static func cardOrder(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
+    public static func cardOrder(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
         if let ly = lhs.mindPos?.y, let ry = rhs.mindPos?.y, ly != ry {
             return ly < ry
         }

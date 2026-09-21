@@ -681,6 +681,10 @@ public struct PDFReaderView: NSViewRepresentable {
         view.pageBreakMargins = NSEdgeInsets(top: 0.25, left: 0, bottom: 0.25, right: 0)
         view.backgroundColor = NSColor(white: 0.92, alpha: 1.0)
         view.document = manager.document
+        if currentPageIndex > 0, let page = view.document?.page(at: currentPageIndex) {
+            view.go(to: page)
+            context.coordinator.lastPageIndex = currentPageIndex
+        }
         configure(view)
         context.coordinator.setupObserver(for: view)
         return view
@@ -1225,6 +1229,10 @@ public final class InteractivePDFView: PDFView {
     }
 
     func updateToolbarPosition() {
+        guard activeToolbarOwner == .pdf else {
+            hideToolbar()
+            return
+        }
         if let emp = selectedEmphasisPhrase,
            let doc = document,
            let page = doc.page(at: emp.hitLine.page) {

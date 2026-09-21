@@ -35,6 +35,7 @@ public struct MindMapCanvasView: View {
     @State private var draggingCardID: UUID? = nil
     @State private var hoverTargetCardID: UUID? = nil
     @State private var layoutResult: TreeLayoutResult
+    @State private var hasInitialFitted = false
 
     public init(
         cards: [NoteCard],
@@ -87,6 +88,11 @@ public struct MindMapCanvasView: View {
                 .coordinateSpace(name: "MindMapCanvas")
                 .onChange(of: cards) { _, newCards in
                     layoutResult = TreeLayout.layout(cards: newCards)
+                    if let selectedID = selectedCardID, let frame = layoutResult.frames[selectedID] {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            viewport.center(on: frame)
+                        }
+                    }
                 }
                 .clipped()
                 .focusable()
@@ -105,11 +111,20 @@ public struct MindMapCanvasView: View {
                     viewport: $viewport
                 ))
                 .onAppear {
-                    viewport.viewportSize = proxy.size
-                    viewport.zoomToFit(nodes: Array(frames.values))
+                    if proxy.size.width > 20 && proxy.size.height > 20 {
+                        viewport.viewportSize = proxy.size
+                    }
+                    if !hasInitialFitted && !cards.isEmpty {
+                        viewport.zoomToFit(nodes: Array(frames.values))
+                        hasInitialFitted = true
+                    }
                 }
                 .onChange(of: proxy.size) { _, size in
+                    guard size.width > 20 && size.height > 20 else { return }
                     viewport.viewportSize = size
+                }
+                .onChange(of: selectedTopic?.id) { _, _ in
+                    hasInitialFitted = false
                 }
                 .onChange(of: selectedCardID) { _, newID in
                     if let newID, let frame = frames[newID] {
@@ -182,6 +197,31 @@ public struct MindMapCanvasView: View {
 
             // Note Cards with Viewport Culling
             cardsView(visibleCards: visibleCards, frames: frames, staticFrames: layout.frames, canvasSize: proxy.size)
+
+            // Dedicated MindMap Card Floating Toolbar
+            if activeToolbarOwner == .mindMap,
+               draggingCardID == nil,
+               let selectedID = selectedCardID,
+               let card = cards.first(where: { $0.id == selectedID }),
+               let cardFrame = frames[card.id] {
+                let toolbarWidth: CGFloat = 380
+                let toolbarHeight: CGFloat = 34
+                let screenMinX = cardFrame.minX * viewport.zoomScale + viewport.panOffset.x
+                let screenMinY = cardFrame.minY * viewport.zoomScale + viewport.panOffset.y
+                let screenW = cardFrame.width * viewport.zoomScale
+                let screenH = (cardFrame.height + 28) * viewport.zoomScale
+                let idealX = screenMinX + (screenW - toolbarWidth) / 2
+                let clampedX = max(12, min(idealX, proxy.size.width - toolbarWidth - 12))
+                let idealY = (screenMinY - toolbarHeight - 8 >= 48)
+                    ? (screenMinY - toolbarHeight - 8)
+                    : (screenMinY + screenH + 8)
+                let clampedY = max(48, min(idealY, proxy.size.height - toolbarHeight - 12))
+
+                mindMapCardToolbar(card: card)
+                    .frame(width: toolbarWidth, height: toolbarHeight)
+                    .offset(x: clampedX, y: clampedY)
+                    .zIndex(180)
+            }
 
             // Main MindMap Floating Header (MarginNote 3 signature)
             HStack {
@@ -310,7 +350,9 @@ public struct MindMapCanvasView: View {
                     },
                     onDelete: {
                         onDeleteCard?(card.id)
-                    }
+                    },
+                    onNewSibling: onNewSibling != nil ? { onNewSibling?(card.id) } : nil,
+                    onNewChild: onNewChild != nil ? { onNewChild?(card.id) } : nil
                 )
                 .frame(width: frame.width, height: frame.height + extraHeight)
                 .overlay {
@@ -398,6 +440,135 @@ public struct MindMapCanvasView: View {
         } label: {
             Label("Delete Note", systemImage: "trash")
         }
+    }
+
+    @ViewBuilder
+    private func toolbarSiblingButton(cardID: UUID) -> some View {
+        Button {
+            onNewSibling?(cardID)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "rectangle.stack.badge.plus")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Sibling")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.12))
+            )
+        }
+        .buttonStyle(.plain)
+        .marginNoteTooltip("Add Sibling Note (Return)")
+    }
+
+    @ViewBuilder
+    private func toolbarChildButton(cardID: UUID) -> some View {
+        Button {
+            onNewChild?(cardID)
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.turn.down.right")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Child")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color.white.opacity(0.12))
+            )
+        }
+        .buttonStyle(.plain)
+        .marginNoteTooltip("Add Child Note (Tab)")
+    }
+
+    @ViewBuilder
+    private func toolbarColorPalette(card: NoteCard) -> some View {
+        HStack(spacing: 5) {
+            ForEach(0..<6, id: \.self) { idx in
+                let isSelectedColor = (card.colorIndex == idx)
+                let colors = MarginNoteTheme.cardColors(for: idx)
+                Button {
+                    onChangeColor?(card.id, idx)
+                } label: {
+                    Circle()
+                        .fill(colors.accent)
+                        .frame(width: 13, height: 13)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white, lineWidth: isSelectedColor ? 2.2 : 0)
+                        )
+                        .frame(width: 17, height: 17)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Change Color")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func toolbarActionButtons(card: NoteCard) -> some View {
+        HStack(spacing: 4) {
+            Button {
+                onEditCard?(card)
+            } label: {
+                Image(systemName: "pencil")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.white.opacity(0.9))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .marginNoteTooltip("Edit Note")
+
+            Button {
+                onDeleteCard?(card.id)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color(red: 0.95, green: 0.40, blue: 0.40))
+                    .frame(width: 22, height: 22)
+            }
+            .buttonStyle(.plain)
+            .marginNoteTooltip("Delete Note (Delete)")
+        }
+    }
+
+    @ViewBuilder
+    private func mindMapCardToolbar(card: NoteCard) -> some View {
+        HStack(spacing: 6) {
+            toolbarSiblingButton(cardID: card.id)
+            toolbarChildButton(cardID: card.id)
+
+            Divider()
+                .frame(height: 14)
+                .overlay(Color.white.opacity(0.25))
+                .padding(.horizontal, 2)
+
+            toolbarColorPalette(card: card)
+
+            Divider()
+                .frame(height: 14)
+                .overlay(Color.white.opacity(0.25))
+                .padding(.horizontal, 2)
+
+            toolbarActionButtons(card: card)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color(white: 0.17).opacity(0.96))
+        )
+        .shadow(color: Color.black.opacity(0.35), radius: 6, y: 3)
     }
 
     private var bottomLeftControls: some View {

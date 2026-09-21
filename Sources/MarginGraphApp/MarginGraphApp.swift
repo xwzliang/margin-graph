@@ -39,6 +39,7 @@ final class AppModel: ObservableObject {
     @Published var editingCard: NoteCard? = nil
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
+    @Published var documentCurrentPage: [String: Int] = [:]
 
     let database: Database
     let mediaStorage: MediaStorage
@@ -481,7 +482,7 @@ final class AppModel: ObservableObject {
     func select(card: NoteCard) {
         print("[App] select card: id=\(card.id) title='\(card.title)' page=\(card.startPage ?? -1)")
         selectedCardID = card.id
-        activeToolbarOwner = .pdf
+        activeToolbarOwner = .mindMap
         navigateToCard(card)
     }
 
@@ -873,39 +874,94 @@ final class AppModel: ObservableObject {
 
     func createChildCard(under parentID: UUID) {
         let topic = ensureTopic()
-        var newCard = NoteCard(
-            topicId: topic.id,
-            title: "New Note",
-            groupNoteId: parentID,
-            colorIndex: 0
-        )
-        if let parent = try? database.getCard(id: parentID) {
-            newCard.colorIndex = parent.colorIndex
-            newCard.bookMD5 = parent.bookMD5
-            newCard.startPage = parent.startPage
+        if var parent = mindMapCards.first(where: { $0.id == parentID }) ?? (try? database.getCard(id: parentID)), parent.isFolded {
+            parent.isFolded = false
+            try? database.updateCard(parent)
         }
+        guard let parent = mindMapCards.first(where: { $0.id == parentID }) ?? (try? database.getCard(id: parentID)) else { return }
+
+        let allCardsInTopic = (try? database.cardsForTopic(id: parent.topicId)) ?? mindMapCards
+        let existingChildren = allCardsInTopic
+            .filter { $0.groupNoteId == parentID }
+            .sorted(by: TreeLayout.cardOrder)
+
+        var targetMindPos: CGPoint? = nil
+        var targetCreatedAt = Date()
+        if let lastChild = existingChildren.last {
+            if let ly = lastChild.mindPos?.y {
+                targetMindPos = CGPoint(x: lastChild.mindPos?.x ?? 0, y: ly + 100)
+            }
+            targetCreatedAt = lastChild.createdAt.addingTimeInterval(1.0)
+        } else {
+            if let py = parent.mindPos?.y {
+                targetMindPos = CGPoint(x: (parent.mindPos?.x ?? 0) + 260, y: py)
+            }
+            targetCreatedAt = parent.createdAt.addingTimeInterval(1.0)
+        }
+
+        var newCard = NoteCard(
+            topicId: parent.topicId,
+            title: "",
+            groupNoteId: parentID,
+            colorIndex: parent.colorIndex
+        )
+        newCard.bookMD5 = parent.bookMD5
+        newCard.startPage = parent.startPage
+        newCard.mindPos = targetMindPos
+        newCard.createdAt = targetCreatedAt
+
         try? database.insertCard(newCard)
         selectedCardID = newCard.id
+        activeToolbarOwner = .mindMap
         reloadStudySet()
-        editingCard = newCard
         objectWillChange.send()
     }
 
     func createSiblingCard(after siblingID: UUID) {
         let topic = ensureTopic()
-        let sibling = try? database.getCard(id: siblingID)
+        guard let sibling = mindMapCards.first(where: { $0.id == siblingID })
+            ?? (try? database.getCard(id: siblingID)) else { return }
+
+        let allCardsInTopic = (try? database.cardsForTopic(id: sibling.topicId)) ?? mindMapCards
+        let siblings = allCardsInTopic
+            .filter { $0.groupNoteId == sibling.groupNoteId }
+            .sorted(by: TreeLayout.cardOrder)
+
+        var targetMindPos: CGPoint? = nil
+        var targetCreatedAt = Date()
+
+        if let idx = siblings.firstIndex(where: { $0.id == sibling.id }) {
+            if idx + 1 < siblings.count {
+                let nextSib = siblings[idx + 1]
+                if let sy = sibling.mindPos?.y, let ny = nextSib.mindPos?.y {
+                    targetMindPos = CGPoint(x: sibling.mindPos?.x ?? 0, y: (sy + ny) / 2)
+                }
+                let t1 = sibling.createdAt.timeIntervalSince1970
+                let t2 = nextSib.createdAt.timeIntervalSince1970
+                targetCreatedAt = Date(timeIntervalSince1970: (t1 + t2) / 2)
+            } else {
+                if let sy = sibling.mindPos?.y {
+                    targetMindPos = CGPoint(x: sibling.mindPos?.x ?? 0, y: sy + 100)
+                }
+                targetCreatedAt = sibling.createdAt.addingTimeInterval(1.0)
+            }
+        }
+
         var newCard = NoteCard(
-            topicId: topic.id,
-            title: "New Note",
-            groupNoteId: sibling?.groupNoteId,
-            colorIndex: sibling?.colorIndex ?? 0
+            topicId: sibling.topicId,
+            title: "",
+            groupNoteId: sibling.groupNoteId,
+            colorIndex: sibling.colorIndex
         )
-        newCard.bookMD5 = sibling?.bookMD5
-        newCard.startPage = sibling?.startPage
+        newCard.bookMD5 = sibling.bookMD5
+        newCard.startPage = sibling.startPage
+        newCard.mindPos = targetMindPos
+        newCard.createdAt = targetCreatedAt
+
         try? database.insertCard(newCard)
         selectedCardID = newCard.id
+        activeToolbarOwner = .mindMap
         reloadStudySet()
-        editingCard = newCard
         objectWillChange.send()
     }
 
@@ -1259,6 +1315,7 @@ struct StudyWorkspaceView: View {
     @ObservedObject var model: AppModel
 
     @State private var pdfWidth: CGFloat? = nil
+    @State private var savedSplitPDFWidth: CGFloat? = nil
     @State private var dragStartPDFWidth: CGFloat? = nil
     @State private var isDraggingSplitDivider: Bool = false
     @State private var liveDividerX: CGFloat? = nil
@@ -1271,155 +1328,166 @@ struct StudyWorkspaceView: View {
             let totalWidth = workspaceGeo.size.width
             let totalHeight = workspaceGeo.size.height
 
-            Group {
-                switch model.workspaceMode {
-                case .readerOnly:
-                    ZStack(alignment: .topLeading) {
-                        VStack(spacing: 0) {
-                            readerOnlyHeader
-                            pdfPane
-                        }
-                        .frame(width: totalWidth, height: totalHeight)
+            let isReaderOnly = model.workspaceMode == .readerOnly
+            let isMindMapOnly = model.workspaceMode == .mindMapOnly
+            let showOutline = (model.workspaceMode == .threeView || (model.workspaceMode == .splitView && model.isOutlineVisible)) && !isReaderOnly && !isMindMapOnly
+            let currentOutlineWidth = showOutline ? outlineWidth : 0
+            let availableMainWidth = max(680, totalWidth - currentOutlineWidth)
 
-                        // Left edge restore handle (MarginNote 3 signature half-pill)
-                        edgeRestoreHandle(side: .leading)
-                            .frame(width: 26, height: 28)
-                            .offset(x: 0, y: totalHeight * 0.74 - 14)
-                            .zIndex(200)
-                    }
+            let minPDF: CGFloat = 360
+            let minMindMap: CGFloat = 320
+            let maxPDF: CGFloat = max(minPDF, availableMainWidth - minMindMap)
 
-                case .mindMapOnly:
-                    ZStack(alignment: .topLeading) {
-                        mindMapPane
-                            .frame(width: totalWidth, height: totalHeight)
+            let currentPDFWidth: CGFloat = {
+                let base = pdfWidth ?? (availableMainWidth * 0.5)
+                return min(max(minPDF, base), maxPDF)
+            }()
 
-                        // Right edge restore handle (MarginNote 3 signature half-pill)
-                        edgeRestoreHandle(side: .trailing)
-                            .frame(width: 26, height: 28)
-                            .offset(x: totalWidth - 26, y: totalHeight * 0.74 - 14)
-                            .zIndex(200)
-                    }
+            let currentMindMapWidth = max(minMindMap, availableMainWidth - currentPDFWidth)
+            let committedDividerX = currentOutlineWidth + currentMindMapWidth
+            let activeDividerX = (isDraggingSplitDivider && liveDividerX != nil) ? liveDividerX! : committedDividerX
 
-                case .splitView, .threeView:
-                    let showOutline = model.workspaceMode == .threeView || (model.workspaceMode == .splitView && model.isOutlineVisible)
-                    let currentOutlineWidth = showOutline ? outlineWidth : 0
-                    let availableMainWidth = max(700, totalWidth - currentOutlineWidth)
+            ZStack(alignment: .topLeading) {
+                // 1. Outline Pane (if shown)
+                if showOutline {
+                    outlinePane
+                        .frame(width: outlineWidth, height: totalHeight)
+                        .offset(x: 0, y: 0)
 
-                    let minPDF: CGFloat = 360
-                    let minMindMap: CGFloat = 320
-                    let maxPDF: CGFloat = max(minPDF, availableMainWidth - minMindMap)
-
-                    let currentPDFWidth: CGFloat = {
-                        let base = pdfWidth ?? (availableMainWidth * 0.5)
-                        return min(max(minPDF, base), maxPDF)
-                    }()
-
-                    let currentMindMapWidth = max(minMindMap, availableMainWidth - currentPDFWidth)
-                    let committedDividerX = totalWidth - currentPDFWidth
-                    let activeDividerX = (isDraggingSplitDivider && liveDividerX != nil) ? liveDividerX! : committedDividerX
-
-                    ZStack(alignment: .topLeading) {
-                        // Panes Layout
-                        HStack(spacing: 0) {
-                            if showOutline {
-                                outlinePane
-                                    .frame(width: outlineWidth)
-
-                                // Outline separator line
-                                Rectangle()
-                                    .fill(MarginNoteTheme.separatorColor)
-                                    .frame(width: 1)
-                                    .background(
-                                        Rectangle()
-                                            .fill(Color.clear)
-                                            .frame(width: 7)
-                                            .contentShape(Rectangle())
-                                    )
-                                    .onHover { inside in
-                                        if inside {
-                                            NSCursor.resizeLeftRight.set()
-                                        } else if dragStartOutlineWidth == nil {
-                                            NSCursor.arrow.set()
-                                            NSApp.keyWindow?.resetCursorRects()
-                                        }
-                                    }
-                                    .gesture(
-                                        DragGesture(minimumDistance: 1)
-                                            .onChanged { gesture in
-                                                if dragStartOutlineWidth == nil {
-                                                    dragStartOutlineWidth = outlineWidth
-                                                }
-                                                NSCursor.resizeLeftRight.set()
-                                                guard let start = dragStartOutlineWidth else { return }
-                                                let newW = start + gesture.translation.width
-                                                outlineWidth = min(max(180, newW), 340)
-                                            }
-                                            .onEnded { _ in
-                                                dragStartOutlineWidth = nil
-                                                NSCursor.arrow.set()
-                                                NSApp.keyWindow?.resetCursorRects()
-                                            }
-                                    )
-                            }
-
-                            mindMapPane
-                                .frame(width: currentMindMapWidth)
-
-                            pdfPane
-                                .frame(width: currentPDFWidth)
-                        }
-                        .frame(width: totalWidth, height: totalHeight)
-
-                        // Highlighted guide line while actively dragging
-                        if isDraggingSplitDivider {
+                    // Outline separator line
+                    Rectangle()
+                        .fill(MarginNoteTheme.separatorColor)
+                        .frame(width: 1, height: totalHeight)
+                        .background(
                             Rectangle()
-                                .fill(Color.accentColor.opacity(0.85))
-                                .frame(width: 2, height: totalHeight)
-                                .shadow(color: Color.black.opacity(0.18), radius: 2)
-                                .offset(x: activeDividerX - 1, y: 0)
-                                .allowsHitTesting(false)
-                                .zIndex(190)
+                                .fill(Color.clear)
+                                .frame(width: 7)
+                                .contentShape(Rectangle())
+                        )
+                        .offset(x: outlineWidth, y: 0)
+                        .onHover { inside in
+                            if inside {
+                                NSCursor.resizeLeftRight.set()
+                            } else if dragStartOutlineWidth == nil {
+                                NSCursor.arrow.set()
+                                NSApp.keyWindow?.resetCursorRects()
+                            }
                         }
-
-                        // Draggable Split Divider Line between MindMap and PDF
-                        Rectangle()
-                            .fill(MarginNoteTheme.separatorColor)
-                            .frame(width: 1, height: totalHeight)
-                            .frame(width: 9, height: totalHeight)
-                            .contentShape(Rectangle())
-                            .onHover { inside in
-                                if inside {
+                        .gesture(
+                            DragGesture(minimumDistance: 1)
+                                .onChanged { gesture in
+                                    if dragStartOutlineWidth == nil {
+                                        dragStartOutlineWidth = outlineWidth
+                                    }
                                     NSCursor.resizeLeftRight.set()
-                                } else if !isDraggingSplitDivider {
+                                    guard let start = dragStartOutlineWidth else { return }
+                                    let newW = start + gesture.translation.width
+                                    outlineWidth = min(max(180, newW), 340)
+                                }
+                                .onEnded { _ in
+                                    dragStartOutlineWidth = nil
                                     NSCursor.arrow.set()
                                     NSApp.keyWindow?.resetCursorRects()
                                 }
-                            }
-                            .gesture(
-                                makeSplitDragGesture(
-                                    totalWidth: totalWidth,
-                                    currentPDFWidth: currentPDFWidth,
-                                    minPDF: minPDF,
-                                    maxPDF: maxPDF
-                                )
-                            )
-                            .offset(x: activeDividerX - 4.5, y: 0)
-                            .zIndex(150)
-
-                        // MarginNote 3 Signature Floating < • > Split Divider Pill
-                        splitDividerPill(
-                            totalWidth: totalWidth,
-                            currentPDFWidth: currentPDFWidth,
-                            minPDF: minPDF,
-                            maxPDF: maxPDF
                         )
-                        .frame(width: 52, height: 28)
-                        .offset(x: activeDividerX - 26, y: totalHeight * 0.74 - 14)
-                        .zIndex(200)
+                }
+
+                // 2. MindMap Pane (always kept mounted, offset offscreen when readerOnly)
+                mindMapPane
+                    .frame(
+                        width: isMindMapOnly ? totalWidth : currentMindMapWidth,
+                        height: totalHeight
+                    )
+                    .offset(
+                        x: isReaderOnly ? -currentMindMapWidth - 100 : currentOutlineWidth,
+                        y: 0
+                    )
+                    .opacity(isReaderOnly ? 0 : 1)
+                    .allowsHitTesting(!isReaderOnly)
+
+                // 3. PDF Pane (always kept mounted, with readerOnlyHeader when readerOnly)
+                VStack(spacing: 0) {
+                    if isReaderOnly {
+                        readerOnlyHeader
                     }
+                    pdfPane
+                }
+                .frame(
+                    width: isReaderOnly ? totalWidth : currentPDFWidth,
+                    height: totalHeight
+                )
+                .offset(
+                    x: isReaderOnly ? 0 : (isMindMapOnly ? totalWidth + 100 : currentOutlineWidth + currentMindMapWidth),
+                    y: 0
+                )
+                .opacity(isMindMapOnly ? 0 : 1)
+                .allowsHitTesting(!isMindMapOnly)
+
+                // 4. Split Divider Line & Pill (only in split / three view)
+                if !isReaderOnly && !isMindMapOnly {
+                    if isDraggingSplitDivider {
+                        Rectangle()
+                            .fill(Color.accentColor.opacity(0.85))
+                            .frame(width: 2, height: totalHeight)
+                            .shadow(color: Color.black.opacity(0.18), radius: 2)
+                            .offset(x: activeDividerX - 1, y: 0)
+                            .allowsHitTesting(false)
+                            .zIndex(190)
+                    }
+
+                    Rectangle()
+                        .fill(MarginNoteTheme.separatorColor)
+                        .frame(width: 1, height: totalHeight)
+                        .frame(width: 9, height: totalHeight)
+                        .contentShape(Rectangle())
+                        .onHover { inside in
+                            if inside {
+                                NSCursor.resizeLeftRight.set()
+                            } else if !isDraggingSplitDivider {
+                                NSCursor.arrow.set()
+                                NSApp.keyWindow?.resetCursorRects()
+                            }
+                        }
+                        .gesture(
+                            makeSplitDragGesture(
+                                totalWidth: totalWidth,
+                                currentPDFWidth: currentPDFWidth,
+                                minPDF: minPDF,
+                                maxPDF: maxPDF
+                            )
+                        )
+                        .offset(x: activeDividerX - 4.5, y: 0)
+                        .zIndex(150)
+
+                    splitDividerPill(
+                        totalWidth: totalWidth,
+                        currentPDFWidth: currentPDFWidth,
+                        minPDF: minPDF,
+                        maxPDF: maxPDF
+                    )
+                    .frame(width: 52, height: 28)
+                    .offset(x: activeDividerX - 26, y: totalHeight * 0.74 - 14)
+                    .zIndex(200)
+                }
+
+                // 5. Left edge restore handle (MarginNote 3 signature half-pill)
+                if isReaderOnly {
+                    edgeRestoreHandle(side: .leading)
+                        .frame(width: 26, height: 28)
+                        .offset(x: 0, y: totalHeight * 0.74 - 14)
+                        .zIndex(200)
+                }
+
+                // 6. Right edge restore handle (MarginNote 3 signature half-pill)
+                if isMindMapOnly {
+                    edgeRestoreHandle(side: .trailing)
+                        .frame(width: 26, height: 28)
+                        .offset(x: totalWidth - 26, y: totalHeight * 0.74 - 14)
+                        .zIndex(200)
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(width: totalWidth, height: totalHeight, alignment: .topLeading)
+            .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $model.editingCard) { card in
@@ -1518,6 +1586,7 @@ struct StudyWorkspaceView: View {
         HStack(spacing: 1) {
             Button {
                 guard !isDraggingSplitDivider else { return }
+                savedSplitPDFWidth = currentPDFWidth
                 withAnimation(.easeInOut(duration: 0.2)) {
                     model.workspaceMode = .readerOnly
                 }
@@ -1538,6 +1607,7 @@ struct StudyWorkspaceView: View {
 
             Button {
                 guard !isDraggingSplitDivider else { return }
+                savedSplitPDFWidth = currentPDFWidth
                 withAnimation(.easeInOut(duration: 0.2)) {
                     model.workspaceMode = .mindMapOnly
                 }
@@ -1595,6 +1665,9 @@ struct StudyWorkspaceView: View {
         return Button {
             withAnimation(.easeInOut(duration: 0.2)) {
                 model.workspaceMode = .splitView
+                if let saved = savedSplitPDFWidth {
+                    self.pdfWidth = saved
+                }
             }
         } label: {
             HStack(spacing: 0) {
@@ -1642,6 +1715,9 @@ struct StudyWorkspaceView: View {
                     if triggered {
                         withAnimation(.easeOut(duration: 0.2)) {
                             model.workspaceMode = .splitView
+                            if let saved = savedSplitPDFWidth {
+                                self.pdfWidth = saved
+                            }
                         }
                     }
                 }
@@ -1667,7 +1743,12 @@ struct StudyWorkspaceView: View {
             .marginNoteTooltip("Back to Notebooks")
 
             Button {
-                model.workspaceMode = .splitView
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.workspaceMode = .splitView
+                    if let saved = savedSplitPDFWidth {
+                        self.pdfWidth = saved
+                    }
+                }
             } label: {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 13))
@@ -1760,6 +1841,10 @@ struct StudyWorkspaceView: View {
                 studyDocuments: model.studyDocuments,
                 activeDocument: model.activeDocument,
                 bookmarks: model.documentBookmarks,
+                initialPageIndex: model.documentCurrentPage[manager.md5] ?? 0,
+                onPageChanged: { [weak model] page in
+                    model?.documentCurrentPage[manager.md5] = page
+                },
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
                 },

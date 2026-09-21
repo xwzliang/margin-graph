@@ -362,4 +362,73 @@ final class MindMapTests: XCTestCase {
         viewport.resetZoom()
         XCTAssertEqual(viewport.zoomScale, 1.0, accuracy: 0.001)
     }
+
+    func testSiblingCardCreationInheritsParentOrNil() {
+        let topicID = UUID()
+        let root = NoteCard(id: UUID(), topicId: topicID, title: "Root", groupNoteId: nil)
+        let child = NoteCard(id: UUID(), topicId: topicID, title: "Child", groupNoteId: root.id)
+
+        // Sibling of root has same parent (nil)
+        let rootSibling = NoteCard(id: UUID(), topicId: topicID, title: "", groupNoteId: root.groupNoteId)
+        XCTAssertNil(rootSibling.groupNoteId)
+
+        // Sibling of child has same parent (root.id)
+        let childSibling = NoteCard(id: UUID(), topicId: topicID, title: "", groupNoteId: child.groupNoteId)
+        XCTAssertEqual(childSibling.groupNoteId, root.id)
+    }
+
+    func testChildCardCreationSetsParentAndUnfolds() {
+        let topicID = UUID()
+        var parent = NoteCard(id: UUID(), topicId: topicID, title: "Parent", isFolded: true)
+
+        let child = NoteCard(id: UUID(), topicId: topicID, title: "", groupNoteId: parent.id)
+        XCTAssertEqual(child.groupNoteId, parent.id)
+
+        if parent.isFolded {
+            parent.isFolded = false
+        }
+        XCTAssertFalse(parent.isFolded)
+
+        let result = TreeLayout.layout(cards: [parent, child])
+        XCTAssertTrue(result.visibleCardIDs.contains(child.id))
+    }
+
+    func testEmptyCardLayoutAndDimensions() {
+        let topicID = UUID()
+        let emptyCard = NoteCard(id: UUID(), topicId: topicID, title: "")
+        let height = TreeLayout.estimatedCardHeight(for: emptyCard)
+        XCTAssertGreaterThanOrEqual(height, 56.0)
+
+        let result = TreeLayout.layout(cards: [emptyCard])
+        let frame = try! XCTUnwrap(result.frames[emptyCard.id])
+        XCTAssertGreaterThan(frame.width, 0)
+        XCTAssertGreaterThan(frame.height, 0)
+    }
+
+    func testSiblingCardOrderingInTreeLayout() {
+        let topicID = UUID()
+        var cardA = NoteCard(id: UUID(), topicId: topicID, title: "Card A")
+        cardA.mindPos = CGPoint(x: 100, y: 100)
+        cardA.createdAt = Date(timeIntervalSince1970: 1000)
+
+        var cardB = NoteCard(id: UUID(), topicId: topicID, title: "Card B")
+        cardB.mindPos = CGPoint(x: 100, y: 300)
+        cardB.createdAt = Date(timeIntervalSince1970: 2000)
+
+        // Interpolated sibling between A and B
+        var siblingC = NoteCard(id: UUID(), topicId: topicID, title: "")
+        siblingC.mindPos = CGPoint(x: 100, y: 200)
+        siblingC.createdAt = Date(timeIntervalSince1970: 1500)
+
+        XCTAssertTrue(TreeLayout.cardOrder(cardA, siblingC))
+        XCTAssertTrue(TreeLayout.cardOrder(siblingC, cardB))
+
+        let result = TreeLayout.layout(cards: [cardB, cardA, siblingC])
+        let frameA = try! XCTUnwrap(result.frames[cardA.id])
+        let frameC = try! XCTUnwrap(result.frames[siblingC.id])
+        let frameB = try! XCTUnwrap(result.frames[cardB.id])
+
+        XCTAssertLessThan(frameA.minY, frameC.minY)
+        XCTAssertLessThan(frameC.minY, frameB.minY)
+    }
 }

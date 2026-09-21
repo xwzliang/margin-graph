@@ -15,6 +15,8 @@ public struct CardNodeView: View {
     public var onBranchStyle: (() -> Void)?
     public var onChangeColor: ((Int) -> Void)?
     public var onDelete: (() -> Void)?
+    public var onNewSibling: (() -> Void)?
+    public var onNewChild: (() -> Void)?
 
     public init(
         card: NoteCard,
@@ -29,7 +31,9 @@ public struct CardNodeView: View {
         onMerge: (() -> Void)? = nil,
         onBranchStyle: (() -> Void)? = nil,
         onChangeColor: ((Int) -> Void)? = nil,
-        onDelete: (() -> Void)? = nil
+        onDelete: (() -> Void)? = nil,
+        onNewSibling: (() -> Void)? = nil,
+        onNewChild: (() -> Void)? = nil
     ) {
         self.card = card
         self.isSelected = isSelected
@@ -44,6 +48,8 @@ public struct CardNodeView: View {
         self.onBranchStyle = onBranchStyle
         self.onChangeColor = onChangeColor
         self.onDelete = onDelete
+        self.onNewSibling = onNewSibling
+        self.onNewChild = onNewChild
     }
 
     private var cardColors: (background: Color, border: Color, accent: Color) {
@@ -51,6 +57,9 @@ public struct CardNodeView: View {
     }
 
     public var body: some View {
+        let hasExcerpt = !card.highlightText.isEmpty
+        let hasNotes = !card.notesText.isEmpty
+
         VStack(alignment: .leading, spacing: 0) {
                 // 1. Accent Header Section (Title & chevron)
                 if !card.title.isEmpty {
@@ -92,20 +101,24 @@ public struct CardNodeView: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        if !hasExcerpt && !hasNotes {
+                            Text("Untitled Note")
+                                .font(.system(size: 11.5, weight: .regular))
+                                .italic()
+                                .foregroundStyle(Color(white: 0.45))
+                        }
                         Spacer()
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .semibold))
                             .foregroundStyle(Color(white: 0.35))
                     }
                     .padding(.horizontal, 9)
-                    .padding(.vertical, 4)
+                    .padding(.vertical, (!hasExcerpt && !hasNotes) ? 8 : 4)
                     .frame(maxWidth: .infinity)
                     .background(cardColors.accent)
                 }
 
                 // 2. Cream Body Section (Excerpt & Notes)
-                let hasExcerpt = !card.highlightText.isEmpty
-                let hasNotes = !card.notesText.isEmpty
                 let hasImage = thumbnail != nil
                 let hasTags = !card.tags.isEmpty
 
@@ -160,7 +173,31 @@ public struct CardNodeView: View {
 
                 // 3. Docked Bottom Action Bar (MarginNote 3 signature)
                 if isSelected {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 7) {
+                        Button {
+                            onNewSibling?()
+                        } label: {
+                            Image(systemName: "rectangle.stack.badge.plus")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add Sibling Note (Return)")
+
+                        Button {
+                            onNewChild?()
+                        } label: {
+                            Image(systemName: "arrow.turn.down.right")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add Child Note (Tab)")
+
                         Button {
                             onComment?()
                         } label: {

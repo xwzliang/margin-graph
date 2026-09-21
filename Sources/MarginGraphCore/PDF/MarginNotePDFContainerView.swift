@@ -79,6 +79,8 @@ public struct MarginNotePDFContainerView: View {
     public var onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)?
     public var bookmarks: Set<Int>
     public var onToggleBookmark: ((Int, Bool) -> Void)?
+    public var initialPageIndex: Int
+    public var onPageChanged: ((Int) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -111,6 +113,8 @@ public struct MarginNotePDFContainerView: View {
         studyDocuments: [Document] = [],
         activeDocument: Document? = nil,
         bookmarks: Set<Int> = [],
+        initialPageIndex: Int = 0,
+        onPageChanged: ((Int) -> Void)? = nil,
         onSwitchDocument: ((Document) -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
         onToggleBookmark: ((Int, Bool) -> Void)? = nil,
@@ -136,6 +140,8 @@ public struct MarginNotePDFContainerView: View {
         self.studyDocuments = studyDocuments
         self.activeDocument = activeDocument
         self.bookmarks = bookmarks
+        self.initialPageIndex = initialPageIndex
+        self.onPageChanged = onPageChanged
         self.onSwitchDocument = onSwitchDocument
         self.onManageDocuments = onManageDocuments
         self.onToggleBookmark = onToggleBookmark
@@ -152,6 +158,9 @@ public struct MarginNotePDFContainerView: View {
         self.onMerge = onMerge
         self.onEmphasize = onEmphasize
         self.onDeleteEmphasis = onDeleteEmphasis
+        self.initialPageIndex = initialPageIndex
+        self.onPageChanged = onPageChanged
+        self._currentPageIndex = State(initialValue: initialPageIndex)
         self._bookmarkedPages = State(initialValue: bookmarks)
     }
 
@@ -751,6 +760,9 @@ public struct MarginNotePDFContainerView: View {
         }
         .onChange(of: bookmarks) { _, newBookmarks in
             bookmarkedPages = newBookmarks
+        }
+        .onChange(of: currentPageIndex) { _, newPage in
+            onPageChanged?(newPage)
         }
         .onChange(of: jumpTarget) { _, target in
             if let target {
