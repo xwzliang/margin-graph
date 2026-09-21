@@ -178,4 +178,26 @@ public extension View {
     func marginNoteTooltip(_ text: String) -> some View {
         modifier(MarginNoteTooltipModifier(text: text))
     }
+
+    /// Surrounds a button or icon with an invisible rectangular hit-testing area,
+    /// making it significantly easier to click without changing its visual appearance.
+    func enlargedHitTarget(width: CGFloat = 34, height: CGFloat = 32) -> some View {
+        modifier(EnlargedHitTargetModifier(width: width, height: height))
+    }
+}
+
+public struct EnlargedHitTargetModifier: ViewModifier {
+    public var width: CGFloat
+    public var height: CGFloat
+
+    public init(width: CGFloat = 34, height: CGFloat = 32) {
+        self.width = width
+        self.height = height
+    }
+
+    public func body(content: Content) -> some View {
+        content
+            .frame(width: width, height: height)
+            .contentShape(Rectangle())
+    }
 }

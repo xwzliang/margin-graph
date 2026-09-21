@@ -954,6 +954,7 @@ struct StudyWorkspaceHeaderView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 26, height: 26)
+                        .enlargedHitTarget(width: 36, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Back to Notebooks")
@@ -967,6 +968,7 @@ struct StudyWorkspaceHeaderView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(model.canUndo ? Color.primary : Color.secondary.opacity(0.35))
                             .frame(width: 24, height: 24)
+                            .enlargedHitTarget(width: 30, height: 30)
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canUndo)
@@ -979,6 +981,7 @@ struct StudyWorkspaceHeaderView: View {
                             .font(.system(size: 12))
                             .foregroundStyle(model.canRedo ? Color.primary : Color.secondary.opacity(0.35))
                             .frame(width: 24, height: 24)
+                            .enlargedHitTarget(width: 30, height: 30)
                     }
                     .buttonStyle(.plain)
                     .disabled(!model.canRedo)
@@ -997,6 +1000,7 @@ struct StudyWorkspaceHeaderView: View {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(model.isOutlineVisible ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
                         )
+                        .enlargedHitTarget(width: 34, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Toggle Outline")
@@ -1014,6 +1018,7 @@ struct StudyWorkspaceHeaderView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Color.secondary)
                         .frame(width: 26, height: 26)
+                        .enlargedHitTarget(width: 34, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Edit Card")
@@ -1030,10 +1035,11 @@ struct StudyWorkspaceHeaderView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .frame(width: 26, height: 26)
+                        .enlargedHitTarget(width: 34, height: 32)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 26, height: 26)
+                .frame(width: 34, height: 32)
                 .marginNoteTooltip("Share / Export")
 
                 Spacer()
@@ -1061,10 +1067,11 @@ struct StudyWorkspaceHeaderView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(.secondary)
                         .frame(width: 26, height: 26)
+                        .enlargedHitTarget(width: 34, height: 32)
                 }
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
-                .frame(width: 26, height: 26)
+                .frame(width: 34, height: 32)
                 .marginNoteTooltip("Notebook Settings")
             }
             .padding(.horizontal, 14)
@@ -1148,96 +1155,212 @@ struct WorkspaceDocumentTabs: View {
 struct StudyWorkspaceView: View {
     @ObservedObject var model: AppModel
 
+    @State private var pdfWidth: CGFloat? = nil
+    @State private var dragStartPDFWidth: CGFloat? = nil
+    @State private var isDraggingSplitDivider: Bool = false
+    @State private var liveDividerX: CGFloat? = nil
+    @State private var commitDebounceTask: Task<Void, Never>? = nil
+    @State private var outlineWidth: CGFloat = 240
+    @State private var dragStartOutlineWidth: CGFloat? = nil
+
     var body: some View {
-        Group {
-            switch model.workspaceMode {
-            case .readerOnly:
-                VStack(spacing: 0) {
-                    readerOnlyHeader
-                    pdfPane
-                }
-            case .mindMapOnly:
-                mindMapPane
-            case .splitView:
-                ZStack {
-                    if model.isOutlineVisible {
-                        HSplitView {
-                            outlinePane
-                                .frame(minWidth: 200, idealWidth: 240, maxWidth: 320)
-                            mindMapPane
-                                .frame(minWidth: 340, idealWidth: 600, maxWidth: .infinity)
+        GeometryReader { workspaceGeo in
+            let totalWidth = workspaceGeo.size.width
+            let totalHeight = workspaceGeo.size.height
+
+            Group {
+                switch model.workspaceMode {
+                case .readerOnly:
+                    ZStack(alignment: .leading) {
+                        VStack(spacing: 0) {
+                            readerOnlyHeader
                             pdfPane
-                                .frame(minWidth: 380, idealWidth: 600, maxWidth: .infinity)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        HSplitView {
-                            mindMapPane
-                                .frame(minWidth: 360, idealWidth: 720, maxWidth: .infinity)
-                            pdfPane
-                                .frame(minWidth: 400, idealWidth: 720, maxWidth: .infinity)
+
+                        // Left edge restore handle (MarginNote 3 signature)
+                        HStack(spacing: 0) {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    model.workspaceMode = .splitView
+                                }
+                            } label: {
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                    .foregroundStyle(Color(white: 0.35))
+                                    .frame(width: 14, height: 24)
+                                    .enlargedHitTarget(width: 24, height: 30)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Restore Split View")
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color(white: 0.98).opacity(0.80))
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                                .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
+                        )
+                        .position(x: 14, y: totalHeight * 0.74)
+                        .zIndex(200)
                     }
 
-                    // Circular < • > split view divider handle (MarginNote 3 signature)
-                    HStack(spacing: 1) {
-                        Button {
-                            if model.workspaceMode == .splitView {
-                                model.workspaceMode = .readerOnly
-                            } else {
-                                model.workspaceMode = .splitView
-                            }
-                        } label: {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(Color(white: 0.35))
-                                .frame(width: 13, height: 22)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Collapse MindMap (1-View)")
+                case .mindMapOnly:
+                    ZStack(alignment: .trailing) {
+                        mindMapPane
 
-                        Circle()
-                            .fill(Color(white: 0.50))
-                            .frame(width: 3.5, height: 3.5)
-                            .padding(.horizontal, 1)
-
-                        Button {
-                            if model.workspaceMode == .splitView {
-                                model.workspaceMode = .mindMapOnly
-                            } else {
-                                model.workspaceMode = .splitView
+                        // Right edge restore handle (MarginNote 3 signature)
+                        HStack(spacing: 0) {
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    model.workspaceMode = .splitView
+                                }
+                            } label: {
+                                Image(systemName: "chevron.left")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                    .foregroundStyle(Color(white: 0.35))
+                                    .frame(width: 14, height: 24)
+                                    .enlargedHitTarget(width: 24, height: 30)
                             }
-                        } label: {
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 8, weight: .bold))
-                                .foregroundStyle(Color(white: 0.35))
-                                .frame(width: 13, height: 22)
+                            .buttonStyle(.plain)
+                            .help("Restore Split View")
                         }
-                        .buttonStyle(.plain)
-                        .help("Collapse Document (MindMap Only)")
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule()
+                                .fill(Color(white: 0.98).opacity(0.80))
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                                .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
+                        )
+                        .position(x: totalWidth - 14, y: totalHeight * 0.74)
+                        .zIndex(200)
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule()
-                            .fill(Color(white: 0.98))
-                            .shadow(color: .black.opacity(0.18), radius: 3, y: 1)
-                            .overlay(Capsule().stroke(Color(white: 0.82), lineWidth: 0.75))
-                    )
+
+                case .splitView, .threeView:
+                    let showOutline = model.workspaceMode == .threeView || (model.workspaceMode == .splitView && model.isOutlineVisible)
+                    let currentOutlineWidth = showOutline ? outlineWidth : 0
+                    let availableMainWidth = max(700, totalWidth - currentOutlineWidth)
+
+                    let minPDF: CGFloat = 360
+                    let minMindMap: CGFloat = 320
+                    let maxPDF: CGFloat = max(minPDF, availableMainWidth - minMindMap)
+
+                    let currentPDFWidth: CGFloat = {
+                        let base = pdfWidth ?? (availableMainWidth * 0.5)
+                        return min(max(minPDF, base), maxPDF)
+                    }()
+
+                    let currentMindMapWidth = max(minMindMap, availableMainWidth - currentPDFWidth)
+                    let committedDividerX = totalWidth - currentPDFWidth
+                    let activeDividerX = (isDraggingSplitDivider && liveDividerX != nil) ? liveDividerX! : committedDividerX
+
+                    ZStack(alignment: .topLeading) {
+                        // Panes Layout
+                        HStack(spacing: 0) {
+                            if showOutline {
+                                outlinePane
+                                    .frame(width: outlineWidth)
+
+                                // Outline separator line
+                                Rectangle()
+                                    .fill(MarginNoteTheme.separatorColor)
+                                    .frame(width: 1)
+                                    .background(
+                                        Rectangle()
+                                            .fill(Color.clear)
+                                            .frame(width: 7)
+                                            .contentShape(Rectangle())
+                                    )
+                                    .onHover { inside in
+                                        if inside {
+                                            NSCursor.resizeLeftRight.set()
+                                        } else if dragStartOutlineWidth == nil {
+                                            NSCursor.arrow.set()
+                                            NSApp.keyWindow?.resetCursorRects()
+                                        }
+                                    }
+                                    .gesture(
+                                        DragGesture(minimumDistance: 1)
+                                            .onChanged { gesture in
+                                                if dragStartOutlineWidth == nil {
+                                                    dragStartOutlineWidth = outlineWidth
+                                                }
+                                                NSCursor.resizeLeftRight.set()
+                                                guard let start = dragStartOutlineWidth else { return }
+                                                let newW = start + gesture.translation.width
+                                                outlineWidth = min(max(180, newW), 340)
+                                            }
+                                            .onEnded { _ in
+                                                dragStartOutlineWidth = nil
+                                                NSCursor.arrow.set()
+                                                NSApp.keyWindow?.resetCursorRects()
+                                            }
+                                    )
+                            }
+
+                            mindMapPane
+                                .frame(width: currentMindMapWidth)
+
+                            pdfPane
+                                .frame(width: currentPDFWidth)
+                        }
+                        .frame(width: totalWidth, height: totalHeight)
+
+                        // Highlighted guide line while actively dragging
+                        if isDraggingSplitDivider {
+                            Rectangle()
+                                .fill(Color.accentColor.opacity(0.85))
+                                .frame(width: 2)
+                                .shadow(color: Color.black.opacity(0.18), radius: 2)
+                                .position(x: activeDividerX, y: totalHeight / 2)
+                                .zIndex(190)
+                        }
+
+                        // Draggable Split Divider Line between MindMap and PDF
+                        Rectangle()
+                            .fill(MarginNoteTheme.separatorColor)
+                            .frame(width: 1)
+                            .background(
+                                Rectangle()
+                                    .fill(Color.clear)
+                                    .frame(width: 11)
+                                    .contentShape(Rectangle())
+                            )
+                            .position(x: activeDividerX, y: totalHeight / 2)
+                            .onHover { inside in
+                                if inside {
+                                    NSCursor.resizeLeftRight.set()
+                                } else if !isDraggingSplitDivider {
+                                    NSCursor.arrow.set()
+                                    NSApp.keyWindow?.resetCursorRects()
+                                }
+                            }
+                            .gesture(
+                                makeSplitDragGesture(
+                                    totalWidth: totalWidth,
+                                    currentPDFWidth: currentPDFWidth,
+                                    minPDF: minPDF,
+                                    maxPDF: maxPDF
+                                )
+                            )
+                            .zIndex(150)
+
+                        // MarginNote 3 Signature Floating < • > Split Divider Pill
+                        splitDividerPill(
+                            totalWidth: totalWidth,
+                            currentPDFWidth: currentPDFWidth,
+                            minPDF: minPDF,
+                            maxPDF: maxPDF
+                        )
+                        .position(x: activeDividerX, y: totalHeight * 0.74)
+                        .zIndex(200)
+                    }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .threeView:
-                HSplitView {
-                    outlinePane
-                        .frame(minWidth: 200, idealWidth: 250, maxWidth: 340)
-                    mindMapPane
-                        .frame(minWidth: 340, idealWidth: 600, maxWidth: .infinity)
-                    pdfPane
-                        .frame(minWidth: 380, idealWidth: 600, maxWidth: .infinity)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .sheet(item: $model.editingCard) { card in
@@ -1269,6 +1392,131 @@ struct StudyWorkspaceView: View {
                 }
             )
         }
+        .onDisappear {
+            commitDebounceTask?.cancel()
+            commitDebounceTask = nil
+            NSCursor.arrow.set()
+            NSApp.keyWindow?.resetCursorRects()
+        }
+    }
+
+    private func makeSplitDragGesture(
+        totalWidth: CGFloat,
+        currentPDFWidth: CGFloat,
+        minPDF: CGFloat,
+        maxPDF: CGFloat
+    ) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { gesture in
+                if dragStartPDFWidth == nil {
+                    dragStartPDFWidth = currentPDFWidth
+                    isDraggingSplitDivider = true
+                }
+                NSCursor.resizeLeftRight.set()
+                guard let start = dragStartPDFWidth else { return }
+                let candidatePDF = min(max(minPDF, start - gesture.translation.width), maxPDF)
+                let candidateX = totalWidth - candidatePDF
+                liveDividerX = candidateX
+
+                // Debounce commit: if user pauses dragging for ~100ms, commit PDFView resize
+                commitDebounceTask?.cancel()
+                commitDebounceTask = Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                    guard !Task.isCancelled else { return }
+                    if isDraggingSplitDivider {
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            self.pdfWidth = candidatePDF
+                        }
+                    }
+                }
+            }
+            .onEnded { _ in
+                commitDebounceTask?.cancel()
+                commitDebounceTask = nil
+
+                if let liveX = liveDividerX {
+                    let finalPDF = min(max(minPDF, totalWidth - liveX), maxPDF)
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        self.pdfWidth = finalPDF
+                    }
+                }
+
+                dragStartPDFWidth = nil
+                liveDividerX = nil
+                isDraggingSplitDivider = false
+
+                NSCursor.arrow.set()
+                NSApp.keyWindow?.resetCursorRects()
+            }
+    }
+
+    private func splitDividerPill(
+        totalWidth: CGFloat,
+        currentPDFWidth: CGFloat,
+        minPDF: CGFloat,
+        maxPDF: CGFloat
+    ) -> some View {
+        HStack(spacing: 1) {
+            Button {
+                guard !isDraggingSplitDivider else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.workspaceMode = .readerOnly
+                }
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Color(white: 0.35))
+                    .frame(width: 14, height: 22)
+                    .enlargedHitTarget(width: 20, height: 26)
+            }
+            .buttonStyle(.plain)
+            .help("Collapse MindMap (Document Only)")
+
+            Circle()
+                .fill(Color(white: 0.50))
+                .frame(width: 3.5, height: 3.5)
+                .padding(.horizontal, 1)
+
+            Button {
+                guard !isDraggingSplitDivider else { return }
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    model.workspaceMode = .mindMapOnly
+                }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Color(white: 0.35))
+                    .frame(width: 14, height: 22)
+                    .enlargedHitTarget(width: 20, height: 26)
+            }
+            .buttonStyle(.plain)
+            .help("Collapse Document (MindMap Only)")
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(
+            Capsule()
+                .fill(Color(white: 0.98).opacity(0.80))
+                .background(.ultraThinMaterial, in: Capsule())
+                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
+        )
+        .onHover { inside in
+            if inside {
+                NSCursor.resizeLeftRight.set()
+            } else if !isDraggingSplitDivider {
+                NSCursor.arrow.set()
+                NSApp.keyWindow?.resetCursorRects()
+            }
+        }
+        .simultaneousGesture(
+            makeSplitDragGesture(
+                totalWidth: totalWidth,
+                currentPDFWidth: currentPDFWidth,
+                minPDF: minPDF,
+                maxPDF: maxPDF
+            )
+        )
     }
 
     private var readerOnlyHeader: some View {
@@ -1280,9 +1528,10 @@ struct StudyWorkspaceView: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Color.secondary)
                     .frame(width: 26, height: 26)
+                    .enlargedHitTarget(width: 36, height: 32)
             }
             .buttonStyle(.plain)
-            .help("Back to Library")
+            .marginNoteTooltip("Back to Notebooks")
 
             Button {
                 model.workspaceMode = .splitView
@@ -1290,9 +1539,11 @@ struct StudyWorkspaceView: View {
                 Image(systemName: "sidebar.left")
                     .font(.system(size: 13))
                     .foregroundStyle(Color.secondary)
+                    .frame(width: 26, height: 26)
+                    .enlargedHitTarget(width: 34, height: 32)
             }
             .buttonStyle(.plain)
-            .help("Restore Split View")
+            .marginNoteTooltip("Restore Split View")
 
             Spacer()
         }
@@ -1305,6 +1556,8 @@ struct StudyWorkspaceView: View {
                 .foregroundStyle(MarginNoteTheme.separatorColor),
             alignment: .bottom
         )
+        .tooltipContainer()
+        .zIndex(100)
     }
 
     private var mindMapPane: some View {

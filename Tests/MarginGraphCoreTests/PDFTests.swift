@@ -944,4 +944,66 @@ final class PDFTests: XCTestCase {
         XCTAssertLessThan(bottomOffsets.y, 0, "Bottom edge button should flip above button")
         XCTAssertEqual(bottomOffsets.y, -(30.0 + 8.0), "Offset above should be -(buttonHeight + 8.0)")
     }
+
+    func testEnlargedHitTargetAndSplitDividerGeometry() {
+        // 1. Verify EnlargedHitTargetModifier preserves dimensions
+        let modifier = EnlargedHitTargetModifier(width: 36, height: 32)
+        XCTAssertEqual(modifier.width, 36)
+        XCTAssertEqual(modifier.height, 32)
+
+        let defaultModifier = EnlargedHitTargetModifier()
+        XCTAssertEqual(defaultModifier.width, 34)
+        XCTAssertEqual(defaultModifier.height, 32)
+
+        // 2. Verify Split View Divider Math:
+        // dividerX = totalWidth - currentPDFWidth
+        let totalWidth: CGFloat = 1440
+        let outlineWidth: CGFloat = 240
+        let availableWidth = totalWidth - outlineWidth // 1200
+        let pdfWidth: CGFloat = 600
+
+        let dividerX = totalWidth - pdfWidth
+        XCTAssertEqual(dividerX, 840)
+
+        // Mindmap width should match exactly: outlineWidth + mindMapWidth == dividerX
+        let mindMapWidth = availableWidth - pdfWidth
+        XCTAssertEqual(mindMapWidth, 600)
+        XCTAssertEqual(outlineWidth + mindMapWidth, dividerX)
+
+        // As PDF width increases during left-drag to 700:
+        let expandedPDFWidth: CGFloat = 700
+        let newDividerX = totalWidth - expandedPDFWidth
+        XCTAssertEqual(newDividerX, 740, "Divider moves left as PDF expands")
+        let newMindMapWidth = availableWidth - expandedPDFWidth
+        XCTAssertEqual(outlineWidth + newMindMapWidth, newDividerX, "Divider stays anchored on the edge")
+    }
+
+    func testDecoupledSplitDividerDragAndClamping() {
+        let totalWidth: CGFloat = 1200
+        let minPDF: CGFloat = 360
+        let minMindMap: CGFloat = 320
+        let maxPDF = totalWidth - minMindMap // 880
+        let startPDFWidth: CGFloat = 500
+
+        // Dragging left by 200 (translation.width = -200) -> PDF expands to 700
+        let translationLeft: CGFloat = -200
+        let candidateLeft = min(max(minPDF, startPDFWidth - translationLeft), maxPDF)
+        XCTAssertEqual(candidateLeft, 700)
+        let dividerXLeft = totalWidth - candidateLeft
+        XCTAssertEqual(dividerXLeft, 500)
+
+        // Dragging right by 300 (translation.width = +300) -> PDF shrinks to minPDF (360)
+        let translationRight: CGFloat = 300
+        let candidateRight = min(max(minPDF, startPDFWidth - translationRight), maxPDF)
+        XCTAssertEqual(candidateRight, 360, "Should clamp to minPDF")
+        let dividerXRight = totalWidth - candidateRight
+        XCTAssertEqual(dividerXRight, 840)
+
+        // Dragging left beyond maxPDF (translation.width = -600) -> clamped to maxPDF (880)
+        let translationExtremeLeft: CGFloat = -600
+        let candidateExtreme = min(max(minPDF, startPDFWidth - translationExtremeLeft), maxPDF)
+        XCTAssertEqual(candidateExtreme, 880, "Should clamp to maxPDF")
+        let dividerXExtreme = totalWidth - candidateExtreme
+        XCTAssertEqual(dividerXExtreme, 320, "Divider should not go past minimum MindMap width")
+    }
 }

@@ -205,6 +205,7 @@ public struct MarginNotePDFContainerView: View {
                                 RoundedRectangle(cornerRadius: 4)
                                     .fill(isSearching ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12) : Color.clear)
                             )
+                            .enlargedHitTarget(width: 32, height: 28)
                     }
                     .buttonStyle(.plain)
                     .marginNoteTooltip("Search")
@@ -226,6 +227,7 @@ public struct MarginNotePDFContainerView: View {
                                 RoundedRectangle(cornerRadius: 4)
                                     .fill(showTableOfContentsPopover ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12) : Color.clear)
                             )
+                            .enlargedHitTarget(width: 32, height: 28)
                     }
                     .buttonStyle(.plain)
                     .marginNoteTooltip("Table of Contents")
@@ -254,7 +256,7 @@ public struct MarginNotePDFContainerView: View {
                                 .font(.system(size: 13))
                                 .foregroundStyle(bookmarkedPages.contains(currentPageIndex) ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
                                 .frame(width: 20, height: 24)
-                                .contentShape(Rectangle())
+                                .enlargedHitTarget(width: 26, height: 28)
                         }
                         .buttonStyle(.plain)
                         .marginNoteTooltip(bookmarkedPages.contains(currentPageIndex) ? "Remove Bookmark" : "Bookmark")
@@ -271,7 +273,7 @@ public struct MarginNotePDFContainerView: View {
                                 .font(.system(size: 8, weight: .bold))
                                 .foregroundStyle(Color(white: 0.45))
                                 .frame(width: 12, height: 24)
-                                .contentShape(Rectangle())
+                                .enlargedHitTarget(width: 18, height: 28)
                         }
                         .buttonStyle(.plain)
                         .marginNoteTooltip("Bookmarks List")
@@ -298,10 +300,11 @@ public struct MarginNotePDFContainerView: View {
                             .font(.system(size: 13))
                             .foregroundStyle(Color(white: 0.35))
                             .frame(width: 26, height: 26)
+                            .enlargedHitTarget(width: 32, height: 28)
                     }
                     .menuStyle(.borderlessButton)
                     .menuIndicator(.hidden)
-                    .frame(width: 26, height: 26)
+                    .frame(width: 32, height: 28)
                     .marginNoteTooltip("Document Options")
                 }
             }
@@ -511,6 +514,7 @@ public struct MarginNotePDFContainerView: View {
                                 .font(.system(size: 8.5, weight: .bold))
                                 .foregroundStyle(historyIndex > 0 ? Color(white: 0.3) : Color(white: 0.65))
                                 .frame(width: 16, height: 26)
+                                .enlargedHitTarget(width: 22, height: 28)
                         }
                         .buttonStyle(.plain)
                         .disabled(historyIndex <= 0)
@@ -529,6 +533,7 @@ public struct MarginNotePDFContainerView: View {
                                 .font(.system(size: 8.5, weight: .bold))
                                 .foregroundStyle(historyIndex < pageHistory.count - 1 ? Color(white: 0.3) : Color(white: 0.65))
                                 .frame(width: 16, height: 26)
+                                .enlargedHitTarget(width: 22, height: 28)
                         }
                         .buttonStyle(.plain)
                         .disabled(historyIndex >= pageHistory.count - 1)
@@ -813,6 +818,7 @@ public struct MarginNotePDFContainerView: View {
                 RoundedRectangle(cornerRadius: 4)
                     .fill(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
             )
+            .enlargedHitTarget(width: 30, height: 28)
         }
         .buttonStyle(.plain)
         .marginNoteTooltip(tool.tooltipTitle)
