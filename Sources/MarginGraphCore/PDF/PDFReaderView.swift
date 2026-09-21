@@ -18,12 +18,18 @@ public enum PDFReaderDisplayMode: String, CaseIterable, Identifiable, Sendable {
 }
 
 public struct PDFJumpTarget: Equatable, Sendable {
+    public var id: UUID
     public var pageIndex: Int
     public var bounds: CGRect
 
-    public init(pageIndex: Int, bounds: CGRect) {
+    public init(id: UUID = UUID(), pageIndex: Int, bounds: CGRect) {
+        self.id = id
         self.pageIndex = pageIndex
         self.bounds = bounds
+    }
+
+    public static func == (lhs: PDFJumpTarget, rhs: PDFJumpTarget) -> Bool {
+        lhs.id == rhs.id && lhs.pageIndex == rhs.pageIndex && lhs.bounds == rhs.bounds
     }
 }
 
@@ -728,16 +734,16 @@ public struct PDFReaderView: NSViewRepresentable {
             applyActiveSelection(to: view)
         }
 
-        if context.coordinator.lastPageIndex != currentPageIndex {
+        let isNewJump = (context.coordinator.lastJump != jumpTarget && jumpTarget != nil)
+        if isNewJump, let jumpTarget {
+            context.coordinator.lastJump = jumpTarget
+            context.coordinator.lastPageIndex = jumpTarget.pageIndex
+            jump(view, to: jumpTarget)
+        } else if context.coordinator.lastPageIndex != currentPageIndex {
             context.coordinator.lastPageIndex = currentPageIndex
             if let page = view.document?.page(at: currentPageIndex) {
                 view.go(to: page)
             }
-        }
-
-        if context.coordinator.lastJump != jumpTarget, let jumpTarget {
-            context.coordinator.lastJump = jumpTarget
-            jump(view, to: jumpTarget)
         }
 
         if context.coordinator.lastSearchQuery != searchQuery || context.coordinator.lastSearchMatchIndex != searchMatchIndex {
@@ -913,20 +919,8 @@ public struct PDFReaderView: NSViewRepresentable {
         return card.id == selectedCardID
     }
 
-    private func jump(_ view: PDFView, to target: PDFJumpTarget) {
-        guard let page = view.document?.page(at: target.pageIndex) else { return }
-        let pageBounds = page.bounds(for: .cropBox)
-        let destinationPoint: CGPoint
-        if target.bounds.width > 2 && target.bounds.height > 2 {
-            destinationPoint = CGPoint(x: max(0, target.bounds.minX - 30), y: min(pageBounds.maxY, target.bounds.maxY + 80))
-        } else {
-            destinationPoint = CGPoint(x: pageBounds.midX, y: pageBounds.maxY - 100)
-        }
-        let destination = PDFDestination(page: page, at: destinationPoint)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            view.go(to: destination)
-        }
+    private func jump(_ view: InteractivePDFView, to target: PDFJumpTarget) {
+        view.scrollToCenter(target: target, animated: true)
     }
 
     @MainActor
@@ -1061,6 +1055,60 @@ public final class InteractivePDFView: PDFView {
 
     private var pdfScrollView: NSScrollView? {
         subviews.first(where: { $0 is NSScrollView }) as? NSScrollView
+    }
+
+    public var activeScrollView: NSScrollView? {
+        pdfScrollView ?? documentView?.enclosingScrollView
+    }
+
+    public func scrollToCenter(target: PDFJumpTarget, animated: Bool = true) {
+        guard let doc = document,
+              target.pageIndex >= 0 && target.pageIndex < doc.pageCount,
+              let page = doc.page(at: target.pageIndex) else { return }
+
+        // If target bounds are empty or near-zero, treat as page jump (show top of page)
+        if target.bounds.width <= 2 || target.bounds.height <= 2 {
+            go(to: page)
+            return
+        }
+
+        if displayMode == .singlePage && currentPage != page {
+            go(to: page)
+        }
+
+        layoutDocumentView()
+
+        guard let docView = documentView,
+              let scrollView = activeScrollView else {
+            go(to: page)
+            return
+        }
+        let clipView = scrollView.contentView
+
+        // The top line of the note in page coordinates is target.bounds.maxY
+        let topPointInPage = CGPoint(x: target.bounds.midX, y: target.bounds.maxY)
+        let topPointInView = convert(topPointInPage, from: page)
+        let topPointInDoc = docView.convert(topPointInView, from: self)
+
+        let viewHeight = clipView.bounds.height
+        let targetScrollY = topPointInDoc.y - viewHeight / 2.0
+        let minY = docView.bounds.minY
+        let maxY = max(minY, docView.bounds.maxY - viewHeight)
+        let clampedScrollY = min(maxY, max(minY, targetScrollY))
+        let targetPoint = NSPoint(x: clipView.bounds.origin.x, y: clampedScrollY)
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                clipView.animator().setBoundsOrigin(targetPoint)
+            } completionHandler: {
+                scrollView.reflectScrolledClipView(clipView)
+            }
+        } else {
+            clipView.scroll(to: targetPoint)
+            scrollView.reflectScrolledClipView(clipView)
+        }
     }
 
     public override init(frame frameRect: NSRect) {

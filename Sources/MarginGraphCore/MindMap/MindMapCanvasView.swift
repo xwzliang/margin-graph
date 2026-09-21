@@ -120,17 +120,17 @@ public struct MindMapCanvasView: View {
                 }
                 .simultaneousGesture(magnifyGesture(proxy: proxy))
                 .onReceive(NotificationCenter.default.publisher(for: .marginGraphZoomIn)) { _ in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        viewport.zoomIn()
+                    withAnimation(.easeOut(duration: 0.10)) {
+                        viewport.zoomIn(factor: 1.20)
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .marginGraphZoomOut)) { _ in
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        viewport.zoomOut()
+                    withAnimation(.easeOut(duration: 0.10)) {
+                        viewport.zoomOut(factor: 1.20)
                     }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .marginGraphZoomReset)) { _ in
-                    withAnimation(.easeInOut(duration: 0.25)) {
+                    withAnimation(.easeInOut(duration: 0.15)) {
                         viewport.resetZoom()
                     }
                 }
@@ -448,58 +448,62 @@ public struct MindMapCanvasView: View {
             // Zoom controls pill
             HStack(spacing: 0) {
                 Button {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        viewport.zoomOut()
+                    withAnimation(.easeOut(duration: 0.10)) {
+                        viewport.zoomOut(factor: 1.20)
                     }
                 } label: {
                     Image(systemName: "minus")
                         .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(Color(white: 0.35))
-                        .frame(width: 25, height: 26)
+                        .frame(width: 28, height: 26)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MindMapPillButtonStyle())
                 .marginNoteTooltip("Zoom Out (⌘-)")
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.25)) {
+                    withAnimation(.easeInOut(duration: 0.15)) {
                         viewport.resetZoom()
                     }
                 } label: {
                     Text("\(Int(viewport.zoomScale * 100))%")
                         .font(.system(size: 9.5, weight: .medium))
                         .foregroundStyle(Color(white: 0.30))
-                        .frame(width: 34, height: 26)
+                        .frame(width: 36, height: 26)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MindMapPillButtonStyle())
                 .marginNoteTooltip("Reset Zoom (100%)")
 
                 Button {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        viewport.zoomIn()
+                    withAnimation(.easeOut(duration: 0.10)) {
+                        viewport.zoomIn(factor: 1.20)
                     }
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(Color(white: 0.35))
-                        .frame(width: 25, height: 26)
+                        .frame(width: 28, height: 26)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MindMapPillButtonStyle())
                 .marginNoteTooltip("Zoom In (⌘+)")
 
                 Divider()
                     .frame(height: 12)
 
                 Button {
-                    withAnimation(.easeInOut(duration: 0.25)) {
+                    withAnimation(.easeInOut(duration: 0.15)) {
                         viewport.zoomToFit(nodes: Array(layoutResult.frames.values))
                     }
                 } label: {
                     Image(systemName: "arrow.up.left.and.arrow.down.right")
                         .font(.system(size: 8.5, weight: .bold))
                         .foregroundStyle(Color(white: 0.35))
-                        .frame(width: 25, height: 26)
+                        .frame(width: 28, height: 26)
+                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(MindMapPillButtonStyle())
                 .marginNoteTooltip("Zoom to Fit (⌘0)")
             }
             .background(
@@ -1238,17 +1242,28 @@ private struct MindMapKeyboardHandler: ViewModifier {
             .onKeyPress { press in
                 if press.modifiers.contains(.command) {
                     if press.characters == "+" || press.characters == "=" {
-                        withAnimation(.easeOut(duration: 0.2)) { viewport.zoomIn() }
+                        withAnimation(.easeOut(duration: 0.10)) { viewport.zoomIn(factor: 1.20) }
                         return .handled
                     } else if press.characters == "-" {
-                        withAnimation(.easeOut(duration: 0.2)) { viewport.zoomOut() }
+                        withAnimation(.easeOut(duration: 0.10)) { viewport.zoomOut(factor: 1.20) }
                         return .handled
                     } else if press.characters == "0" {
-                        withAnimation(.easeInOut(duration: 0.25)) { viewport.zoomToFit(nodes: Array(frames.values)) }
+                        withAnimation(.easeInOut(duration: 0.15)) { viewport.zoomToFit(nodes: Array(frames.values)) }
                         return .handled
                     }
                 }
                 return .ignored
             }
+    }
+}
+
+private struct MindMapPillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(configuration.isPressed ? Color.black.opacity(0.12) : Color.clear)
+            )
+            .contentShape(Rectangle())
     }
 }

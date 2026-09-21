@@ -654,17 +654,23 @@ final class AppModel: ObservableObject {
             switchToDocument(document)
         }
 
-        guard let page = card.startPage else { return }
+        let targetPage: Int
+        if let sp = card.startPage {
+            targetPage = sp
+        } else if let hp = card.highlightRects.first?.page {
+            targetPage = hp
+        } else {
+            return
+        }
+
         let bounds: CGRect
-        if let firstLine = card.highlightRects.first {
-            let pageLines = card.highlightRects.filter { $0.page == page }
-            if let first = pageLines.first {
-                bounds = pageLines.dropFirst().reduce(
-                    CGRect(x: first.x, y: first.y, width: first.width, height: first.height)
-                ) { $0.union(CGRect(x: $1.x, y: $1.y, width: $1.width, height: $1.height)) }
-            } else {
-                bounds = CGRect(x: firstLine.x, y: firstLine.y, width: firstLine.width, height: firstLine.height)
-            }
+        let pageLines = card.highlightRects.filter { $0.page == targetPage }
+        if let first = pageLines.first {
+            bounds = pageLines.dropFirst().reduce(
+                CGRect(x: first.x, y: first.y, width: first.width, height: first.height)
+            ) { $0.union(CGRect(x: $1.x, y: $1.y, width: $1.width, height: $1.height)) }
+        } else if let firstLine = card.highlightRects.first {
+            bounds = CGRect(x: firstLine.x, y: firstLine.y, width: firstLine.width, height: firstLine.height)
         } else if let start = card.startPos, let end = card.endPos {
             bounds = CGRect(
                 x: min(start.x, end.x),
@@ -675,7 +681,7 @@ final class AppModel: ObservableObject {
         } else {
             bounds = CGRect(x: 0, y: 0, width: 1, height: 1)
         }
-        jumpTarget = PDFJumpTarget(pageIndex: page, bounds: bounds)
+        jumpTarget = PDFJumpTarget(pageIndex: targetPage, bounds: bounds)
     }
 
     func deselect() {

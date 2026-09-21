@@ -843,4 +843,38 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(counts[fourPrinciples.id], 0, "Four Principles with range 35..<35 should have 0 cards")
         XCTAssertEqual(counts[ch3.id], 6, "Chapter 3 should contain cards on pages 35..<100")
     }
+
+    func testScrollToCenterPlacesNoteTopAtCenter() throws {
+        let pdfView = InteractivePDFView(frame: NSRect(x: 0, y: 0, width: 600, height: 800))
+        let doc = PDFDocument()
+        for _ in 0..<5 {
+            let page = PDFPage()
+            page.setBounds(CGRect(x: 0, y: 0, width: 600, height: 800), for: .cropBox)
+            doc.insert(page, at: doc.pageCount)
+        }
+        pdfView.document = doc
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.layoutDocumentView()
+
+        guard let docView = pdfView.documentView,
+              let scrollView = pdfView.activeScrollView else {
+            XCTFail("Missing docView or scrollView")
+            return
+        }
+        let clipView = scrollView.contentView
+
+        // Note on page 2 (the 3rd page), located at the bottom of that page (e.g. y = 100, height = 30)
+        let noteBounds = CGRect(x: 100, y: 100, width: 400, height: 30)
+        let jumpTarget = PDFJumpTarget(pageIndex: 2, bounds: noteBounds)
+
+        pdfView.scrollToCenter(target: jumpTarget, animated: false)
+
+        let targetPage = doc.page(at: 2)!
+        let topPointInPage = CGPoint(x: noteBounds.midX, y: noteBounds.maxY)
+        let topInView = pdfView.convert(topPointInPage, from: targetPage)
+        let topInDoc = docView.convert(topInView, from: pdfView)
+
+        let visibleCenterInDoc = clipView.bounds.origin.y + clipView.bounds.height / 2.0
+        XCTAssertEqual(topInDoc.y, visibleCenterInDoc, accuracy: 1.0, "The top line of the note should be centered vertically in the viewport")
+    }
 }
