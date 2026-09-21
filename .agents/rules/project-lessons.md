@@ -137,9 +137,11 @@ Structure each entry concisely with actionable rules:
   - **Trap**: Placing chevron collapse/expand buttons inside the card header violates MarginNote design parity and clutters the title bar.
   - **Rule**: Render branch collapse/expand buttons directly on the outgoing connector line at `(frame.maxX + 14, frame.midY)` as a circular 15pt white badge with accent stroke and inner `⊖` (expanded) or `⊕` (collapsed). Draw a short horizontal stem for folded nodes from `(parent.maxX, parent.midY)` to `(parent.maxX + 14, parent.midY)` to connect the card to the toggle button.
 
-- **Guard Viewport Centering from Jarring Jumps**:
-  - **Trap**: Calling `viewport.center(on: frame)` unconditionally in `onChange(of: cards)` or `onChange(of: selectedCardID)` whenever a card is clicked or created causes jarring canvas pans even when the card is already comfortably in view.
-  - **Rule**: Guard viewport centering by verifying that `screenRect` is outside the visible viewport rect: `if !viewRect.insetBy(dx: 40, dy: 40).contains(screenRect) { viewport.center(on: frame) }`.
+- **Guard Viewport Centering: Selection vs Explicit Card Moves**:
+  - **Trap**: Applying a blanket rule: either centering unconditionally on every selection click (which causes jarring viewport jumps during ordinary reading), OR guarding all centering behind `!viewRect.insetBy(dx: 40, dy: 40).contains(screenRect)` (which prevents moved cards from centering if the destination is still within the visible screen, leaving the moved card at the edge and disorienting the user).
+  - **Rule**: Distinguish card selection clicks from explicit card movements:
+    1. **Selection clicks (`onChange(of: selectedCardID)`)**: Guard with `!viewRect.insetBy(dx: 40, dy: 40).contains(screenRect)` so selecting already visible cards does not jerk the canvas.
+    2. **Explicit Card Moves (`nodeDrag.onEnded` or `onChange(of: cards)` with `didMove` / `cardIDToCenter`)**: Smoothly center on the card (`withAnimation(.easeInOut(duration: 0.25)) { viewport.center(on: frame) }`). This ensures that after dragging a card to a new column grid slot, reparenting, or performing undo/redo, the moved card is reliably centered in the viewport.
 
 - **SwiftUI `TextField` vs `NSViewRepresentable` `NSTextField` for Inline Canvas Editing**:
   - **Trap**: Using `NSViewRepresentable` wrapping `NSTextField` for in-place inline editing in a SwiftUI canvas/card view causes instant dismissal: AppKit fires `controlTextDidEndEditing` (with `NSOtherTextMovement` / blur) during view mounting, initial responder negotiation, or parent layout shifts (such as docked action bar appearance changing card height). Calling `onCommit()` inside `controlTextDidEndEditing` immediately clears editing state (`editingCardTitleID = nil`) before the user can type a single character.

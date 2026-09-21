@@ -741,6 +741,30 @@ final class MindMapTests: XCTestCase {
         XCTAssertNil(undoneB.groupNoteId)
         XCTAssertEqual(undoneB.mindPos, initialPosB)
     }
+
+    func testViewportCenterOnMovedCard() {
+        var viewport = CanvasViewport(
+            panOffset: .zero,
+            zoomScale: 1.0,
+            viewportSize: CGSize(width: 800, height: 600)
+        )
+
+        let cardFrame = CGRect(x: 1000, y: 500, width: 220, height: 120)
+        viewport.center(on: cardFrame)
+
+        // Midpoint of cardFrame is (1110, 560)
+        // Center of viewport is (400, 300)
+        // Expected panOffset is:
+        // x: 400 - 1110 * 1.0 = -710
+        // y: 300 - 560 * 1.0 = -260
+        XCTAssertEqual(viewport.panOffset.x, -710, accuracy: 0.001)
+        XCTAssertEqual(viewport.panOffset.y, -260, accuracy: 0.001)
+
+        // Verifying screen coordinates of card center is exactly the screen center
+        let screenCenter = viewport.canvasToScreen(CGPoint(x: cardFrame.midX, y: cardFrame.midY))
+        XCTAssertEqual(screenCenter.x, 400, accuracy: 0.001)
+        XCTAssertEqual(screenCenter.y, 300, accuracy: 0.001)
+    }
 }
 
 

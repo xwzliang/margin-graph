@@ -42,13 +42,14 @@ public struct MindMapCanvasView: View {
     @State private var layoutResult: TreeLayoutResult
     @State private var hasInitialFitted = false
     @State private var lastHoverLocation: CGPoint? = nil
+    @State private var cardIDToCenter: UUID? = nil
 
     public init(
         cards: [NoteCard],
         links: [CardLink] = [],
         selectedCardID: UUID? = nil,
         editingCardTitleID: Binding<UUID?> = .constant(nil),
-        activeToolbarOwner: ToolbarOwner = .mindMap,
+        activeToolbarOwner: ToolbarOwner = .none,
         mediaStorage: MediaStorage? = nil,
         topics: [Topic] = [],
         selectedTopic: Topic? = nil,
@@ -103,14 +104,27 @@ public struct MindMapCanvasView: View {
             canvasZStack(proxy: proxy, layout: layout, frames: frames, visibleCards: visibleCards)
                 .coordinateSpace(name: "MindMapCanvas")
                 .onChange(of: cards) { _, newCards in
+                    let oldFrames = layoutResult.frames
                     layoutResult = TreeLayout.layout(cards: newCards)
-                    if let selectedID = selectedCardID, let frame = layoutResult.frames[selectedID] {
-                        let screenOrigin = viewport.canvasToScreen(CGPoint(x: frame.minX, y: frame.minY))
-                        let screenRect = CGRect(origin: screenOrigin, size: CGSize(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale))
-                        let viewRect = CGRect(origin: .zero, size: viewport.viewportSize)
-                        if viewport.viewportSize.width > 50, !viewRect.insetBy(dx: 40, dy: 40).contains(screenRect) {
+                    if viewport.viewportSize.width < 50 && proxy.size.width > 50 {
+                        viewport.viewportSize = proxy.size
+                    }
+                    if let selectedID = cardIDToCenter ?? selectedCardID, let frame = layoutResult.frames[selectedID] {
+                        let oldOrigin = oldFrames[selectedID]?.origin
+                        let didMove = oldOrigin != nil && (abs(oldOrigin!.x - frame.origin.x) > 1.0 || abs(oldOrigin!.y - frame.origin.y) > 1.0)
+                        if didMove || cardIDToCenter == selectedID {
+                            cardIDToCenter = nil
                             withAnimation(.easeInOut(duration: 0.25)) {
                                 viewport.center(on: frame)
+                            }
+                        } else {
+                            let screenOrigin = viewport.canvasToScreen(CGPoint(x: frame.minX, y: frame.minY))
+                            let screenRect = CGRect(origin: screenOrigin, size: CGSize(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale))
+                            let viewRect = CGRect(origin: .zero, size: viewport.viewportSize)
+                            if viewport.viewportSize.width > 50, !viewRect.insetBy(dx: 40, dy: 40).contains(screenRect) {
+                                withAnimation(.easeInOut(duration: 0.25)) {
+                                    viewport.center(on: frame)
+                                }
                             }
                         }
                     }
@@ -977,9 +991,14 @@ public struct MindMapCanvasView: View {
 
                 if let overlapTarget {
                     // 1. Mouse overlaps another card's area: Become child of target card
+                    cardIDToCenter = card.id
                     onReparent(card.id, overlapTarget)
                     onToggleFold(overlapTarget, false)
                     onSelect(card)
+                    if let targetFrame = staticFrames[overlapTarget] {
+                        let approxFrame = CGRect(x: targetFrame.maxX + 40, y: targetFrame.minY, width: initialFrame.width, height: initialFrame.height)
+                        withAnimation(.easeInOut(duration: 0.25)) { viewport.center(on: approxFrame) }
+                    }
                 } else {
                     // 2. Mouse does NOT overlap other cards: Drop into Column Container Grid
                     let rootCards = cards.filter { $0.groupNoteId == nil }
@@ -1091,13 +1110,21 @@ public struct MindMapCanvasView: View {
                         onReparent(card.id, nil)
                     }
 
+                    let targetSlotY = batchUpdates.first(where: { $0.id == card.id })?.position.y ?? curY
+                    let cardH = TreeLayout.estimatedCardHeight(for: card, width: 220)
+                    let predictedFrame = CGRect(x: targetBaseX, y: targetSlotY, width: 220, height: cardH)
+
+                    cardIDToCenter = card.id
                     if let onMoveBatch, !batchUpdates.isEmpty {
                         onMoveBatch(batchUpdates)
                     } else {
-                        let targetSlotY = batchUpdates.first(where: { $0.id == card.id })?.position.y ?? curY
                         onMove(card.id, CGPoint(x: targetBaseX, y: targetSlotY))
                     }
                     onSelect(card)
+
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        viewport.center(on: predictedFrame)
+                    }
                 }
 
                 dragLocations[card.id] = nil
