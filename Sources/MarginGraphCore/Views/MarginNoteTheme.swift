@@ -22,6 +22,7 @@ public struct MarginNoteTheme {
     public static let cursorBlue = Color(red: 18/255.0, green: 101/255.0, blue: 221/255.0) // #1265dd
     public static let cursorBlueHex = "#1265dd"
     public static let nsCursorColor = NSColor(srgbRed: 18/255.0, green: 101/255.0, blue: 221/255.0, alpha: 1.0)
+    public static let cardEditingBoxBackground = Color(white: 0.94).opacity(0.55)
 
     public static let cardPastels: [(background: Color, border: Color, accent: Color)] = [
         // MarginNote color indices 0...15:

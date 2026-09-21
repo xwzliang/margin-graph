@@ -72,13 +72,9 @@ public extension Database {
         }
 
         // 2. Discover physical PDF files in search directories
-        var searchDirectories: [URL] = [
+        var searchDirectories: [URL] = isInMemory ? [] : [
             FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("MarginGraph/Documents", isDirectory: true),
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Documents", isDirectory: true),
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/Documents", isDirectory: true)
+                .appendingPathComponent("MarginGraph/Documents", isDirectory: true)
         ]
         searchDirectories.append(contentsOf: additionalSearchPaths)
 

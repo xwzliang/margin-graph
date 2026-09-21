@@ -1364,8 +1364,14 @@ public final class InteractivePDFView: PDFView {
         let knobXView = knobBottomView.x
 
         var x = knobXView - toolbarWidth / 2.0
-        let maxX = max(12, bounds.width - toolbarWidth - 12)
-        x = max(12, min(x, maxX))
+        if bounds.width >= toolbarWidth + 24 {
+            x = max(12, min(x, bounds.width - toolbarWidth - 12))
+        } else {
+            // When toolbar is wider than the PDF view, allow overflow past bounds
+            // so it stays centered around the selection knob as much as possible
+            let minX = bounds.width - toolbarWidth - 12
+            x = max(minX, min(x, 12))
+        }
 
         let arrowOffset = max(14, min(knobXView - x - 7, toolbarWidth - 28))
 

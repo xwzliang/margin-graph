@@ -49,6 +49,7 @@ public final class MarginNoteImporter {
 
     private func isPackage(_ url: URL) -> Bool {
         if url.pathExtension.lowercased() == "marginpkg" { return true }
+        if url.pathExtension.lowercased() == "sqlite" || url.pathExtension.lowercased() == "marginnotes" { return false }
         if let handle = try? FileHandle(forReadingFrom: url) {
             defer { try? handle.close() }
             if let data = try? handle.read(upToCount: 4), data.count >= 4 {

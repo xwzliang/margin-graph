@@ -636,6 +636,7 @@ final class PDFTests: XCTestCase {
     }
 
     func testRealPDFCardEmphasis() throws {
+        guard ProcessInfo.processInfo.environment["ENABLE_LIVE_MN_TESTS"] == "1" else { return }
         let pdfPath = "/Users/broliang/Library/Containers/QReader.MarginStudyMac/Data/Documents/Ahrens_2017_How-to-take-smart-notes.pdf"
         guard FileManager.default.fileExists(atPath: pdfPath),
               let doc = PDFDocument(url: URL(fileURLWithPath: pdfPath)) else {
@@ -747,6 +748,7 @@ final class PDFTests: XCTestCase {
     }
 
     func testTableOfContentsOutlineLoadingAndFiltering() throws {
+        guard ProcessInfo.processInfo.environment["ENABLE_LIVE_MN_TESTS"] == "1" else { return }
         let pdfPath = "/Users/broliang/Library/Containers/QReader.MarginStudyMac/Data/Documents/Ahrens_2017_How-to-take-smart-notes.pdf"
         let manager = try PDFDocumentManager(url: URL(fileURLWithPath: pdfPath))
         XCTAssertEqual(manager.outline.count, 50, "PDF should have 50 table of contents items")

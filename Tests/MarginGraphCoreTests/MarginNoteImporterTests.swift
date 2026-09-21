@@ -73,6 +73,10 @@ final class MarginNoteImporterTests: XCTestCase {
     }
 
     func testLiveMarginNoteDatabaseImportIfExists() throws {
+        guard ProcessInfo.processInfo.environment["ENABLE_LIVE_MN_TESTS"] == "1" else {
+            print("Live MarginNotes.sqlite test skipped in automated runs (set ENABLE_LIVE_MN_TESTS=1).")
+            return
+        }
         let livePath = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Library/Application Support/QReader.MarginNoteMac/MarginNotes.sqlite")
         guard FileManager.default.fileExists(atPath: livePath.path) else {

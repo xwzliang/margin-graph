@@ -74,7 +74,7 @@ public struct CardNodeView: View {
 
         VStack(alignment: .leading, spacing: 0) {
             // 1. Accent Header Section (Title & chevron)
-            let header = HStack(alignment: .top, spacing: 5) {
+            let header = HStack(alignment: .top, spacing: 3) {
                 if isEditingTitle {
                     InlineTitleEditorView(
                         text: $editingTitleText,
@@ -86,7 +86,12 @@ public struct CardNodeView: View {
                             onCommitTitle?(card.title)
                         }
                     )
-                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2.5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3.5)
+                            .fill(MarginNoteTheme.cardEditingBoxBackground)
+                    )
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .onAppear {
                         editingTitleText = card.title
@@ -100,23 +105,24 @@ public struct CardNodeView: View {
                     Text(card.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color(white: 0.12))
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if !hasExcerpt && !hasNotes {
                     Text("Untitled Note")
                         .font(.system(size: 11.5, weight: .regular))
                         .italic()
                         .foregroundStyle(Color(white: 0.45))
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-
-                Spacer(minLength: 4)
 
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color(white: 0.35))
-                    .padding(.top, 2)
+                    .padding(.top, isEditingTitle ? 4.5 : 2)
             }
-            .padding(.horizontal, 9)
-            .padding(.vertical, (!card.title.isEmpty || isEditingTitle || (!hasExcerpt && !hasNotes)) ? 8 : 4)
+            .padding(.leading, isEditingTitle ? 5 : 9)
+            .padding(.trailing, 6)
+            .padding(.vertical, (!card.title.isEmpty || isEditingTitle || (!hasExcerpt && !hasNotes)) ? (isEditingTitle ? 5.5 : 8) : 4)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(cardColors.accent)
 

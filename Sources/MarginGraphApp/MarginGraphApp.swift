@@ -1433,6 +1433,7 @@ struct StudyWorkspaceView: View {
                     )
                     .opacity(isReaderOnly ? 0 : 1)
                     .allowsHitTesting(!isReaderOnly)
+                    .zIndex((model.activeToolbarOwner == .mindMap && !isDraggingSplitDivider) ? 250 : 0)
 
                 // 3. PDF Pane (always kept mounted, with readerOnlyHeader when readerOnly)
                 VStack(spacing: 0) {
@@ -1451,6 +1452,7 @@ struct StudyWorkspaceView: View {
                 )
                 .opacity(isMindMapOnly ? 0 : 1)
                 .allowsHitTesting(!isMindMapOnly)
+                .zIndex((model.activeToolbarOwner == .pdf && !isDraggingSplitDivider) ? 250 : 0)
 
                 // 4. Split Divider Line & Pill (only in split / three view)
                 if !isReaderOnly && !isMindMapOnly {
@@ -1461,7 +1463,7 @@ struct StudyWorkspaceView: View {
                             .shadow(color: Color.black.opacity(0.18), radius: 2)
                             .offset(x: activeDividerX - 1, y: 0)
                             .allowsHitTesting(false)
-                            .zIndex(190)
+                            .zIndex(350)
                     }
 
                     Rectangle()
@@ -1496,7 +1498,7 @@ struct StudyWorkspaceView: View {
                     )
                     .frame(width: 52, height: 28)
                     .offset(x: activeDividerX - 26, y: totalHeight * 0.74 - 14)
-                    .zIndex(200)
+                    .zIndex(300)
                 }
 
                 // 5. Left edge restore handle (MarginNote 3 signature half-pill)
@@ -1504,7 +1506,7 @@ struct StudyWorkspaceView: View {
                     edgeRestoreHandle(side: .leading)
                         .frame(width: 26, height: 28)
                         .offset(x: 0, y: totalHeight * 0.74 - 14)
-                        .zIndex(200)
+                        .zIndex(300)
                 }
 
                 // 6. Right edge restore handle (MarginNote 3 signature half-pill)
@@ -1512,7 +1514,7 @@ struct StudyWorkspaceView: View {
                     edgeRestoreHandle(side: .trailing)
                         .frame(width: 26, height: 28)
                         .offset(x: totalWidth - 26, y: totalHeight * 0.74 - 14)
-                        .zIndex(200)
+                        .zIndex(300)
                 }
             }
             .frame(width: totalWidth, height: totalHeight, alignment: .topLeading)
@@ -2092,16 +2094,32 @@ struct MarginGraphApp: App {
 
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") {
-                    model.undo()
+                    let responder = NSApp.keyWindow?.firstResponder ?? NSApp.mainWindow?.firstResponder
+                    if let editor = responder as? NSTextView,
+                       let um = editor.undoManager,
+                       um !== model.undoManager,
+                       um.canUndo {
+                        um.undo()
+                        editor.didChangeText()
+                    } else if model.canUndo {
+                        model.undo()
+                    }
                 }
                 .keyboardShortcut("z", modifiers: .command)
-                .disabled(!model.canUndo)
 
                 Button("Redo") {
-                    model.redo()
+                    let responder = NSApp.keyWindow?.firstResponder ?? NSApp.mainWindow?.firstResponder
+                    if let editor = responder as? NSTextView,
+                       let um = editor.undoManager,
+                       um !== model.undoManager,
+                       um.canRedo {
+                        um.redo()
+                        editor.didChangeText()
+                    } else if model.canRedo {
+                        model.redo()
+                    }
                 }
                 .keyboardShortcut("z", modifiers: [.command, .shift])
-                .disabled(!model.canRedo)
             }
 
             CommandMenu("View") {

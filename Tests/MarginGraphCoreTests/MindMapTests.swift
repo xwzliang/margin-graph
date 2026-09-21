@@ -514,6 +514,50 @@ final class MindMapTests: XCTestCase {
     }
 
     @MainActor
+    func testInlineTitleEditorUndoRedoAndGreyTint() throws {
+        var text = "Original Note Title"
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let editorView = InlineTitleEditorView(
+            text: binding,
+            placeholder: "Untitled Note",
+            onCommit: { text = $0 },
+            onCancel: {}
+        )
+
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        let hosting = NSHostingView(rootView: editorView)
+        window.contentView = hosting
+        window.makeKeyAndOrderFront(nil)
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+
+        if let fieldEditor = window.firstResponder as? NSTextView {
+            // Verify dark blue #37587f has been applied to selection background and white foreground
+            if let bg = fieldEditor.selectedTextAttributes[.backgroundColor] as? NSColor,
+               let rgb = bg.usingColorSpace(.deviceRGB) {
+                XCTAssertEqual(rgb.redComponent, 55.0 / 255.0, accuracy: 0.05)
+                XCTAssertEqual(rgb.greenComponent, 88.0 / 255.0, accuracy: 0.05)
+                XCTAssertEqual(rgb.blueComponent, 127.0 / 255.0, accuracy: 0.05)
+            }
+            if let fg = fieldEditor.selectedTextAttributes[.foregroundColor] as? NSColor {
+                XCTAssertEqual(fg, NSColor.white)
+            }
+
+            // Verify typing and undo
+            let initialLength = fieldEditor.string.count
+            fieldEditor.insertText(" Extra Text", replacementRange: NSRange(location: initialLength, length: 0))
+            XCTAssertTrue(fieldEditor.string.contains("Extra Text"))
+            XCTAssertEqual(fieldEditor.undoManager?.canUndo, true)
+
+            // Undo typing
+            fieldEditor.undoManager?.undo()
+            fieldEditor.didChangeText()
+            XCTAssertFalse(fieldEditor.string.contains("Extra Text"))
+            XCTAssertEqual(fieldEditor.string, "Original Note Title")
+        }
+    }
+
+    @MainActor
     func testPDFPopoverToolbarViewModesInstantiation() throws {
         let createToolbar = PDFPopoverToolbarView(mode: .create)
         XCTAssertNotNil(createToolbar)

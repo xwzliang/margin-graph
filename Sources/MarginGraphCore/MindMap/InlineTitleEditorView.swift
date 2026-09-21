@@ -28,6 +28,7 @@ public struct InlineTitleEditorView: View {
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(Color(white: 0.12))
             .textFieldStyle(.plain)
+            .tint(Color(red: 55/255.0, green: 88/255.0, blue: 127/255.0))
             .lineLimit(1...15)
             .fixedSize(horizontal: false, vertical: true)
             .focused($isFocused)
@@ -37,6 +38,24 @@ public struct InlineTitleEditorView: View {
                 isFocused = true
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                     isFocused = true
+                    applySelectionStyle()
+                }
+            }
+            .onChange(of: isFocused) { _, focused in
+                if focused {
+                    DispatchQueue.main.async {
+                        applySelectionStyle()
+                    }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: NSTextView.didChangeSelectionNotification)) { note in
+                if let tv = note.object as? NSTextView, tv.window != nil {
+                    let darkBlue = NSColor(srgbRed: 55/255.0, green: 88/255.0, blue: 127/255.0, alpha: 1.0)
+                    tv.selectedTextAttributes = [
+                        .backgroundColor: darkBlue,
+                        .foregroundColor: NSColor.white
+                    ]
+                    tv.insertionPointColor = darkBlue
                 }
             }
             .onKeyPress(phases: .down) { press in
@@ -50,6 +69,26 @@ public struct InlineTitleEditorView: View {
                 } else if press.key == .escape {
                     cancel()
                     return .handled
+                } else if press.key == KeyEquivalent("z") && press.modifiers.contains(.command) {
+                    let responder = NSApp.keyWindow?.firstResponder ?? NSApp.mainWindow?.firstResponder
+                    if let editor = responder as? NSTextView, let um = editor.undoManager {
+                        if press.modifiers.contains(.shift) {
+                            if um.canRedo {
+                                um.redo()
+                                editor.didChangeText()
+                                draftText = editor.string
+                                return .handled
+                            }
+                        } else {
+                            if um.canUndo {
+                                um.undo()
+                                editor.didChangeText()
+                                draftText = editor.string
+                                return .handled
+                            }
+                        }
+                    }
+                    return .ignored
                 }
                 return .ignored
             }
@@ -69,13 +108,28 @@ public struct InlineTitleEditorView: View {
     private func commit() {
         guard !hasCommitted else { return }
         hasCommitted = true
-        text = draftText
-        onCommit(draftText)
+        let final = (NSApp.keyWindow?.firstResponder as? NSTextView)?.string ?? draftText
+        text = final
+        onCommit(final)
     }
 
     private func cancel() {
         guard !hasCommitted else { return }
         hasCommitted = true
         onCancel()
+    }
+
+    private func applySelectionStyle() {
+        let responder = NSApp.keyWindow?.firstResponder
+            ?? NSApp.mainWindow?.firstResponder
+            ?? NSApp.windows.compactMap({ $0.firstResponder as? NSTextView }).first
+        if let editor = responder as? NSTextView {
+            let darkBlue = NSColor(srgbRed: 55/255.0, green: 88/255.0, blue: 127/255.0, alpha: 1.0)
+            editor.selectedTextAttributes = [
+                .backgroundColor: darkBlue,
+                .foregroundColor: NSColor.white
+            ]
+            editor.insertionPointColor = darkBlue
+        }
     }
 }
