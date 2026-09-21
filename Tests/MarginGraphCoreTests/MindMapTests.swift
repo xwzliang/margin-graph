@@ -431,4 +431,52 @@ final class MindMapTests: XCTestCase {
         XCTAssertLessThan(frameA.minY, frameC.minY)
         XCTAssertLessThan(frameC.minY, frameB.minY)
     }
+
+    func testFreeNoteCreationAtCanvasCoordinatesAndTitleUpdate() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Free Note Test")
+        try database.insertTopic(topic)
+
+        let targetPos = CGPoint(x: 450, y: 320)
+        var freeNote = NoteCard(
+            topicId: topic.id,
+            title: "",
+            groupNoteId: nil,
+            colorIndex: 0
+        )
+        freeNote.mindPos = targetPos
+        try database.insertCard(freeNote)
+
+        let fetched = try XCTUnwrap(database.getCard(id: freeNote.id))
+        XCTAssertEqual(fetched.title, "")
+        XCTAssertEqual(fetched.mindPos?.x ?? 0, targetPos.x, accuracy: 0.001)
+        XCTAssertEqual(fetched.mindPos?.y ?? 0, targetPos.y, accuracy: 0.001)
+        XCTAssertNil(fetched.groupNoteId)
+
+        var updated = fetched
+        updated.title = "Direct Inline Title"
+        try database.updateCard(updated)
+
+        let afterUpdate = try XCTUnwrap(database.getCard(id: freeNote.id))
+        XCTAssertEqual(afterUpdate.title, "Direct Inline Title")
+    }
+
+    func testSiblingAndChildNoteCreationDefaultsEmptyTitle() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Creation Test")
+        try database.insertTopic(topic)
+
+        let root = NoteCard(topicId: topic.id, title: "Root Note")
+        try database.insertCard(root)
+
+        let child = NoteCard(topicId: topic.id, title: "", groupNoteId: root.id)
+        try database.insertCard(child)
+        XCTAssertEqual(child.title, "")
+        XCTAssertEqual(child.groupNoteId, root.id)
+
+        let sibling = NoteCard(topicId: topic.id, title: "", groupNoteId: nil)
+        try database.insertCard(sibling)
+        XCTAssertEqual(sibling.title, "")
+        XCTAssertNil(sibling.groupNoteId)
+    }
 }

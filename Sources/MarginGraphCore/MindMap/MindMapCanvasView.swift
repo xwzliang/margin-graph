@@ -20,6 +20,9 @@ public struct MindMapCanvasView: View {
     public var onEditCard: ((NoteCard) -> Void)?
     public var onNewSibling: ((UUID) -> Void)?
     public var onNewChild: ((UUID) -> Void)?
+    public var onNewNote: ((CGPoint) -> Void)?
+    public var onUpdateTitle: ((UUID, String) -> Void)?
+    @Binding public var editingCardTitleID: UUID?
 
     @State private var viewport = CanvasViewport()
     @State private var panStart: CGPoint?
@@ -36,11 +39,13 @@ public struct MindMapCanvasView: View {
     @State private var hoverTargetCardID: UUID? = nil
     @State private var layoutResult: TreeLayoutResult
     @State private var hasInitialFitted = false
+    @State private var lastHoverLocation: CGPoint? = nil
 
     public init(
         cards: [NoteCard],
         links: [CardLink] = [],
         selectedCardID: UUID? = nil,
+        editingCardTitleID: Binding<UUID?> = .constant(nil),
         activeToolbarOwner: ToolbarOwner = .mindMap,
         mediaStorage: MediaStorage? = nil,
         topics: [Topic] = [],
@@ -55,11 +60,14 @@ public struct MindMapCanvasView: View {
         onDeleteCard: ((UUID) -> Void)? = nil,
         onEditCard: ((NoteCard) -> Void)? = nil,
         onNewSibling: ((UUID) -> Void)? = nil,
-        onNewChild: ((UUID) -> Void)? = nil
+        onNewChild: ((UUID) -> Void)? = nil,
+        onNewNote: ((CGPoint) -> Void)? = nil,
+        onUpdateTitle: ((UUID, String) -> Void)? = nil
     ) {
         self.cards = cards
         self.links = links
         self.selectedCardID = selectedCardID
+        self._editingCardTitleID = editingCardTitleID
         self.activeToolbarOwner = activeToolbarOwner
         self.mediaStorage = mediaStorage
         self.topics = topics
@@ -75,6 +83,8 @@ public struct MindMapCanvasView: View {
         self.onEditCard = onEditCard
         self.onNewSibling = onNewSibling
         self.onNewChild = onNewChild
+        self.onNewNote = onNewNote
+        self.onUpdateTitle = onUpdateTitle
         self._layoutResult = State(initialValue: TreeLayout.layout(cards: cards))
     }
 
@@ -99,6 +109,7 @@ public struct MindMapCanvasView: View {
                 .focusEffectDisabled()
                 .modifier(MindMapKeyboardHandler(
                     selectedCardID: selectedCardID,
+                    isEditingTitle: editingCardTitleID != nil,
                     cards: cards,
                     frames: frames,
                     visibleCardIDs: layout.visibleCardIDs,
@@ -185,8 +196,36 @@ public struct MindMapCanvasView: View {
             grid
                 .contentShape(Rectangle())
                 .gesture(panGesture)
-                .onTapGesture {
-                    onSelect(nil)
+                .gesture(
+                    SpatialTapGesture(count: 2, coordinateSpace: .named("MindMapCanvas"))
+                        .onEnded { event in
+                            let canvasPoint = viewport.screenToCanvas(event.location)
+                            onNewNote?(canvasPoint)
+                        }
+                        .exclusively(before:
+                            SpatialTapGesture(count: 1, coordinateSpace: .named("MindMapCanvas"))
+                                .onEnded { _ in
+                                    onSelect(nil)
+                                    editingCardTitleID = nil
+                                }
+                        )
+                )
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let loc):
+                        lastHoverLocation = loc
+                    case .ended:
+                        break
+                    }
+                }
+                .contextMenu {
+                    Button {
+                        let loc = lastHoverLocation ?? CGPoint(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                        let canvasPoint = viewport.screenToCanvas(loc)
+                        onNewNote?(canvasPoint)
+                    } label: {
+                        Label("New Note", systemImage: "plus.rectangle")
+                    }
                 }
 
             // Tree connectors and links
@@ -317,7 +356,7 @@ public struct MindMapCanvasView: View {
         ).insetBy(dx: -150, dy: -150)
 
         let culledCards = visibleCards.filter { card in
-            if card.id == selectedCardID || card.id == draggingCardID || card.id == hoverTargetCardID { return true }
+            if card.id == selectedCardID || card.id == draggingCardID || card.id == hoverTargetCardID || card.id == editingCardTitleID { return true }
             guard let frame = frames[card.id] else { return false }
             return frame.intersects(visibleCanvasRect)
         }
@@ -333,12 +372,24 @@ public struct MindMapCanvasView: View {
                     isSelected: isCardSelected,
                     hasChildren: cards.contains(where: { $0.groupNoteId == card.id }),
                     mediaStorage: mediaStorage,
+                    isEditingTitle: editingCardTitleID == card.id,
                     onSelect: {
                         print("[MindMap] CardNodeView onSelect: \(card.title)")
+                        if editingCardTitleID != card.id {
+                            editingCardTitleID = nil
+                        }
                         onSelect(card)
                     },
                     onToggleFold: { onToggleFold(card.id, !card.isFolded) },
                     onEdit: { onEditCard?(card) },
+                    onStartEditTitle: {
+                        editingCardTitleID = card.id
+                        onSelect(card)
+                    },
+                    onCommitTitle: { newTitle in
+                        onUpdateTitle?(card.id, newTitle)
+                        editingCardTitleID = nil
+                    },
                     onComment: { onEditCard?(card) },
                     onLink: {},
                     onMerge: {},
@@ -404,7 +455,11 @@ public struct MindMapCanvasView: View {
 
     @ViewBuilder
     private func cardContextMenu(for card: NoteCard) -> some View {
-        Button("Edit Card") {
+        Button("Edit Title") {
+            editingCardTitleID = card.id
+            onSelect(card)
+        }
+        Button("Edit Details…") {
             onEditCard?(card)
         }
         Divider()
@@ -1317,6 +1372,7 @@ private struct ScrollWheelCatcherView: NSViewRepresentable {
 
 private struct MindMapKeyboardHandler: ViewModifier {
     let selectedCardID: UUID?
+    let isEditingTitle: Bool
     let cards: [NoteCard]
     let frames: [UUID: CGRect]
     let visibleCardIDs: Set<UUID>
@@ -1331,6 +1387,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onKeyPress(.delete) {
+                guard !isEditingTitle else { return .ignored }
                 if let id = selectedCardID {
                     onDeleteCard?(id)
                     return .handled
@@ -1338,6 +1395,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.return) {
+                guard !isEditingTitle else { return .ignored }
                 if let id = selectedCardID {
                     onNewSibling?(id)
                     return .handled
@@ -1345,6 +1403,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.tab) {
+                guard !isEditingTitle else { return .ignored }
                 if let id = selectedCardID {
                     onNewChild?(id)
                     return .handled
@@ -1352,6 +1411,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.space) {
+                guard !isEditingTitle else { return .ignored }
                 if let id = selectedCardID, let card = cards.first(where: { $0.id == id }) {
                     onEditCard?(card)
                     return .handled
@@ -1359,6 +1419,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.rightArrow) {
+                guard !isEditingTitle else { return .ignored }
                 if let curID = selectedCardID {
                     if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .right, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
                        let targetCard = cards.first(where: { $0.id == targetID }) {
@@ -1372,6 +1433,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.leftArrow) {
+                guard !isEditingTitle else { return .ignored }
                 if let curID = selectedCardID {
                     if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .left, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
                        let targetCard = cards.first(where: { $0.id == targetID }) {
@@ -1385,6 +1447,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.downArrow) {
+                guard !isEditingTitle else { return .ignored }
                 if let curID = selectedCardID {
                     if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .down, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
                        let targetCard = cards.first(where: { $0.id == targetID }) {
@@ -1398,6 +1461,7 @@ private struct MindMapKeyboardHandler: ViewModifier {
                 return .ignored
             }
             .onKeyPress(.upArrow) {
+                guard !isEditingTitle else { return .ignored }
                 if let curID = selectedCardID {
                     if let targetID = MindMapCanvasView.nextCardID(from: curID, direction: .up, cards: cards, frames: frames, visibleCardIDs: visibleCardIDs),
                        let targetCard = cards.first(where: { $0.id == targetID }) {

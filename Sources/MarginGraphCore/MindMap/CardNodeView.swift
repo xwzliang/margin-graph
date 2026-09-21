@@ -5,10 +5,13 @@ public struct CardNodeView: View {
     public var card: NoteCard
     public var isSelected: Bool
     public var hasChildren: Bool
+    public var isEditingTitle: Bool
     public var mediaStorage: MediaStorage?
     public var onSelect: () -> Void
     public var onToggleFold: () -> Void
     public var onEdit: (() -> Void)?
+    public var onStartEditTitle: (() -> Void)?
+    public var onCommitTitle: ((String) -> Void)?
     public var onComment: (() -> Void)?
     public var onLink: (() -> Void)?
     public var onMerge: (() -> Void)?
@@ -18,14 +21,19 @@ public struct CardNodeView: View {
     public var onNewSibling: (() -> Void)?
     public var onNewChild: (() -> Void)?
 
+    @State private var editingTitleText: String = ""
+
     public init(
         card: NoteCard,
         isSelected: Bool,
         hasChildren: Bool,
         mediaStorage: MediaStorage? = nil,
+        isEditingTitle: Bool = false,
         onSelect: @escaping () -> Void,
         onToggleFold: @escaping () -> Void,
         onEdit: (() -> Void)? = nil,
+        onStartEditTitle: (() -> Void)? = nil,
+        onCommitTitle: ((String) -> Void)? = nil,
         onComment: (() -> Void)? = nil,
         onLink: (() -> Void)? = nil,
         onMerge: (() -> Void)? = nil,
@@ -39,9 +47,12 @@ public struct CardNodeView: View {
         self.isSelected = isSelected
         self.hasChildren = hasChildren
         self.mediaStorage = mediaStorage
+        self.isEditingTitle = isEditingTitle
         self.onSelect = onSelect
         self.onToggleFold = onToggleFold
         self.onEdit = onEdit
+        self.onStartEditTitle = onStartEditTitle
+        self.onCommitTitle = onCommitTitle
         self.onComment = onComment
         self.onLink = onLink
         self.onMerge = onMerge
@@ -50,6 +61,7 @@ public struct CardNodeView: View {
         self.onDelete = onDelete
         self.onNewSibling = onNewSibling
         self.onNewChild = onNewChild
+        self._editingTitleText = State(initialValue: card.title)
     }
 
     private var cardColors: (background: Color, border: Color, accent: Color) {
@@ -61,62 +73,65 @@ public struct CardNodeView: View {
         let hasNotes = !card.notesText.isEmpty
 
         VStack(alignment: .leading, spacing: 0) {
-                // 1. Accent Header Section (Title & chevron)
-                if !card.title.isEmpty {
-                    HStack(alignment: .top, spacing: 5) {
-                        if hasChildren {
-                            Button(action: onToggleFold) {
-                                Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
-                                    .font(.system(size: 10, weight: .bold))
-                                    .foregroundStyle(Color(white: 0.25))
-                                    .frame(width: 14, height: 14)
-                            }
-                            .buttonStyle(.plain)
-                        }
-
-                        Text(card.title)
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundStyle(Color(white: 0.12))
-                            .fixedSize(horizontal: false, vertical: true)
-
-                        Spacer(minLength: 4)
-
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundStyle(Color(white: 0.35))
-                            .padding(.top, 2)
+            // 1. Accent Header Section (Title & chevron)
+            HStack(alignment: .top, spacing: 5) {
+                if hasChildren {
+                    Button(action: onToggleFold) {
+                        Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(Color(white: 0.25))
+                            .frame(width: 14, height: 14)
                     }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .background(cardColors.accent)
-                } else {
-                    HStack(alignment: .center, spacing: 5) {
-                        if hasChildren {
-                            Button(action: onToggleFold) {
-                                Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(Color(white: 0.25))
-                                    .frame(width: 12, height: 12)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        if !hasExcerpt && !hasNotes {
-                            Text("Untitled Note")
-                                .font(.system(size: 11.5, weight: .regular))
-                                .italic()
-                                .foregroundStyle(Color(white: 0.45))
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(Color(white: 0.35))
-                    }
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, (!hasExcerpt && !hasNotes) ? 8 : 4)
-                    .frame(maxWidth: .infinity)
-                    .background(cardColors.accent)
+                    .buttonStyle(.plain)
                 }
+
+                if isEditingTitle {
+                    InlineTitleEditorView(
+                        text: $editingTitleText,
+                        placeholder: "Untitled Note",
+                        onCommit: {
+                            onCommitTitle?(editingTitleText)
+                        },
+                        onCancel: {
+                            onCommitTitle?(card.title)
+                        }
+                    )
+                    .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                    .onAppear {
+                        editingTitleText = card.title
+                    }
+                    .onChange(of: isEditingTitle) { _, editing in
+                        if editing {
+                            editingTitleText = card.title
+                        }
+                    }
+                } else if !card.title.isEmpty {
+                    Text(card.title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color(white: 0.12))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !hasExcerpt && !hasNotes {
+                    Text("Untitled Note")
+                        .font(.system(size: 11.5, weight: .regular))
+                        .italic()
+                        .foregroundStyle(Color(white: 0.45))
+                }
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color(white: 0.35))
+                    .padding(.top, 2)
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, (!card.title.isEmpty || isEditingTitle || (!hasExcerpt && !hasNotes)) ? 8 : 4)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .background(cardColors.accent)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 2) {
+                onStartEditTitle?()
+            }
 
                 // 2. Cream Body Section (Excerpt & Notes)
                 let hasImage = thumbnail != nil
@@ -169,6 +184,10 @@ public struct CardNodeView: View {
                     .padding(.vertical, 8)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .background(MarginNoteTheme.cardBodyBackground)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        onEdit?()
+                    }
                 }
 
                 // 3. Docked Bottom Action Bar (MarginNote 3 signature)
@@ -276,14 +295,14 @@ public struct CardNodeView: View {
             .shadow(color: isSelected ? Color(red: 0.10, green: 0.40, blue: 0.85).opacity(0.20) : .black.opacity(0.14), radius: isSelected ? 8 : 6, x: 0, y: isSelected ? 4 : 3)
             .shadow(color: .black.opacity(0.06), radius: 1.5, x: 0, y: 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
-            .onTapGesture(count: 2) {
-                onEdit?()
-            }
             .onTapGesture(count: 1) {
                 onSelect()
             }
         .contextMenu {
-            Button("Edit Card") {
+            Button("Edit Title") {
+                onStartEditTitle?()
+            }
+            Button("Edit Details…") {
                 onEdit?()
             }
             Divider()

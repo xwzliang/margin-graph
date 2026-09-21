@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
     @Published var reviewDecks: [ReviewDeckItem] = []
     @Published var isReviewPresented = false
     @Published var editingCard: NoteCard? = nil
+    @Published var editingCardTitleID: UUID? = nil
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
     @Published var documentCurrentPage: [String: Int] = [:]
@@ -873,7 +874,7 @@ final class AppModel: ObservableObject {
     }
 
     func createChildCard(under parentID: UUID) {
-        let topic = ensureTopic()
+        _ = ensureTopic()
         if var parent = mindMapCards.first(where: { $0.id == parentID }) ?? (try? database.getCard(id: parentID)), parent.isFolded {
             parent.isFolded = false
             try? database.updateCard(parent)
@@ -912,13 +913,14 @@ final class AppModel: ObservableObject {
 
         try? database.insertCard(newCard)
         selectedCardID = newCard.id
+        editingCardTitleID = newCard.id
         activeToolbarOwner = .mindMap
         reloadStudySet()
         objectWillChange.send()
     }
 
     func createSiblingCard(after siblingID: UUID) {
-        let topic = ensureTopic()
+        _ = ensureTopic()
         guard let sibling = mindMapCards.first(where: { $0.id == siblingID })
             ?? (try? database.getCard(id: siblingID)) else { return }
 
@@ -960,9 +962,36 @@ final class AppModel: ObservableObject {
 
         try? database.insertCard(newCard)
         selectedCardID = newCard.id
+        editingCardTitleID = newCard.id
         activeToolbarOwner = .mindMap
         reloadStudySet()
         objectWillChange.send()
+    }
+
+    func createFreeNote(at canvasPos: CGPoint) {
+        let topic = ensureTopic()
+        var newCard = NoteCard(
+            topicId: topic.id,
+            title: "",
+            groupNoteId: nil,
+            colorIndex: 0
+        )
+        newCard.mindPos = canvasPos
+        newCard.createdAt = Date()
+
+        try? database.insertCard(newCard)
+        selectedCardID = newCard.id
+        editingCardTitleID = newCard.id
+        activeToolbarOwner = .mindMap
+        reloadStudySet()
+        objectWillChange.send()
+    }
+
+    func updateCardTitle(cardID: UUID, title: String) {
+        guard var card = mindMapCards.first(where: { $0.id == cardID }) ?? (try? database.getCard(id: cardID)) else { return }
+        if card.title == title { return }
+        card.title = title
+        updateCard(card)
     }
 
     func reorder(cardID: UUID, before siblingID: UUID?) {
@@ -1781,6 +1810,7 @@ struct StudyWorkspaceView: View {
                 cards: model.mindMapCards,
                 links: model.links,
                 selectedCardID: model.selectedCardID,
+                editingCardTitleID: $model.editingCardTitleID,
                 activeToolbarOwner: model.activeToolbarOwner,
                 mediaStorage: model.mediaStorage,
                 topics: model.topics,
@@ -1811,6 +1841,12 @@ struct StudyWorkspaceView: View {
                 },
                 onNewChild: { cardID in
                     model.createChildCard(under: cardID)
+                },
+                onNewNote: { pos in
+                    model.createFreeNote(at: pos)
+                },
+                onUpdateTitle: { cardID, title in
+                    model.updateCardTitle(cardID: cardID, title: title)
                 }
             )
         }
