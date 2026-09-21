@@ -79,8 +79,8 @@ public struct CardNodeView: View {
                     InlineTitleEditorView(
                         text: $editingTitleText,
                         placeholder: "Untitled Note",
-                        onCommit: {
-                            onCommitTitle?(editingTitleText)
+                        onCommit: { newTitle in
+                            onCommitTitle?(newTitle)
                         },
                         onCancel: {
                             onCommitTitle?(card.title)

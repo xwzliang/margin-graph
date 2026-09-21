@@ -117,7 +117,7 @@ public struct PDFPopoverToolbarView: View {
                         .toolbarHitTarget()
 
                         Button(action: onAddToComments) {
-                            Text("Add to comments")
+                            Text("Add note")
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 4)
@@ -154,7 +154,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("Add Comment")
 
                     Button(action: onTag) {
@@ -163,26 +163,21 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("Add Tag")
+
+                    Button(action: onResearch) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.white.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                    .toolbarHitTarget(minWidth: 26)
+                    .help("AI Assistant / Research")
 
                     Image(systemName: "textformat")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.white.opacity(0.9))
-
-                    Divider()
-                        .frame(height: 14)
-                        .overlay(Color.white.opacity(0.25))
-
-                    Button(action: onResearch) {
-                        Text("Research")
-                            .font(.system(size: 11.5, weight: .regular))
-                            .foregroundStyle(Color.white.opacity(0.9))
-                            .padding(.horizontal, 2)
-                    }
-                    .buttonStyle(.plain)
-                    .toolbarHitTarget()
-                    .help("Research / Look Up")
 
                 case .edit(let currentColorIndex):
                     // MarginNote 3 complete highlight action bar
@@ -217,7 +212,7 @@ public struct PDFPopoverToolbarView: View {
                     .toolbarHitTarget()
 
                     Button(action: onAddToComments) {
-                        Text("Add to comments")
+                        Text("Add note")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
                             .padding(.horizontal, 4)
@@ -253,7 +248,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("Add Comment")
 
                     Button(action: onTag) {
@@ -262,7 +257,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("Add Tag")
 
                     Button(action: onResearch) {
@@ -271,7 +266,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("AI Assistant")
 
                     Image(systemName: "textformat")
@@ -282,23 +277,13 @@ public struct PDFPopoverToolbarView: View {
                         .frame(height: 14)
                         .overlay(Color.white.opacity(0.25))
 
-                    Button(action: onResearch) {
-                        Text("Research")
-                            .font(.system(size: 11.5, weight: .regular))
-                            .foregroundStyle(Color.white.opacity(0.9))
-                            .padding(.horizontal, 2)
-                    }
-                    .buttonStyle(.plain)
-                    .toolbarHitTarget()
-                    .help("Research / Look Up")
-
                     Button(action: onDelete) {
                         Image(systemName: "trash")
                             .font(.system(size: 11.5))
                             .foregroundStyle(Color(red: 0.95, green: 0.40, blue: 0.40))
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("Delete Note")
 
                 case .emphasisSelection:
@@ -324,7 +309,7 @@ public struct PDFPopoverToolbarView: View {
                             .padding(.horizontal, 4)
                     }
                     .buttonStyle(.plain)
-                    .toolbarHitTarget()
+                    .toolbarHitTarget(minWidth: 26)
                     .help("Delete Emphasis")
                 }
             }
@@ -388,9 +373,11 @@ public struct PDFPopoverToolbarView: View {
 }
 
 private struct ToolbarButtonHitTarget: ViewModifier {
+    var minWidth: CGFloat? = nil
+
     func body(content: Content) -> some View {
         content
-            .frame(minWidth: 26, minHeight: 28)
+            .frame(minWidth: minWidth, minHeight: 28)
             .contentShape(Rectangle())
             .onHover { hovering in
                 if hovering {
@@ -403,8 +390,8 @@ private struct ToolbarButtonHitTarget: ViewModifier {
 }
 
 extension View {
-    fileprivate func toolbarHitTarget() -> some View {
-        modifier(ToolbarButtonHitTarget())
+    fileprivate func toolbarHitTarget(minWidth: CGFloat? = nil) -> some View {
+        modifier(ToolbarButtonHitTarget(minWidth: minWidth))
     }
 }
 

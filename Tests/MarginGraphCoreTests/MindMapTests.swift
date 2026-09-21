@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import SwiftUI
 @testable import MarginGraphCore
 
 final class MindMapTests: XCTestCase {
@@ -497,4 +498,29 @@ final class MindMapTests: XCTestCase {
         let childFrame = try XCTUnwrap(result.frames[child.id])
         XCTAssertEqual(childFrame.minX, 520 + 220 + 80, accuracy: 0.001)
     }
+
+    @MainActor
+    func testInlineTitleEditorBindingAndCommit() throws {
+        var text = "Initial Title"
+        let binding = Binding(get: { text }, set: { text = $0 })
+        let editor = InlineTitleEditorView(
+            text: binding,
+            placeholder: "Untitled Note",
+            onCommit: { _ in },
+            onCancel: {}
+        )
+        XCTAssertNotNil(editor)
+        XCTAssertEqual(text, "Initial Title")
+    }
+
+    @MainActor
+    func testPDFPopoverToolbarViewModesInstantiation() throws {
+        let createToolbar = PDFPopoverToolbarView(mode: .create)
+        XCTAssertNotNil(createToolbar)
+        let editToolbar = PDFPopoverToolbarView(mode: .edit(colorIndex: 2))
+        XCTAssertNotNil(editToolbar)
+        let emphasisToolbar = PDFPopoverToolbarView(mode: .emphasisSelection(phrase: "important phrase"))
+        XCTAssertNotNil(emphasisToolbar)
+    }
 }
+

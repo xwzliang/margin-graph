@@ -1042,6 +1042,8 @@ public final class InteractivePDFView: PDFView {
     var hasPendingSelection: Bool { pendingSelection != nil }
 
     final class ToolbarHostingView<Content: View>: NSHostingView<Content> {
+        private var trackingAreaRef: NSTrackingArea?
+
         override func resetCursorRects() {
             super.resetCursorRects()
             discardCursorRects()
@@ -1049,17 +1051,32 @@ public final class InteractivePDFView: PDFView {
         }
 
         override func cursorUpdate(with event: NSEvent) {
-            NSCursor.arrow.set()
+            if NSCursor.current != .pointingHand {
+                NSCursor.arrow.set()
+            }
         }
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
-            for area in trackingAreas {
-                removeTrackingArea(area)
+            if let existing = trackingAreaRef {
+                removeTrackingArea(existing)
             }
-            let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect]
+            let options: NSTrackingArea.Options = [
+                .mouseEnteredAndExited,
+                .mouseMoved,
+                .cursorUpdate,
+                .activeAlways,
+                .inVisibleRect
+            ]
             let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
             addTrackingArea(area)
+            trackingAreaRef = area
+        }
+
+        override func mouseMoved(with event: NSEvent) {
+            if NSCursor.current != .pointingHand {
+                NSCursor.arrow.set()
+            }
         }
 
         override func mouseEntered(with event: NSEvent) {
@@ -1330,12 +1347,12 @@ public final class InteractivePDFView: PDFView {
         let toolbarWidth: CGFloat
         if mode == .create {
             if hasTargetCard {
-                toolbarWidth = isWithinTargetHighlight ? 670.0 : 600.0
+                toolbarWidth = isWithinTargetHighlight ? 530.0 : 480.0
             } else {
-                toolbarWidth = 310.0
+                toolbarWidth = 280.0
             }
         } else {
-            toolbarWidth = 680.0
+            toolbarWidth = 520.0
         }
         let toolbarHeight: CGFloat = 46.0
 
@@ -1347,7 +1364,8 @@ public final class InteractivePDFView: PDFView {
         let knobXView = knobBottomView.x
 
         var x = knobXView - toolbarWidth / 2.0
-        x = max(12, min(x, bounds.width - toolbarWidth - 12))
+        let maxX = max(12, bounds.width - toolbarWidth - 12)
+        x = max(12, min(x, maxX))
 
         let arrowOffset = max(14, min(knobXView - x - 7, toolbarWidth - 28))
 
@@ -2425,6 +2443,30 @@ public final class InteractivePDFView: PDFView {
             hasTargetCard: targetCardID != nil,
             isWithinTargetHighlight: isWithin
         )
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        if let toolbar = toolbarHostingView, !toolbar.isHidden, toolbar.frame.contains(viewPoint) {
+            // Hovering over floating toolbar popover
+            // Prevent PDFView from setting NSCursor.iBeam!
+            if NSCursor.current != .pointingHand {
+                NSCursor.arrow.set()
+            }
+            return
+        }
+        super.mouseMoved(with: event)
+    }
+
+    public override func cursorUpdate(with event: NSEvent) {
+        let viewPoint = convert(event.locationInWindow, from: nil)
+        if let toolbar = toolbarHostingView, !toolbar.isHidden, toolbar.frame.contains(viewPoint) {
+            if NSCursor.current != .pointingHand {
+                NSCursor.arrow.set()
+            }
+            return
+        }
+        super.cursorUpdate(with: event)
     }
 
     public override func menu(for event: NSEvent) -> NSMenu? {

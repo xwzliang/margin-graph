@@ -394,7 +394,9 @@ public struct MindMapCanvasView: View {
                     onEdit: { onEditCard?(card) },
                     onStartEditTitle: {
                         editingCardTitleID = card.id
-                        onSelect(card)
+                        if selectedCardID != card.id {
+                            onSelect(card)
+                        }
                     },
                     onCommitTitle: { newTitle in
                         onUpdateTitle?(card.id, newTitle)
