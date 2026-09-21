@@ -1202,7 +1202,8 @@ struct StudyWorkspaceView: View {
                                 .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
                                 .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
                         )
-                        .position(x: 14, y: totalHeight * 0.74)
+                        .frame(width: 24, height: 30)
+                        .offset(x: 4, y: totalHeight * 0.74 - 15)
                         .zIndex(200)
                     }
 
@@ -1235,7 +1236,8 @@ struct StudyWorkspaceView: View {
                                 .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
                                 .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
                         )
-                        .position(x: totalWidth - 14, y: totalHeight * 0.74)
+                        .frame(width: 24, height: 30)
+                        .offset(x: totalWidth - 28, y: totalHeight * 0.74 - 15)
                         .zIndex(200)
                     }
 
@@ -1313,23 +1315,19 @@ struct StudyWorkspaceView: View {
                         if isDraggingSplitDivider {
                             Rectangle()
                                 .fill(Color.accentColor.opacity(0.85))
-                                .frame(width: 2)
+                                .frame(width: 2, height: totalHeight)
                                 .shadow(color: Color.black.opacity(0.18), radius: 2)
-                                .position(x: activeDividerX, y: totalHeight / 2)
+                                .offset(x: activeDividerX - 1, y: 0)
+                                .allowsHitTesting(false)
                                 .zIndex(190)
                         }
 
                         // Draggable Split Divider Line between MindMap and PDF
                         Rectangle()
                             .fill(MarginNoteTheme.separatorColor)
-                            .frame(width: 1)
-                            .background(
-                                Rectangle()
-                                    .fill(Color.clear)
-                                    .frame(width: 11)
-                                    .contentShape(Rectangle())
-                            )
-                            .position(x: activeDividerX, y: totalHeight / 2)
+                            .frame(width: 1, height: totalHeight)
+                            .frame(width: 9, height: totalHeight)
+                            .contentShape(Rectangle())
                             .onHover { inside in
                                 if inside {
                                     NSCursor.resizeLeftRight.set()
@@ -1346,6 +1344,7 @@ struct StudyWorkspaceView: View {
                                     maxPDF: maxPDF
                                 )
                             )
+                            .offset(x: activeDividerX - 4.5, y: 0)
                             .zIndex(150)
 
                         // MarginNote 3 Signature Floating < • > Split Divider Pill
@@ -1355,7 +1354,8 @@ struct StudyWorkspaceView: View {
                             minPDF: minPDF,
                             maxPDF: maxPDF
                         )
-                        .position(x: activeDividerX, y: totalHeight * 0.74)
+                        .frame(width: 52, height: 28)
+                        .offset(x: activeDividerX - 26, y: totalHeight * 0.74 - 14)
                         .zIndex(200)
                     }
                 }
