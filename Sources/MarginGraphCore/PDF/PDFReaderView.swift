@@ -1040,7 +1040,40 @@ public final class InteractivePDFView: PDFView {
     }
     private var pendingSelection: PendingSelection?
     var hasPendingSelection: Bool { pendingSelection != nil }
-    private var toolbarHostingView: NSHostingView<AnyView>?
+
+    final class ToolbarHostingView<Content: View>: NSHostingView<Content> {
+        override func resetCursorRects() {
+            super.resetCursorRects()
+            discardCursorRects()
+            addCursorRect(bounds, cursor: .arrow)
+        }
+
+        override func cursorUpdate(with event: NSEvent) {
+            NSCursor.arrow.set()
+        }
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            for area in trackingAreas {
+                removeTrackingArea(area)
+            }
+            let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect]
+            let area = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+            addTrackingArea(area)
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            super.mouseEntered(with: event)
+            NSCursor.arrow.set()
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            super.mouseExited(with: event)
+            window?.resetCursorRects()
+        }
+    }
+
+    private var toolbarHostingView: ToolbarHostingView<AnyView>?
     private var scrollObserver: NSObjectProtocol?
     var onScroll: (() -> Void)?
     private var lastClipOrigin: CGPoint? = nil
@@ -1387,16 +1420,19 @@ public final class InteractivePDFView: PDFView {
             existing.frame = frame
             existing.isHidden = false
             addSubview(existing, positioned: .above, relativeTo: nil)
+            window?.resetCursorRects()
         } else {
-            let hosting = NSHostingView(rootView: AnyView(toolbarView))
+            let hosting = ToolbarHostingView(rootView: AnyView(toolbarView))
             hosting.frame = frame
             addSubview(hosting, positioned: .above, relativeTo: nil)
             toolbarHostingView = hosting
+            window?.resetCursorRects()
         }
     }
 
     func hideToolbar() {
         toolbarHostingView?.isHidden = true
+        window?.resetCursorRects()
     }
 
     func showEmphasisToolbar(phrase: String, page: PDFPage, lineRect: HighlightRect) {
@@ -1442,11 +1478,13 @@ public final class InteractivePDFView: PDFView {
             existing.frame = frame
             existing.isHidden = false
             addSubview(existing, positioned: .above, relativeTo: nil)
+            window?.resetCursorRects()
         } else {
-            let hosting = NSHostingView(rootView: AnyView(toolbarView))
+            let hosting = ToolbarHostingView(rootView: AnyView(toolbarView))
             hosting.frame = frame
             addSubview(hosting, positioned: .above, relativeTo: nil)
             toolbarHostingView = hosting
+            window?.resetCursorRects()
         }
     }
 

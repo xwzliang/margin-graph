@@ -75,16 +75,6 @@ public struct CardNodeView: View {
         VStack(alignment: .leading, spacing: 0) {
             // 1. Accent Header Section (Title & chevron)
             HStack(alignment: .top, spacing: 5) {
-                if hasChildren {
-                    Button(action: onToggleFold) {
-                        Image(systemName: card.isFolded ? "chevron.right" : "chevron.down")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundStyle(Color(white: 0.25))
-                            .frame(width: 14, height: 14)
-                    }
-                    .buttonStyle(.plain)
-                }
-
                 if isEditingTitle {
                     InlineTitleEditorView(
                         text: $editingTitleText,
@@ -129,9 +119,17 @@ public struct CardNodeView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(cardColors.accent)
             .contentShape(Rectangle())
-            .onTapGesture(count: 2) {
-                onStartEditTitle?()
-            }
+            .gesture(
+                TapGesture(count: 2).onEnded {
+                    onStartEditTitle?()
+                }
+                .exclusively(before:
+                    TapGesture(count: 1).onEnded {
+                        onSelect()
+                    }
+                ),
+                including: isEditingTitle ? .none : .all
+            )
 
                 // 2. Cream Body Section (Excerpt & Notes)
                 let hasImage = thumbnail != nil
@@ -185,9 +183,16 @@ public struct CardNodeView: View {
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                     .background(MarginNoteTheme.cardBodyBackground)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        onEdit?()
-                    }
+                    .gesture(
+                        TapGesture(count: 2).onEnded {
+                            onEdit?()
+                        }
+                        .exclusively(before:
+                            TapGesture(count: 1).onEnded {
+                                onSelect()
+                            }
+                        )
+                    )
                 }
 
                 // 3. Docked Bottom Action Bar (MarginNote 3 signature)
@@ -295,9 +300,6 @@ public struct CardNodeView: View {
             .shadow(color: isSelected ? Color(red: 0.10, green: 0.40, blue: 0.85).opacity(0.20) : .black.opacity(0.14), radius: isSelected ? 8 : 6, x: 0, y: isSelected ? 4 : 3)
             .shadow(color: .black.opacity(0.06), radius: 1.5, x: 0, y: 1)
             .contentShape(RoundedRectangle(cornerRadius: 7))
-            .onTapGesture(count: 1) {
-                onSelect()
-            }
         .contextMenu {
             Button("Edit Title") {
                 onStartEditTitle?()

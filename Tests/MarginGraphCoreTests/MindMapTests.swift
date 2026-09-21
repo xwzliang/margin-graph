@@ -479,4 +479,22 @@ final class MindMapTests: XCTestCase {
         XCTAssertEqual(sibling.title, "")
         XCTAssertNil(sibling.groupNoteId)
     }
+
+    func testAnchoredRootNoteLayoutAtExactPosition() throws {
+        let topic = UUID()
+        var freeRoot = NoteCard(id: UUID(), topicId: topic, title: "Free Root")
+        freeRoot.mindPos = CGPoint(x: 520, y: 380)
+
+        let child = NoteCard(id: UUID(), topicId: topic, title: "Child", groupNoteId: freeRoot.id)
+
+        let config = TreeLayoutConfiguration(nodeSize: CGSize(width: 220, height: 100), horizontalSpacing: 80, verticalSpacing: 28)
+        let result = TreeLayout.layout(cards: [freeRoot, child], configuration: config)
+
+        let rootFrame = try XCTUnwrap(result.frames[freeRoot.id])
+        XCTAssertEqual(rootFrame.minX, 520, accuracy: 0.001)
+        XCTAssertEqual(rootFrame.minY, 380, accuracy: 0.001)
+
+        let childFrame = try XCTUnwrap(result.frames[child.id])
+        XCTAssertEqual(childFrame.minX, 520 + 220 + 80, accuracy: 0.001)
+    }
 }

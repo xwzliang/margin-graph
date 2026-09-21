@@ -51,8 +51,12 @@ public struct InlineTitleEditorView: NSViewRepresentable {
     }
 
     public func updateNSView(_ nsView: CustomTitleTextField, context: Context) {
-        if nsView.currentEditor() == nil && nsView.stringValue != text {
-            nsView.stringValue = text
+        context.coordinator.parent = self
+        if nsView.currentEditor() == nil {
+            if nsView.stringValue != text {
+                nsView.stringValue = text
+            }
+            context.coordinator.hasCommitted = false
         }
         nsView.onEscape = onCancel
     }

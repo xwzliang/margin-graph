@@ -99,8 +99,13 @@ public struct MindMapCanvasView: View {
                 .onChange(of: cards) { _, newCards in
                     layoutResult = TreeLayout.layout(cards: newCards)
                     if let selectedID = selectedCardID, let frame = layoutResult.frames[selectedID] {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            viewport.center(on: frame)
+                        let screenOrigin = viewport.canvasToScreen(CGPoint(x: frame.minX, y: frame.minY))
+                        let screenRect = CGRect(origin: screenOrigin, size: CGSize(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale))
+                        let viewRect = CGRect(origin: .zero, size: viewport.viewportSize)
+                        if viewport.viewportSize.width > 50, !viewRect.insetBy(dx: 40, dy: 40).contains(screenRect) {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                viewport.center(on: frame)
+                            }
                         }
                     }
                 }
@@ -139,8 +144,13 @@ public struct MindMapCanvasView: View {
                 }
                 .onChange(of: selectedCardID) { _, newID in
                     if let newID, let frame = frames[newID] {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            viewport.center(on: frame)
+                        let screenOrigin = viewport.canvasToScreen(CGPoint(x: frame.minX, y: frame.minY))
+                        let screenRect = CGRect(origin: screenOrigin, size: CGSize(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale))
+                        let viewRect = CGRect(origin: .zero, size: viewport.viewportSize)
+                        if viewport.viewportSize.width > 50, !viewRect.insetBy(dx: 40, dy: 40).contains(screenRect) {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                viewport.center(on: frame)
+                            }
                         }
                     }
                 }
@@ -419,7 +429,10 @@ public struct MindMapCanvasView: View {
                 .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale)
                 .zIndex(isBeingDragged ? 100 : (isTargeted ? 50 : 1))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
-                .gesture(nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames))
+                .gesture(
+                    nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames),
+                    including: editingCardTitleID == card.id ? .none : .all
+                )
                 .contextMenu {
                     cardContextMenu(for: card)
                 }
@@ -427,6 +440,16 @@ public struct MindMapCanvasView: View {
                     x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).x,
                     y: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).y
                 )
+            }
+        }
+
+        // MarginNote 3 Branch Fold/Unfold circular toggle buttons
+        ForEach(culledCards, id: \.id) { card in
+            if let frame = frames[card.id] {
+                let hasChildren = cards.contains(where: { $0.groupNoteId == card.id })
+                if hasChildren {
+                    branchFoldButton(card: card, frame: frame)
+                }
             }
         }
 
@@ -451,6 +474,54 @@ public struct MindMapCanvasView: View {
                 .zIndex(200)
                 .allowsHitTesting(false)
         }
+    }
+
+    @ViewBuilder
+    private func branchFoldButton(card: NoteCard, frame: CGRect) -> some View {
+        let accentColor = MarginNoteTheme.cardColors(for: card.colorIndex).accent
+        let isFolded = card.isFolded
+        let buttonDiameter: CGFloat = max(13.0, 15.0 * viewport.zoomScale)
+        let hitSize: CGFloat = max(26.0, buttonDiameter + 10.0)
+        let screenCenter = viewport.canvasToScreen(CGPoint(x: frame.maxX + 14, y: frame.midY))
+
+        Button {
+            onToggleFold(card.id, !isFolded)
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: buttonDiameter, height: buttonDiameter)
+                Circle()
+                    .stroke(accentColor, lineWidth: max(1.2, 1.5 * viewport.zoomScale))
+                    .frame(width: buttonDiameter, height: buttonDiameter)
+
+                // Minus "-" horizontal line
+                Rectangle()
+                    .fill(accentColor)
+                    .frame(width: max(5.0, 7.0 * viewport.zoomScale), height: max(1.2, 1.5 * viewport.zoomScale))
+
+                // Plus "+" vertical line if folded
+                if isFolded {
+                    Rectangle()
+                        .fill(accentColor)
+                        .frame(width: max(1.2, 1.5 * viewport.zoomScale), height: max(5.0, 7.0 * viewport.zoomScale))
+                }
+            }
+            .frame(width: hitSize, height: hitSize)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(width: hitSize, height: hitSize)
+        .offset(x: screenCenter.x - hitSize / 2, y: screenCenter.y - hitSize / 2)
+        .zIndex(130)
+        .onHover { hovering in
+            if hovering {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+            }
+        }
+        .marginNoteTooltip(isFolded ? "Expand Branch" : "Collapse Branch")
     }
 
     @ViewBuilder
@@ -518,6 +589,10 @@ public struct MindMapCanvasView: View {
             )
         }
         .buttonStyle(.plain)
+        .enlargedHitTarget(width: 68, height: 28)
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
         .marginNoteTooltip("Add Sibling Note (Return)")
     }
 
@@ -542,12 +617,16 @@ public struct MindMapCanvasView: View {
             )
         }
         .buttonStyle(.plain)
+        .enlargedHitTarget(width: 58, height: 28)
+        .onHover { hovering in
+            if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+        }
         .marginNoteTooltip("Add Child Note (Tab)")
     }
 
     @ViewBuilder
     private func toolbarColorPalette(card: NoteCard) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(0..<6, id: \.self) { idx in
                 let isSelectedColor = (card.colorIndex == idx)
                 let colors = MarginNoteTheme.cardColors(for: idx)
@@ -561,10 +640,12 @@ public struct MindMapCanvasView: View {
                             Circle()
                                 .stroke(Color.white, lineWidth: isSelectedColor ? 2.2 : 0)
                         )
-                        .frame(width: 17, height: 17)
-                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .enlargedHitTarget(width: 20, height: 28)
+                .onHover { hovering in
+                    if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+                }
                 .marginNoteTooltip("Change Color")
             }
         }
@@ -579,9 +660,12 @@ public struct MindMapCanvasView: View {
                 Image(systemName: "pencil")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Color.white.opacity(0.9))
-                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .enlargedHitTarget(width: 26, height: 28)
+            .onHover { hovering in
+                if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            }
             .marginNoteTooltip("Edit Note")
 
             Button {
@@ -590,9 +674,12 @@ public struct MindMapCanvasView: View {
                 Image(systemName: "trash")
                     .font(.system(size: 11.5))
                     .foregroundStyle(Color(red: 0.95, green: 0.40, blue: 0.40))
-                    .frame(width: 22, height: 22)
             }
             .buttonStyle(.plain)
+            .enlargedHitTarget(width: 26, height: 28)
+            .onHover { hovering in
+                if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            }
             .marginNoteTooltip("Delete Note (Delete)")
         }
     }
@@ -624,6 +711,12 @@ public struct MindMapCanvasView: View {
                 .fill(Color(white: 0.17).opacity(0.96))
         )
         .shadow(color: Color.black.opacity(0.35), radius: 6, y: 3)
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .onHover { hovering in
+            if hovering {
+                NSCursor.arrow.set()
+            }
+        }
     }
 
     private var bottomLeftControls: some View {
@@ -826,10 +919,10 @@ public struct MindMapCanvasView: View {
     }
 
     private func nodeDrag(card: NoteCard, initialFrame: CGRect, staticFrames: [UUID: CGRect]) -> some Gesture {
-        DragGesture(coordinateSpace: .named("MindMapCanvas"))
+        DragGesture(minimumDistance: 4, coordinateSpace: .named("MindMapCanvas"))
             .onChanged { value in
                 let distance = hypot(value.translation.width, value.translation.height)
-                if distance > 3 {
+                if distance >= 4 {
                     draggingCardID = card.id
                     let canvasDelta = CGPoint(
                         x: value.translation.width / viewport.zoomScale,
@@ -847,10 +940,7 @@ public struct MindMapCanvasView: View {
             }
             .onEnded { value in
                 let distance = hypot(value.translation.width, value.translation.height)
-                print("[MindMap] nodeDrag onEnded: card=\(card.title) distance=\(distance)")
-                if distance <= 3 {
-                    print("[MindMap] nodeDrag calling onSelect(\(card.title))")
-                    onSelect(card)
+                if distance < 4 {
                     draggingCardID = nil
                     hoverTargetCardID = nil
                     return
@@ -966,9 +1056,27 @@ public struct MindMapCanvasView: View {
                let child = frames[card.id] {
                 var path = Path()
                 path.addPath(Path(TreeLayout.connectorPath(from: parent, to: child)))
+                let parentCard = cards.first(where: { $0.id == parentID })
+                let strokeColor = parentCard.map { MarginNoteTheme.cardColors(for: $0.colorIndex).accent } ?? Color(red: 0.70, green: 0.66, blue: 0.58)
                 context.stroke(
                     transformed(path),
-                    with: .color(Color(red: 0.70, green: 0.66, blue: 0.58)),
+                    with: .color(strokeColor),
+                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
+                )
+            }
+        }
+
+        // Draw short horizontal stem for collapsed cards with children
+        for card in cards where visible.contains(card.id) && card.isFolded {
+            let hasChildren = cards.contains(where: { $0.groupNoteId == card.id })
+            if hasChildren, let parent = frames[card.id] {
+                var stem = Path()
+                stem.move(to: CGPoint(x: parent.maxX, y: parent.midY))
+                stem.addLine(to: CGPoint(x: parent.maxX + 14, y: parent.midY))
+                let strokeColor = MarginNoteTheme.cardColors(for: card.colorIndex).accent
+                context.stroke(
+                    transformed(stem),
+                    with: .color(strokeColor),
                     style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
                 )
             }

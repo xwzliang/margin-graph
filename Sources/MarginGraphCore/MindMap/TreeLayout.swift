@@ -122,13 +122,65 @@ public enum TreeLayout {
             return frame
         }
 
-        for root in roots {
+        // Separate free/anchored root cards from auto-column roots
+        let (anchoredRoots, autoRoots) = roots.reduce(into: ([NoteCard](), [NoteCard]())) { res, card in
+            if card.groupNoteId == nil, card.bookMD5 == nil, card.startPage == nil, card.mindPos != nil {
+                res.0.append(card)
+            } else {
+                res.1.append(card)
+            }
+        }
+
+        for root in autoRoots {
             if nextY >= maxColumnHeight {
                 let currentMaxX = frames.values.map(\.maxX).max() ?? (columnStartX + configuration.nodeSize.width)
                 columnStartX = currentMaxX + configuration.horizontalSpacing
                 nextY = 40
             }
             _ = place(root, depth: 0, baseX: columnStartX)
+        }
+
+        @discardableResult
+        func placeAnchored(_ card: NoteCard, origin: CGPoint) -> CGRect {
+            let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
+            let cardHeight = estimatedCardHeight(for: card, width: configuration.nodeSize.width)
+            let currentSize = CGSize(width: configuration.nodeSize.width, height: cardHeight)
+
+            if card.isFolded || cardChildren.isEmpty {
+                let frame = CGRect(origin: origin, size: currentSize)
+                frames[card.id] = frame
+                visible.insert(card.id)
+                return frame
+            }
+
+            var childFrames: [CGRect] = []
+            let childX = origin.x + configuration.nodeSize.width + configuration.horizontalSpacing
+            var childY = origin.y
+
+            for child in cardChildren where cardByID[child.id] != nil {
+                let childFrame = placeAnchored(child, origin: CGPoint(x: childX, y: childY))
+                childFrames.append(childFrame)
+                childY += childFrame.height + configuration.verticalSpacing
+            }
+
+            let childCenterY: CGFloat
+            if let first = childFrames.first, let last = childFrames.last {
+                childCenterY = (first.midY + last.midY) / 2
+            } else {
+                childCenterY = origin.y + cardHeight / 2
+            }
+
+            let rootY = childCenterY - cardHeight / 2
+            let frame = CGRect(origin: CGPoint(x: origin.x, y: rootY), size: currentSize)
+            frames[card.id] = frame
+            visible.insert(card.id)
+            return frame
+        }
+
+        for root in anchoredRoots {
+            if let origin = root.mindPos {
+                _ = placeAnchored(root, origin: origin)
+            }
         }
 
         return TreeLayoutResult(frames: frames, visibleCardIDs: visible)

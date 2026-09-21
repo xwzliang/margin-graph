@@ -91,6 +91,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
 
                     if hasTargetCard {
                         if isWithinTargetHighlight {
@@ -102,6 +103,7 @@ public struct PDFPopoverToolbarView: View {
                                     .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.plain)
+                            .toolbarHitTarget()
                         }
 
                         Button(action: onAsTitle) {
@@ -112,6 +114,7 @@ public struct PDFPopoverToolbarView: View {
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
+                        .toolbarHitTarget()
 
                         Button(action: onAddToComments) {
                             Text("Add to comments")
@@ -121,6 +124,7 @@ public struct PDFPopoverToolbarView: View {
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
+                        .toolbarHitTarget()
 
                         Button(action: onMerge) {
                             Text("Merge")
@@ -130,6 +134,7 @@ public struct PDFPopoverToolbarView: View {
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
+                        .toolbarHitTarget()
                     }
 
                     Divider()
@@ -149,6 +154,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Add Comment")
 
                     Button(action: onTag) {
@@ -157,6 +163,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Add Tag")
 
                     Image(systemName: "textformat")
@@ -174,6 +181,7 @@ public struct PDFPopoverToolbarView: View {
                             .padding(.horizontal, 2)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Research / Look Up")
 
                 case .edit(let currentColorIndex):
@@ -186,6 +194,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
 
                     Button(action: onEmphasize) {
                         Text("Emphasize")
@@ -195,6 +204,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
 
                     Button(action: onAsTitle) {
                         Text("As title")
@@ -204,6 +214,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
 
                     Button(action: onAddToComments) {
                         Text("Add to comments")
@@ -213,6 +224,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
 
                     Button(action: onMerge) {
                         Text("Merge")
@@ -222,6 +234,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
 
                     Divider()
                         .frame(height: 14)
@@ -240,6 +253,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Add Comment")
 
                     Button(action: onTag) {
@@ -248,6 +262,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Add Tag")
 
                     Button(action: onResearch) {
@@ -256,6 +271,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color.white.opacity(0.9))
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("AI Assistant")
 
                     Image(systemName: "textformat")
@@ -273,6 +289,7 @@ public struct PDFPopoverToolbarView: View {
                             .padding(.horizontal, 2)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Research / Look Up")
 
                     Button(action: onDelete) {
@@ -281,6 +298,7 @@ public struct PDFPopoverToolbarView: View {
                             .foregroundStyle(Color(red: 0.95, green: 0.40, blue: 0.40))
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Delete Note")
 
                 case .emphasisSelection:
@@ -292,6 +310,7 @@ public struct PDFPopoverToolbarView: View {
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Research")
 
                     Divider()
@@ -305,6 +324,7 @@ public struct PDFPopoverToolbarView: View {
                             .padding(.horizontal, 4)
                     }
                     .buttonStyle(.plain)
+                    .toolbarHitTarget()
                     .help("Delete Emphasis")
                 }
             }
@@ -315,6 +335,12 @@ public struct PDFPopoverToolbarView: View {
                     .fill(Color(white: 0.17).opacity(0.96))
             )
             .shadow(color: .black.opacity(0.35), radius: 6, y: 3)
+            .contentShape(RoundedRectangle(cornerRadius: 7))
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.arrow.set()
+                }
+            }
 
             if isArrowFlipped {
                 // Arrow pointing DOWN
@@ -345,12 +371,40 @@ public struct PDFPopoverToolbarView: View {
                             Circle()
                                 .stroke(Color.white, lineWidth: selectedIdx == idx ? 2.2 : 0)
                         )
-                        .frame(width: 17, height: 17)
+                        .frame(width: 20, height: 26)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { hovering in
+                    if hovering {
+                        NSCursor.pointingHand.set()
+                    } else {
+                        NSCursor.arrow.set()
+                    }
+                }
             }
         }
+    }
+}
+
+private struct ToolbarButtonHitTarget: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(minWidth: 26, minHeight: 28)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.pointingHand.set()
+                } else {
+                    NSCursor.arrow.set()
+                }
+            }
+    }
+}
+
+extension View {
+    fileprivate func toolbarHitTarget() -> some View {
+        modifier(ToolbarButtonHitTarget())
     }
 }
 
