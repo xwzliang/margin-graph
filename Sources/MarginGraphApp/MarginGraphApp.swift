@@ -1076,6 +1076,7 @@ struct StudyWorkspaceHeaderView: View {
                     .foregroundStyle(MarginNoteTheme.separatorColor),
                 alignment: .bottom
             )
+            .tooltipContainer()
             .zIndex(100)
     }
 }

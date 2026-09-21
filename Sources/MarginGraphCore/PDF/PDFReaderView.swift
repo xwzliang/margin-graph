@@ -678,8 +678,8 @@ public struct PDFReaderView: NSViewRepresentable {
         view.focusRingType = .none
         view.autoScales = true
         view.displaysPageBreaks = true
-        view.pageBreakMargins = NSEdgeInsets(top: 0.5, left: 0, bottom: 0.5, right: 0)
-        view.backgroundColor = NSColor(red: 0.80, green: 0.80, blue: 0.82, alpha: 1.0)
+        view.pageBreakMargins = NSEdgeInsets(top: 0.25, left: 0, bottom: 0.25, right: 0)
+        view.backgroundColor = NSColor(white: 0.92, alpha: 1.0)
         view.document = manager.document
         configure(view)
         context.coordinator.setupObserver(for: view)
@@ -712,8 +712,9 @@ public struct PDFReaderView: NSViewRepresentable {
         }
 
         view.displayMode = displayMode == .continuous ? .singlePageContinuous : .singlePage
-        view.pageBreakMargins = NSEdgeInsets(top: 0.5, left: 0, bottom: 0.5, right: 0)
-        view.backgroundColor = NSColor(red: 0.80, green: 0.80, blue: 0.82, alpha: 1.0)
+        view.pageBreakMargins = NSEdgeInsets(top: 0.25, left: 0, bottom: 0.25, right: 0)
+        view.backgroundColor = NSColor(white: 0.92, alpha: 1.0)
+        view.applySubtlePageSeparators()
         view.autoScales = true
         configure(view)
         let cardsChanged = !Self.highlightsEqual(context.coordinator.lastCards, cards) ||
@@ -1156,6 +1157,24 @@ public final class InteractivePDFView: PDFView {
         }
     }
 
+    public func applySubtlePageSeparators() {
+        guard let docView = documentView else { return }
+        for subview in docView.subviews {
+            if let layer = subview.layer {
+                layer.shadowOpacity = 0
+                layer.shadowRadius = 0
+                layer.borderWidth = 0
+            }
+            if let sublayers = subview.layer?.sublayers {
+                for sublayer in sublayers {
+                    sublayer.shadowOpacity = 0
+                    sublayer.shadowRadius = 0
+                    sublayer.borderWidth = 0
+                }
+            }
+        }
+    }
+
     private func setupScrollObserver() {
         removeScrollObserver()
         guard let clipView = pdfScrollView?.contentView else { return }
@@ -1167,6 +1186,7 @@ public final class InteractivePDFView: PDFView {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.applySubtlePageSeparators()
                 self.updateToolbarPosition()
                 if let clip = self.pdfScrollView?.contentView {
                     let currentOrigin = clip.bounds.origin
@@ -1195,7 +1215,13 @@ public final class InteractivePDFView: PDFView {
         if scrollObserver == nil && window != nil {
             setupScrollObserver()
         }
+        applySubtlePageSeparators()
         updateToolbarPosition()
+    }
+
+    public override func layoutDocumentView() {
+        super.layoutDocumentView()
+        applySubtlePageSeparators()
     }
 
     func updateToolbarPosition() {

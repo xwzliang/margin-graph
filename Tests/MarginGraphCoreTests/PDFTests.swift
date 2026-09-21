@@ -877,4 +877,71 @@ final class PDFTests: XCTestCase {
         let visibleCenterInDoc = clipView.bounds.origin.y + clipView.bounds.height / 2.0
         XCTAssertEqual(topInDoc.y, visibleCenterInDoc, accuracy: 1.0, "The top line of the note should be centered vertically in the viewport")
     }
+
+    func testSubtlePDFPageSeparatorsConfiguration() {
+        let pdfView = InteractivePDFView()
+        pdfView.displaysPageBreaks = true
+        pdfView.pageBreakMargins = NSEdgeInsets(top: 0.25, left: 0, bottom: 0.25, right: 0)
+        pdfView.backgroundColor = NSColor(white: 0.92, alpha: 1.0)
+
+        XCTAssertTrue(pdfView.displaysPageBreaks)
+        XCTAssertEqual(pdfView.pageBreakMargins.top, 0.25)
+        XCTAssertEqual(pdfView.pageBreakMargins.bottom, 0.25)
+        XCTAssertEqual(pdfView.backgroundColor, NSColor(white: 0.92, alpha: 1.0))
+    }
+
+    func testMarginNoteTooltipBoundaryClamping() {
+        let windowSize = CGSize(width: 1440, height: 900)
+
+        // 1. Left-edge button: "Back to Notebooks" at x = 14, width = 26
+        let backBtnFrame = CGRect(x: 14, y: 30, width: 26, height: 26)
+        let backOffsets = MarginNoteTooltipModifier.computeOffsets(
+            buttonFrame: backBtnFrame,
+            text: "Back to Notebooks",
+            windowSize: windowSize,
+            padding: 8.0
+        )
+        let backFont = NSFont.systemFont(ofSize: 11.5, weight: .medium)
+        let backWidth = ("Back to Notebooks" as NSString).size(withAttributes: [.font: backFont]).width + 18.0
+        let backLeft = backBtnFrame.midX - (backWidth / 2.0)
+        XCTAssertLessThan(backLeft, 8.0, "Without shift, the left edge would be off-screen")
+        XCTAssertGreaterThan(backOffsets.x, 0, "Shift should push tooltip rightwards")
+        XCTAssertEqual(backLeft + backOffsets.x, 8.0, accuracy: 0.01, "Tooltip left edge must be clamped exactly to padding")
+
+        // 2. Right-edge button: "Document Options" at x = 1400, width = 26
+        let optionsBtnFrame = CGRect(x: 1400, y: 30, width: 26, height: 26)
+        let optionsOffsets = MarginNoteTooltipModifier.computeOffsets(
+            buttonFrame: optionsBtnFrame,
+            text: "Document Options",
+            windowSize: windowSize,
+            padding: 8.0
+        )
+        let optionsWidth = ("Document Options" as NSString).size(withAttributes: [.font: backFont]).width + 18.0
+        let optionsRight = optionsBtnFrame.midX + (optionsWidth / 2.0)
+        XCTAssertGreaterThan(optionsRight, 1440 - 8.0, "Without shift, the right edge would exceed window width")
+        XCTAssertLessThan(optionsOffsets.x, 0, "Shift should push tooltip leftwards")
+        XCTAssertEqual(optionsRight + optionsOffsets.x, 1440 - 8.0, accuracy: 0.01, "Tooltip right edge must be clamped exactly to window right - padding")
+
+        // 3. Center button: safely within bounds, no shift needed
+        let centerBtnFrame = CGRect(x: 700, y: 30, width: 26, height: 26)
+        let centerOffsets = MarginNoteTooltipModifier.computeOffsets(
+            buttonFrame: centerBtnFrame,
+            text: "Toggle Outline",
+            windowSize: windowSize,
+            padding: 8.0
+        )
+        XCTAssertEqual(centerOffsets.x, 0, "Centered button requires no horizontal shift")
+        XCTAssertEqual(centerOffsets.y, 32.0, "Default vertical offset is below button")
+
+        // 4. Bottom-edge button: flips above button
+        let bottomBtnFrame = CGRect(x: 700, y: 870, width: 30, height: 30)
+        let bottomOffsets = MarginNoteTooltipModifier.computeOffsets(
+            buttonFrame: bottomBtnFrame,
+            text: "Zoom Out (⌘-)",
+            windowSize: windowSize,
+            padding: 8.0
+        )
+        XCTAssertLessThan(bottomOffsets.y, 0, "Bottom edge button should flip above button")
+        XCTAssertEqual(bottomOffsets.y, -(30.0 + 8.0), "Offset above should be -(buttonHeight + 8.0)")
+    }
 }

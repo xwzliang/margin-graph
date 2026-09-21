@@ -314,6 +314,7 @@ public struct MarginNotePDFContainerView: View {
                     .foregroundStyle(MarginNoteTheme.separatorColor),
                 alignment: .bottom
             )
+            .tooltipContainer()
             .zIndex(100)
 
             // Search Bar Overlay (when search is active)
