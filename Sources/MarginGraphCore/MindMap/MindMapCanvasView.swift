@@ -465,6 +465,7 @@ public struct MindMapCanvasView: View {
         // Red "Become child" floating banner (MarginNote 3 signature)
         if let targetID = hoverTargetCardID,
            let targetFrame = frames[targetID] {
+            let targetCenter = viewport.canvasToScreen(CGPoint(x: targetFrame.midX, y: targetFrame.midY))
             Text("Become child")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(Color.white)
@@ -476,10 +477,8 @@ public struct MindMapCanvasView: View {
                         .shadow(color: Color.black.opacity(0.35), radius: 4, y: 2)
                 )
                 .scaleEffect(viewport.zoomScale)
-                .position(
-                    x: viewport.canvasToScreen(CGPoint(x: targetFrame.midX, y: targetFrame.midY)).x,
-                    y: viewport.canvasToScreen(CGPoint(x: targetFrame.midX, y: targetFrame.midY)).y
-                )
+                .frame(width: 140, height: 32)
+                .offset(x: targetCenter.x - 70, y: targetCenter.y - 16)
                 .zIndex(200)
                 .allowsHitTesting(false)
         }
@@ -960,8 +959,8 @@ public struct MindMapCanvasView: View {
                     )
                     dragLocations[card.id] = currentOrigin
 
-                    let draggedRect = CGRect(origin: currentOrigin, size: initialFrame.size)
-                    hoverTargetCardID = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
+                    let mouseCanvasPoint = viewport.screenToCanvas(value.location)
+                    hoverTargetCardID = findMouseOverlapTarget(draggedID: card.id, mousePoint: mouseCanvasPoint, frames: staticFrames)
                 }
             }
             .onEnded { value in
@@ -973,30 +972,47 @@ public struct MindMapCanvasView: View {
                 }
 
                 let finalOrigin = dragLocations[card.id] ?? initialFrame.origin
-                let draggedRect = CGRect(origin: finalOrigin, size: initialFrame.size)
-                let overlapTarget = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
+                let mouseCanvasPoint = viewport.screenToCanvas(value.location)
+                let overlapTarget = findMouseOverlapTarget(draggedID: card.id, mousePoint: mouseCanvasPoint, frames: staticFrames)
 
                 if let overlapTarget {
-                    // 1. Overlap: Become child of target card
+                    // 1. Mouse overlaps another card's area: Become child of target card
                     onReparent(card.id, overlapTarget)
                     onToggleFold(overlapTarget, false)
                     onSelect(card)
                 } else {
-                    // 2. Drop into Column Container Grid
+                    // 2. Mouse does NOT overlap other cards: Drop into Column Container Grid
                     let rootCards = cards.filter { $0.groupNoteId == nil }
+                    let childrenByParent = Dictionary(grouping: cards.filter { $0.groupNoteId != nil }, by: { $0.groupNoteId! })
+                    func subtreeMaxX(_ rootID: UUID, initialMax: CGFloat) -> CGFloat {
+                        var maxVal = initialMax
+                        var q = [rootID]
+                        var visited: Set<UUID> = [rootID]
+                        while !q.isEmpty {
+                            let p = q.removeFirst()
+                            if let kids = childrenByParent[p] {
+                                for k in kids where !visited.contains(k.id) {
+                                    visited.insert(k.id)
+                                    if let kf = staticFrames[k.id] {
+                                        maxVal = max(maxVal, kf.maxX)
+                                    }
+                                    q.append(k.id)
+                                }
+                            }
+                        }
+                        return maxVal
+                    }
+
                     var colMap: [(baseX: CGFloat, maxX: CGFloat, cards: [NoteCard])] = []
 
                     for r in rootCards.sorted(by: { (staticFrames[$0.id]?.minX ?? 0) < (staticFrames[$1.id]?.minX ?? 0) }) {
                         guard let f = staticFrames[r.id] else { continue }
+                        let branchMaxX = subtreeMaxX(r.id, initialMax: f.maxX)
                         if let idx = colMap.firstIndex(where: { abs($0.baseX - f.minX) < 140 }) {
                             colMap[idx].cards.append(r)
                             colMap[idx].baseX = min(colMap[idx].baseX, f.minX)
-                            let descIDs = [r.id] + r.allDescendants(in: cards).map(\.id)
-                            let branchMaxX = descIDs.compactMap { staticFrames[$0]?.maxX }.max() ?? f.maxX
                             colMap[idx].maxX = max(colMap[idx].maxX, branchMaxX)
                         } else {
-                            let descIDs = [r.id] + r.allDescendants(in: cards).map(\.id)
-                            let branchMaxX = descIDs.compactMap { staticFrames[$0]?.maxX }.max() ?? f.maxX
                             colMap.append((baseX: f.minX, maxX: branchMaxX, cards: [r]))
                         }
                     }
@@ -1090,7 +1106,7 @@ public struct MindMapCanvasView: View {
             }
     }
 
-    private func findOverlapTarget(draggedID: UUID, draggedRect: CGRect, frames: [UUID: CGRect]) -> UUID? {
+    private func findMouseOverlapTarget(draggedID: UUID, mousePoint: CGPoint, frames: [UUID: CGRect]) -> UUID? {
         var descendants = Set<UUID>()
         var queue = [draggedID]
         while !queue.isEmpty {
@@ -1102,22 +1118,14 @@ public struct MindMapCanvasView: View {
             }
         }
 
-        var bestTarget: UUID? = nil
-        var maxIntersectionArea: CGFloat = 0
-
-        for other in cards where other.id != draggedID && !descendants.contains(other.id) {
-            guard let otherFrame = frames[other.id] else { continue }
-            let intersection = draggedRect.intersection(otherFrame)
-            if !intersection.isNull && intersection.width > 0 && intersection.height > 0 {
-                let area = intersection.width * intersection.height
-                let minOverlap = min(draggedRect.width * draggedRect.height, otherFrame.width * otherFrame.height) * 0.25
-                if area > minOverlap && area > maxIntersectionArea {
-                    maxIntersectionArea = area
-                    bestTarget = other.id
-                }
+        for other in cards.reversed() where other.id != draggedID && !descendants.contains(other.id) {
+            guard layoutResult.visibleCardIDs.contains(other.id),
+                  let otherFrame = frames[other.id] else { continue }
+            if otherFrame.contains(mousePoint) {
+                return other.id
             }
         }
-        return bestTarget
+        return nil
     }
 
     private func drawConnectors(

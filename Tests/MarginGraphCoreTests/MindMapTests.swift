@@ -646,5 +646,101 @@ final class MindMapTests: XCTestCase {
         XCTAssertEqual(fetchedB.mindPos?.x, 360.0)
         XCTAssertEqual(fetchedB.mindPos?.y, 50.0)
     }
+
+    func testMousePositionOverlapTargetOnlyWhenMouseInsideTargetFrame() throws {
+        let topic = UUID()
+        let cardA = NoteCard(topicId: topic, title: "Card A")
+        let cardB = NoteCard(topicId: topic, title: "Card B")
+        let cardC = NoteCard(topicId: topic, title: "Card C", groupNoteId: cardA.id) // descendant of A
+
+        let frames: [UUID: CGRect] = [
+            cardA.id: CGRect(x: 40, y: 40, width: 220, height: 100),
+            cardB.id: CGRect(x: 40, y: 200, width: 220, height: 100),
+            cardC.id: CGRect(x: 300, y: 40, width: 220, height: 100)
+        ]
+
+        func findMouseTarget(draggedID: UUID, mousePoint: CGPoint, allCards: [NoteCard]) -> UUID? {
+            var descendants = Set<UUID>()
+            var queue = [draggedID]
+            while !queue.isEmpty {
+                let curr = queue.removeFirst()
+                for c in allCards where c.groupNoteId == curr {
+                    if descendants.insert(c.id).inserted {
+                        queue.append(c.id)
+                    }
+                }
+            }
+
+            for other in allCards.reversed() where other.id != draggedID && !descendants.contains(other.id) {
+                guard let otherFrame = frames[other.id] else { continue }
+                if otherFrame.contains(mousePoint) {
+                    return other.id
+                }
+            }
+            return nil
+        }
+
+        let allCards = [cardA, cardB, cardC]
+
+        // Case 1: Mouse is inside Card B's frame -> Should target Card B
+        let mouseInB = CGPoint(x: 100, y: 230)
+        XCTAssertEqual(findMouseTarget(draggedID: cardA.id, mousePoint: mouseInB, allCards: allCards), cardB.id)
+
+        // Case 2: Mouse is outside Card B's frame (even if dragged card shape intersects) -> Should be nil
+        let mouseOutsideB = CGPoint(x: 30, y: 180)
+        XCTAssertNil(findMouseTarget(draggedID: cardA.id, mousePoint: mouseOutsideB, allCards: allCards))
+
+        // Case 3: Dragging Card A, mouse inside descendant Card C -> Descendant must NOT be targeted
+        let mouseInC = CGPoint(x: 350, y: 60)
+        XCTAssertNil(findMouseTarget(draggedID: cardA.id, mousePoint: mouseInC, allCards: allCards))
+    }
+
+    func testBatchMoveAndReparentUndoRedoInDatabase() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Undo Redo DB Test")
+        try database.insertTopic(topic)
+
+        let initialPosA = CGPoint(x: 40, y: 40)
+        let initialPosB = CGPoint(x: 40, y: 200)
+        let cardA = NoteCard(topicId: topic.id, title: "Card A", mindPos: initialPosA)
+        let cardB = NoteCard(topicId: topic.id, title: "Card B", mindPos: initialPosB)
+        try database.insertCard(cardA)
+        try database.insertCard(cardB)
+
+        // 1. Test Batch Move and Undo
+        let movedPosA = CGPoint(x: 340, y: 150)
+        let movedPosB = CGPoint(x: 340, y: 300)
+        try database.updateCardPositions([
+            (id: cardA.id, position: movedPosA),
+            (id: cardB.id, position: movedPosB)
+        ])
+        XCTAssertEqual(try database.getCard(id: cardA.id)?.mindPos, movedPosA)
+        XCTAssertEqual(try database.getCard(id: cardB.id)?.mindPos, movedPosB)
+
+        // Undo batch move: restore original positions
+        try database.updateCardPositions([
+            (id: cardA.id, position: initialPosA),
+            (id: cardB.id, position: initialPosB)
+        ])
+        XCTAssertEqual(try database.getCard(id: cardA.id)?.mindPos, initialPosA)
+        XCTAssertEqual(try database.getCard(id: cardB.id)?.mindPos, initialPosB)
+
+        // 2. Test Reparent to Child ("Become a child") and Undo
+        try database.reparentCard(id: cardB.id, to: cardA.id)
+        let reparentedB = try XCTUnwrap(database.getCard(id: cardB.id))
+        XCTAssertEqual(reparentedB.groupNoteId, cardA.id)
+        XCTAssertNil(reparentedB.mindPos)
+
+        // Undo reparent: restore previous parent (nil) and original mindPos
+        var restoredB = reparentedB
+        restoredB.groupNoteId = nil
+        restoredB.mindPos = initialPosB
+        try database.updateCard(restoredB)
+
+        let undoneB = try XCTUnwrap(database.getCard(id: cardB.id))
+        XCTAssertNil(undoneB.groupNoteId)
+        XCTAssertEqual(undoneB.mindPos, initialPosB)
+    }
 }
+
 

@@ -268,7 +268,33 @@ Structure each entry concisely with actionable rules:
     2. Within each column container, cards are stacked strictly sequentially: `nextY = max(colStartY, previousCardSubtreeBottom + verticalSpacing)`. No two cards in the same column can ever collide or overlap.
     3. Columns are spaced horizontally such that `nextColumn.baseX = max(colBaseX, previousColumnMaxX + horizontalSpacing)`. No two columns or their branches can ever collide.
     4. During drag: the card smoothly follows the mouse (`dragLocations[card.id] = mouseLocation`).
-    5. On drag end: if overlap >= 25% with another card, reparent as child. Otherwise, determine target column container based on `dropCenterX` (or create a new column if dragged beyond the rightmost column), determine insertion slot based on `dropCenterY`, and compute updated non-overlapping positions for all cards in the column in a single SQLite batch transaction (`updateCardPositions`).
+    5. On drag end: determine target column container based on `dropCenterX` (or create a new column if dragged beyond the rightmost column), determine insertion slot based on `dropCenterY`, and compute updated non-overlapping positions for all cards in the column in a single SQLite batch transaction (`updateCardPositions`).
+
+- **Mouse-Position-Based "Become Child" vs Bounding Box Overlap in MindMap Dragging**:
+  - **Trap**: Using dragged card bounding box intersection (`draggedRect.intersection(otherFrame)`) to detect when a note card should become a child causes unintended reparenting. When a user drags a large or multi-line card past other cards to reorder or move it, the card's rectangular edges intersect adjacent cards even when the user's cursor is in the gutter between columns. The card inadvertently turns into a child note instead of moving into the column container grid.
+  - **Rule**:
+    1. Base "Become child" detection strictly on **mouse cursor position**, NOT the dragged card's bounding box:
+       ```swift
+       let mouseCanvasPoint = viewport.screenToCanvas(value.location)
+       let overlapTarget = findMouseOverlapTarget(draggedID: card.id, mousePoint: mouseCanvasPoint, frames: staticFrames)
+       ```
+    2. In `findMouseOverlapTarget`:
+       - Recursively exclude all descendants of `draggedID` to prevent cycle generation.
+       - Check `layoutResult.visibleCardIDs.contains(other.id)` to ignore folded or culled cards.
+       - Test `otherFrame.contains(mousePoint)`. Only if the mouse cursor is strictly inside another card's area does "Become child" trigger.
+    3. If the mouse is outside other cards (even if the dragged card's physical shape overlaps other cards), treat the drop as a column container grid movement. The dragged card will snap into the nearest column and push other cards away, guaranteeing zero collisions without accidental reparenting.
+
+- **`NSUndoManager` Notification Trap & Reactive Undo Button State in SwiftUI**:
+  - **Trap 1**: `NSUndoManager` does NOT post `.NSUndoManagerDidUndoChange` when an undo action is registered. It only posts `didUndoChangeNotification` when an undo is *executed* (i.e. `undo()` is called). Observing only `didUndoChange` and `didRedoChange` means `AppModel.objectWillChange.send()` is never called when actions are registered, leaving `canUndo` as `false` in SwiftUI views and keeping the Undo toolbar button disabled.
+  - **Trap 2**: High-level mutating actions (e.g. `moveCardsBatch`, `reparentCard`, `createChildCard`, `createSiblingCard`, `createFreeNote`, `indent`, `outdent`, `reorder`) that bypass single-card `updateCard` leave the undo manager empty unless explicitly wired.
+- **TreeLayout Subtree Traversal & Avoid $O(N^2)$ `allDescendants` Linear Scans in Column Layout**:
+  - **Trap**: In `TreeLayout.layout`, determining the rightmost edge of a column container by executing `sortedColumn.flatMap { [$0.id] + $0.allDescendants(in: cards).map(\.id) }` caused an immediate app hang upon opening topics with hundreds of cards (e.g. Ahrens with 685 cards). In `allDescendants`, running `cards.filter { $0.groupNoteId == parentId }` at every BFS node performs a full linear scan over all `NoteCard` structs, causing millions of struct copies and retains on the main thread and pegging CPU at 100%.
+  - **Rule**:
+    1. In `TreeLayout.layout`, track `currentColumnMaxX = max(currentColumnMaxX, frame.maxX)` directly inside `place(_:depth:baseX:)` as each card and child is positioned. This computes the exact rightmost edge of the column and all its branches in **$O(1)$** per card with zero allocations. Never call `allDescendants` to compute column bounds.
+    2. In `NoteCard.allDescendants(of:in:)`, pre-group `let childrenByParent = Dictionary(grouping: cards.filter { $0.groupNoteId != nil }, by: { $0.groupNoteId! })` once upfront. BFS steps then perform $O(1)$ dictionary lookups rather than filtering the entire array, reducing complexity from $O(N^2)$ to $O(N)$.
+    3. Keep `NSUndoManager` observers focused on committed state changes (`.NSUndoManagerDidCloseUndoGroup`, `.NSUndoManagerDidUndoChange`, `.NSUndoManagerDidRedoChange`), avoiding `.NSUndoManagerDidOpenUndoGroup` to eliminate spurious invalidation cycles during view evaluation.
+
+
 
 
 

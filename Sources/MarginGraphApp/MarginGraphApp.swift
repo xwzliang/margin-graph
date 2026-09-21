@@ -83,11 +83,16 @@ final class AppModel: ObservableObject {
             isInStudyWorkspace = true
         }
 
-        NotificationCenter.default.addObserver(forName: .NSUndoManagerDidUndoChange, object: undoManager, queue: .main) { [weak self] _ in
-            self?.objectWillChange.send()
-        }
-        NotificationCenter.default.addObserver(forName: .NSUndoManagerDidRedoChange, object: undoManager, queue: .main) { [weak self] _ in
-            self?.objectWillChange.send()
+        let center = NotificationCenter.default
+        let undoNotifications: [Notification.Name] = [
+            .NSUndoManagerDidCloseUndoGroup,
+            .NSUndoManagerDidUndoChange,
+            .NSUndoManagerDidRedoChange
+        ]
+        for name in undoNotifications {
+            center.addObserver(forName: name, object: undoManager, queue: .main) { [weak self] _ in
+                self?.objectWillChange.send()
+            }
         }
     }
 
@@ -547,6 +552,7 @@ final class AppModel: ObservableObject {
             }
         }
         undoManager.setActionName(actionName)
+        objectWillChange.send()
     }
 
     private func restoreCard(cardToRestore: NoteCard, oppositeCard: NoteCard, actionName: String) {
@@ -576,6 +582,28 @@ final class AppModel: ObservableObject {
         selectedCardID = card.id
         activeToolbarOwner = .mindMap
         navigateToCard(card)
+        objectWillChange.send()
+    }
+
+    private func registerBatchMoveUndo(oldPositions: [(id: UUID, position: CGPoint)], newPositions: [(id: UUID, position: CGPoint)]) {
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.restoreBatchMove(positionsToRestore: oldPositions, oppositePositions: newPositions)
+            }
+        }
+        undoManager.setActionName("Move Notes")
+        objectWillChange.send()
+    }
+
+    private func restoreBatchMove(positionsToRestore: [(id: UUID, position: CGPoint)], oppositePositions: [(id: UUID, position: CGPoint)]) {
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.restoreBatchMove(positionsToRestore: oppositePositions, oppositePositions: positionsToRestore)
+            }
+        }
+        undoManager.setActionName("Move Notes")
+        try? database.updateCardPositions(positionsToRestore)
+        reloadStudySet()
         objectWillChange.send()
     }
 
@@ -839,13 +867,34 @@ final class AppModel: ObservableObject {
     }
 
     func moveCardsBatch(_ updates: [(id: UUID, position: CGPoint)]) {
+        let currentLayout = TreeLayout.layout(cards: mindMapCards)
+        var oldPositions: [(id: UUID, position: CGPoint)] = []
+        for u in updates {
+            if let card = try? database.getCard(id: u.id) {
+                let pos = card.mindPos ?? currentLayout.frames[card.id]?.origin ?? CGPoint(x: 40, y: 40)
+                oldPositions.append((id: u.id, position: pos))
+            }
+        }
+
+        let didChange = updates.contains { u in
+            guard let old = oldPositions.first(where: { $0.id == u.id }) else { return false }
+            return abs(old.position.x - u.position.x) > 0.5 || abs(old.position.y - u.position.y) > 0.5
+        }
+        if didChange {
+            registerBatchMoveUndo(oldPositions: oldPositions, newPositions: updates)
+        }
+
         try? database.updateCardPositions(updates)
         reloadStudySet()
         objectWillChange.send()
     }
 
     func reparent(cardID: UUID, to parentID: UUID?) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
+        if oldCard.groupNoteId == parentID { return }
         try? database.reparentCard(id: cardID, to: parentID)
+        guard let newCard = try? database.getCard(id: cardID) else { return }
+        registerCardUndo(oldCard: oldCard, newCard: newCard, actionName: "Reparent Note")
         reloadStudySet()
         objectWillChange.send()
     }
@@ -856,13 +905,19 @@ final class AppModel: ObservableObject {
     }
 
     func indent(cardID: UUID, under siblingID: UUID) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
         try? database.indentCard(id: cardID, under: siblingID)
+        guard let newCard = try? database.getCard(id: cardID) else { return }
+        registerCardUndo(oldCard: oldCard, newCard: newCard, actionName: "Indent Note")
         reloadStudySet()
         objectWillChange.send()
     }
 
     func outdent(cardID: UUID) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
         try? database.outdentCard(id: cardID)
+        guard let newCard = try? database.getCard(id: cardID) else { return }
+        registerCardUndo(oldCard: oldCard, newCard: newCard, actionName: "Outdent Note")
         reloadStudySet()
         objectWillChange.send()
     }
@@ -946,6 +1001,12 @@ final class AppModel: ObservableObject {
         newCard.createdAt = targetCreatedAt
 
         try? database.insertCard(newCard)
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.delete(cardID: newCard.id)
+            }
+        }
+        undoManager.setActionName("Create Child Note")
         selectedCardID = newCard.id
         editingCardTitleID = newCard.id
         activeToolbarOwner = .mindMap
@@ -995,6 +1056,12 @@ final class AppModel: ObservableObject {
         newCard.createdAt = targetCreatedAt
 
         try? database.insertCard(newCard)
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.delete(cardID: newCard.id)
+            }
+        }
+        undoManager.setActionName("Create Sibling Note")
         selectedCardID = newCard.id
         editingCardTitleID = newCard.id
         activeToolbarOwner = .mindMap
@@ -1014,6 +1081,12 @@ final class AppModel: ObservableObject {
         newCard.createdAt = Date()
 
         try? database.insertCard(newCard)
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                target.delete(cardID: newCard.id)
+            }
+        }
+        undoManager.setActionName("Create Note")
         selectedCardID = newCard.id
         editingCardTitleID = newCard.id
         activeToolbarOwner = .mindMap
@@ -1029,8 +1102,12 @@ final class AppModel: ObservableObject {
     }
 
     func reorder(cardID: UUID, before siblingID: UUID?) {
+        guard let oldCard = try? database.getCard(id: cardID) else { return }
         try? database.reorderCard(id: cardID, before: siblingID)
+        guard let newCard = try? database.getCard(id: cardID) else { return }
+        registerCardUndo(oldCard: oldCard, newCard: newCard, actionName: "Reorder Note")
         reloadStudySet()
+        objectWillChange.send()
     }
 
     func importMarginNote() {

@@ -186,14 +186,15 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     }
 
     public static func allDescendants(of cardId: UUID, in cards: [NoteCard]) -> [NoteCard] {
+        let childrenByParent = Dictionary(grouping: cards.filter { $0.groupNoteId != nil }, by: { $0.groupNoteId! })
         var result: [NoteCard] = []
         var queue: [UUID] = [cardId]
         var visited: Set<UUID> = [cardId]
 
         while !queue.isEmpty {
             let parentId = queue.removeFirst()
-            let directChildren = cards.filter { $0.groupNoteId == parentId && !visited.contains($0.id) }
-            for child in directChildren {
+            guard let children = childrenByParent[parentId] else { continue }
+            for child in children where !visited.contains(child.id) {
                 visited.insert(child.id)
                 result.append(child)
                 queue.append(child.id)

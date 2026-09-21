@@ -85,6 +85,8 @@ public enum TreeLayout {
         let totalCards = max(1, cards.count)
         let maxColumnHeight: CGFloat = max(1400.0, 270.0 * sqrt(CGFloat(totalCards)))
 
+        var currentColumnMaxX: CGFloat = 40.0
+
         @discardableResult
         func place(_ card: NoteCard, depth: Int, baseX: CGFloat) -> CGRect {
             let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
@@ -96,6 +98,7 @@ public enum TreeLayout {
                 let frame = CGRect(origin: CGPoint(x: x, y: nextY), size: currentSize)
                 frames[card.id] = frame
                 visible.insert(card.id)
+                currentColumnMaxX = max(currentColumnMaxX, frame.maxX)
                 nextY += cardHeight + configuration.verticalSpacing
                 return frame
             }
@@ -117,6 +120,7 @@ public enum TreeLayout {
             let frame = CGRect(origin: CGPoint(x: x, y: originY), size: currentSize)
             frames[card.id] = frame
             visible.insert(card.id)
+            currentColumnMaxX = max(currentColumnMaxX, frame.maxX)
             nextY = max(nextY, originY + cardHeight + configuration.verticalSpacing)
             return frame
         }
@@ -188,6 +192,7 @@ public enum TreeLayout {
             }
             nextY = explicitFirstY ?? 40.0
 
+            currentColumnMaxX = baseX + configuration.nodeSize.width
             for root in sortedColumn {
                 if let savedY = root.mindPos?.y, (root.mindPos?.x ?? 0) > 20, savedY > nextY && savedY < 5000 {
                     nextY = savedY
@@ -196,9 +201,7 @@ public enum TreeLayout {
             }
 
             // Next column starts after the rightmost edge of this column and its branches
-            let colCardIDs = sortedColumn.flatMap { [$0.id] + $0.allDescendants(in: cards).map(\.id) }
-            let colMaxX = colCardIDs.compactMap { frames[$0]?.maxX }.max() ?? (baseX + configuration.nodeSize.width)
-            columnStartX = colMaxX + configuration.horizontalSpacing
+            columnStartX = currentColumnMaxX + configuration.horizontalSpacing
         }
 
         return TreeLayoutResult(frames: frames, visibleCardIDs: visible)
