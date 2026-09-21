@@ -1171,74 +1171,30 @@ struct StudyWorkspaceView: View {
             Group {
                 switch model.workspaceMode {
                 case .readerOnly:
-                    ZStack(alignment: .leading) {
+                    ZStack(alignment: .topLeading) {
                         VStack(spacing: 0) {
                             readerOnlyHeader
                             pdfPane
                         }
+                        .frame(width: totalWidth, height: totalHeight)
 
-                        // Left edge restore handle (MarginNote 3 signature)
-                        HStack(spacing: 0) {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    model.workspaceMode = .splitView
-                                }
-                            } label: {
-                                Image(systemName: "chevron.right")
-                                    .font(.system(size: 8.5, weight: .bold))
-                                    .foregroundStyle(Color(white: 0.35))
-                                    .frame(width: 14, height: 24)
-                                    .enlargedHitTarget(width: 24, height: 30)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Restore Split View")
-                        }
-                        .padding(.horizontal, 2)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill(Color(white: 0.98).opacity(0.80))
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                                .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
-                        )
-                        .frame(width: 24, height: 30)
-                        .offset(x: 4, y: totalHeight * 0.74 - 15)
-                        .zIndex(200)
+                        // Left edge restore handle (MarginNote 3 signature half-pill)
+                        edgeRestoreHandle(side: .leading)
+                            .frame(width: 26, height: 28)
+                            .offset(x: 0, y: totalHeight * 0.74 - 14)
+                            .zIndex(200)
                     }
 
                 case .mindMapOnly:
-                    ZStack(alignment: .trailing) {
+                    ZStack(alignment: .topLeading) {
                         mindMapPane
+                            .frame(width: totalWidth, height: totalHeight)
 
-                        // Right edge restore handle (MarginNote 3 signature)
-                        HStack(spacing: 0) {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    model.workspaceMode = .splitView
-                                }
-                            } label: {
-                                Image(systemName: "chevron.left")
-                                    .font(.system(size: 8.5, weight: .bold))
-                                    .foregroundStyle(Color(white: 0.35))
-                                    .frame(width: 14, height: 24)
-                                    .enlargedHitTarget(width: 24, height: 30)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Restore Split View")
-                        }
-                        .padding(.horizontal, 2)
-                        .padding(.vertical, 2)
-                        .background(
-                            Capsule()
-                                .fill(Color(white: 0.98).opacity(0.80))
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-                                .overlay(Capsule().stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
-                        )
-                        .frame(width: 24, height: 30)
-                        .offset(x: totalWidth - 28, y: totalHeight * 0.74 - 15)
-                        .zIndex(200)
+                        // Right edge restore handle (MarginNote 3 signature half-pill)
+                        edgeRestoreHandle(side: .trailing)
+                            .frame(width: 26, height: 28)
+                            .offset(x: totalWidth - 26, y: totalHeight * 0.74 - 14)
+                            .zIndex(200)
                     }
 
                 case .splitView, .threeView:
@@ -1516,6 +1472,80 @@ struct StudyWorkspaceView: View {
                 minPDF: minPDF,
                 maxPDF: maxPDF
             )
+        )
+    }
+
+    private enum EdgeSide {
+        case leading  // Document-only mode: mindmap is collapsed to the left edge
+        case trailing // MindMap-only mode: document is collapsed to the right edge
+    }
+
+    private func edgeRestoreHandle(side: EdgeSide) -> some View {
+        let isLeading = (side == .leading)
+        let shape = UnevenRoundedRectangle(
+            topLeadingRadius: isLeading ? 0 : 14,
+            bottomLeadingRadius: isLeading ? 0 : 14,
+            bottomTrailingRadius: isLeading ? 14 : 0,
+            topTrailingRadius: isLeading ? 14 : 0
+        )
+
+        return Button {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                model.workspaceMode = .splitView
+            }
+        } label: {
+            HStack(spacing: 0) {
+                if isLeading {
+                    Spacer(minLength: 2)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(Color(white: 0.35))
+                        .frame(width: 14, height: 22)
+                    Spacer(minLength: 4)
+                } else {
+                    Spacer(minLength: 4)
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 8.5, weight: .bold))
+                        .foregroundStyle(Color(white: 0.35))
+                        .frame(width: 14, height: 22)
+                    Spacer(minLength: 2)
+                }
+            }
+            .frame(width: 26, height: 28)
+            .background(
+                shape
+                    .fill(Color(white: 0.98).opacity(0.80))
+                    .background(.ultraThinMaterial, in: shape)
+                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+                    .overlay(shape.stroke(Color(white: 0.82).opacity(0.70), lineWidth: 0.75))
+            )
+            .contentShape(shape)
+        }
+        .buttonStyle(.plain)
+        .enlargedHitTarget(width: 32, height: 34)
+        .help("Restore Split View")
+        .onHover { inside in
+            if inside {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
+                NSApp.keyWindow?.resetCursorRects()
+            }
+        }
+        .gesture(
+            DragGesture(minimumDistance: 4)
+                .onChanged { gesture in
+                    let triggered = isLeading ? (gesture.translation.width > 8) : (gesture.translation.width < -8)
+                    if triggered {
+                        withAnimation(.easeOut(duration: 0.2)) {
+                            model.workspaceMode = .splitView
+                        }
+                    }
+                }
+                .onEnded { _ in
+                    NSCursor.arrow.set()
+                    NSApp.keyWindow?.resetCursorRects()
+                }
         )
     }
 
