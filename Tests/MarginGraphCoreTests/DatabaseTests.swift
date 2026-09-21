@@ -238,4 +238,106 @@ final class DatabaseTests: XCTestCase {
         let afterDeleteAll = try db.getBookmarks(for: md5)
         XCTAssertTrue(afterDeleteAll.isEmpty)
     }
+
+    func testDocumentCollisionAvoidanceAndStableUUID() throws {
+        let db = try Database(inMemory: true)
+        let legacySharedID = UUID()
+
+        let doc1 = Document(id: legacySharedID, title: "Book One", filePath: "/tmp/book1.pdf", md5: "md5-one", totalPages: 100)
+        try db.insertDocument(doc1)
+
+        // Same ID, different MD5 should not overwrite doc1!
+        let doc2 = Document(id: legacySharedID, title: "Book Two", filePath: "/tmp/book2.pdf", md5: "md5-two", totalPages: 200)
+        try db.insertDocument(doc2)
+
+        let all = try db.allDocuments()
+        XCTAssertEqual(all.count, 2)
+        XCTAssertTrue(all.contains { $0.title == "Book One" && $0.md5 == "md5-one" })
+        XCTAssertTrue(all.contains { $0.title == "Book Two" && $0.md5 == "md5-two" })
+
+        // Repair document IDs
+        try db.repairDocumentIDs()
+        let repaired = try db.allDocuments()
+        XCTAssertEqual(repaired.count, 2)
+        for doc in repaired {
+            XCTAssertEqual(doc.id, Document.stableUUID(doc.md5))
+        }
+    }
+
+    func testDeleteDocument() throws {
+        let db = try Database(inMemory: true)
+        let doc = Document(title: "To Delete", filePath: "/tmp/del.pdf", md5: "md5-del", totalPages: 10)
+        try db.insertDocument(doc)
+        XCTAssertEqual(try db.allDocuments().count, 1)
+
+        try db.deleteDocument(id: doc.id)
+        XCTAssertEqual(try db.allDocuments().count, 0)
+
+        try db.insertDocument(doc)
+        XCTAssertEqual(try db.allDocuments().count, 1)
+        try db.deleteDocument(md5: doc.md5)
+        XCTAssertEqual(try db.allDocuments().count, 0)
+    }
+
+    func testSyncAvailableDocuments() throws {
+        let db = try Database(inMemory: true)
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("test_sync_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Create a dummy PDF file
+        let pdfURL = tempDir.appendingPathComponent("TestDocument.pdf")
+        let pdfData = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 100 100]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000052 00000 n\n0000000101 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF\n".data(using: .utf8)!
+        try pdfData.write(to: pdfURL)
+
+        let sidecarURL = tempDir.appendingPathComponent("TestDocument.pdf.md5")
+        try "custom-sidecar-md5-12345".write(to: sidecarURL, atomically: true, encoding: .utf8)
+
+        try db.syncAvailableDocuments(additionalSearchPaths: [tempDir])
+
+        let docs = try db.allDocuments()
+        XCTAssertTrue(docs.contains { $0.md5 == "custom-sidecar-md5-12345" && $0.title == "TestDocument" })
+    }
+
+    func testSyncRestoresAllDocumentsInLiveEnvironmentIfExists() throws {
+        let liveDBPath = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MarginGraph/MarginGraph.sqlite").path
+        guard FileManager.default.fileExists(atPath: liveDBPath) else { return }
+
+        let db = try Database(path: liveDBPath)
+        try db.syncAvailableDocuments()
+        let docs = try db.allDocuments()
+        print("Restored and synchronized live documents count: \(docs.count)")
+        for doc in docs {
+            print(" -> Doc: \(doc.title) (id: \(doc.id), md5: \(doc.md5))")
+        }
+        XCTAssertGreaterThanOrEqual(docs.count, 4)
+        XCTAssertTrue(docs.contains { $0.title.contains("Save the Cat") || $0.filePath.contains("Save the Cat") })
+        XCTAssertTrue(docs.contains { $0.title.contains("Screenplay") || $0.filePath.contains("Screenplay") })
+        XCTAssertTrue(docs.contains { $0.title.contains("Adler") || $0.filePath.contains("Adler") })
+        XCTAssertTrue(docs.contains { $0.title.contains("Ahrens") || $0.title.contains("Smart Notes") || $0.filePath.contains("Ahrens") })
+
+        let topics = try db.allTopics()
+        if let ahrensTopic = topics.first(where: { $0.title.contains("Ahrens") }) {
+            let ahrensDocs = try db.documentsForTopic(id: ahrensTopic.id)
+            XCTAssertFalse(ahrensDocs.isEmpty, "Ahrens topic must have attached document")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: ahrensDocs[0].filePath))
+        }
+        if let adlerTopic = topics.first(where: { $0.title.contains("Adler") }) {
+            let adlerDocs = try db.documentsForTopic(id: adlerTopic.id)
+            XCTAssertFalse(adlerDocs.isEmpty, "Adler topic must have attached document")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: adlerDocs[0].filePath))
+        }
+        if let saveTheCatTopic = topics.first(where: { $0.title.contains("Save the Cat") }) {
+            let saveTheCatDocs = try db.documentsForTopic(id: saveTheCatTopic.id)
+            XCTAssertFalse(saveTheCatDocs.isEmpty, "Save the Cat topic must have attached document")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: saveTheCatDocs[0].filePath))
+        }
+        if let screenplayTopic = topics.first(where: { $0.title.contains("Screenplay") }) {
+            let screenplayDocs = try db.documentsForTopic(id: screenplayTopic.id)
+            XCTAssertFalse(screenplayDocs.isEmpty, "Screenplay topic must have attached document")
+            XCTAssertTrue(FileManager.default.fileExists(atPath: screenplayDocs[0].filePath))
+        }
+    }
 }
+

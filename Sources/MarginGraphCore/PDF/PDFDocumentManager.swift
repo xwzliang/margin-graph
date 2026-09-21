@@ -36,8 +36,20 @@ public final class PDFDocumentManager: @unchecked Sendable {
         if let md5, !md5.isEmpty {
             self.md5 = md5
         } else {
-            let data = try Data(contentsOf: url)
-            self.md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let sidecar1 = url.appendingPathExtension("md5")
+            let sidecar2 = url.deletingPathExtension().appendingPathExtension("md5")
+            if FileManager.default.fileExists(atPath: sidecar1.path),
+               let sidecarContent = try? String(contentsOf: sidecar1, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+               !sidecarContent.isEmpty {
+                self.md5 = sidecarContent
+            } else if FileManager.default.fileExists(atPath: sidecar2.path),
+                      let sidecarContent = try? String(contentsOf: sidecar2, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+                      !sidecarContent.isEmpty {
+                self.md5 = sidecarContent
+            } else {
+                let data = try Data(contentsOf: url)
+                self.md5 = Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            }
         }
 
         let attributeTitle = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String

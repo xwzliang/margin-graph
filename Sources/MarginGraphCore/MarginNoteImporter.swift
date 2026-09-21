@@ -17,23 +17,130 @@ public struct MarginNoteImportResult: Sendable {
     }
 }
 
+public enum NotebookConflictResolution: Sendable {
+    case merge
+    case replace
+    case cancel
+}
+
 public final class MarginNoteImporter {
     private let url: URL
+    public let documentsDestinationDirectory: URL
 
-    public init(url: URL) {
+    public init(url: URL, documentsDestinationDirectory: URL? = nil) {
         self.url = url
+        if let dir = documentsDestinationDirectory {
+            self.documentsDestinationDirectory = dir
+        } else {
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            self.documentsDestinationDirectory = base
+                .appendingPathComponent("MarginGraph", isDirectory: true)
+                .appendingPathComponent("Documents", isDirectory: true)
+        }
     }
 
     public func read() throws -> MarginNoteImportResult {
+        if isPackage(url) {
+            return try readPackage()
+        } else {
+            return try readDatabase(from: url, extractedDocuments: [])
+        }
+    }
+
+    private func isPackage(_ url: URL) -> Bool {
+        if url.pathExtension.lowercased() == "marginpkg" { return true }
+        if let handle = try? FileHandle(forReadingFrom: url) {
+            defer { try? handle.close() }
+            if let data = try? handle.read(upToCount: 4), data.count >= 4 {
+                return data[0] == 0x50 && data[1] == 0x4b && data[2] == 0x03 && data[3] == 0x04
+            }
+        }
+        return false
+    }
+
+    private func readPackage() throws -> MarginNoteImportResult {
+        let fileManager = FileManager.default
+        let tempDir = fileManager.temporaryDirectory
+            .appendingPathComponent("marginpkg_unpack_\(UUID().uuidString)")
+        try fileManager.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer {
+            try? fileManager.removeItem(at: tempDir)
+        }
+
+        try extractArchive(from: url, to: tempDir)
+
+        guard let enumerator = fileManager.enumerator(at: tempDir, includingPropertiesForKeys: nil) else {
+            throw DatabaseError.open("Failed to inspect unpacked package at \(tempDir.path)")
+        }
+
+        var noteURL: URL?
+        var extractedDocuments: [URL] = []
+
+        try fileManager.createDirectory(at: documentsDestinationDirectory, withIntermediateDirectories: true)
+
+        for case let itemURL as URL in enumerator {
+            let ext = itemURL.pathExtension.lowercased()
+            if ext == "marginnotes" || ext == "sqlite" {
+                if noteURL == nil {
+                    noteURL = itemURL
+                }
+            } else if ext == "pdf" || ext == "epub" {
+                let fileName = itemURL.lastPathComponent
+                var destinationURL = documentsDestinationDirectory.appendingPathComponent(fileName)
+                if fileManager.fileExists(atPath: destinationURL.path) {
+                    let itemData = try? Data(contentsOf: itemURL)
+                    let existingData = try? Data(contentsOf: destinationURL)
+                    if itemData != existingData {
+                        let uniqueName = "\(destinationURL.deletingPathExtension().lastPathComponent)_\(UUID().uuidString.prefix(6)).\(ext)"
+                        destinationURL = documentsDestinationDirectory.appendingPathComponent(uniqueName)
+                        try? fileManager.copyItem(at: itemURL, to: destinationURL)
+                    }
+                } else {
+                    try? fileManager.copyItem(at: itemURL, to: destinationURL)
+                }
+                extractedDocuments.append(destinationURL)
+            }
+        }
+
+        guard let noteURL else {
+            throw DatabaseError.open("No .marginnotes database found inside .marginpkg archive")
+        }
+
+        return try readDatabase(from: noteURL, extractedDocuments: extractedDocuments)
+    }
+
+    private func extractArchive(from sourceURL: URL, to destURL: URL) throws {
+        let dittoProcess = Process()
+        dittoProcess.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        dittoProcess.arguments = ["-x", "-k", sourceURL.path, destURL.path]
+        try dittoProcess.run()
+        dittoProcess.waitUntilExit()
+
+        if dittoProcess.terminationStatus == 0 {
+            return
+        }
+
+        let unzipProcess = Process()
+        unzipProcess.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        unzipProcess.arguments = ["-q", "-o", sourceURL.path, "-d", destURL.path]
+        try unzipProcess.run()
+        unzipProcess.waitUntilExit()
+
+        if unzipProcess.terminationStatus != 0 {
+            throw DatabaseError.open("Failed to extract .marginpkg archive (exit code \(unzipProcess.terminationStatus))")
+        }
+    }
+
+    private func readDatabase(from dbURL: URL, extractedDocuments: [URL]) throws -> MarginNoteImportResult {
         var source: OpaquePointer?
-        guard sqlite3_open_v2(url.path, &source, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let source else {
+        guard sqlite3_open_v2(dbURL.path, &source, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let source else {
             let message = source.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
             sqlite3_close(source)
             throw DatabaseError.open(message)
         }
         defer { sqlite3_close(source) }
 
-        let noteRows = try rows(in: source, table: "ZBOOKNOTE")
+        let noteRows = (try? rows(in: source, table: "ZBOOKNOTE")) ?? []
         var noteKeyMap: [String: UUID] = [:]
         var topicToBookMD5s: [String: Set<String>] = [:]
         for row in noteRows {
@@ -46,12 +153,20 @@ public final class MarginNoteImporter {
         }
 
         let documentSearchPaths: [URL] = [
-            url.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Documents"),
+            documentsDestinationDirectory,
+            dbURL.deletingLastPathComponent(),
+            dbURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Documents"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Documents"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/Documents")
         ]
 
-        let documents = try rows(in: source, table: "ZBOOK").map { row in
+        var rawBookRows = (try? rows(in: source, table: "ZBOOK")) ?? []
+        if rawBookRows.isEmpty {
+            rawBookRows = (try? rows(in: source, table: "ZBOOKCONFIG")) ?? []
+        }
+
+        var documents: [Document] = []
+        for row in rawBookRows {
             let rawKey = first(row, ["ZBOOKID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let rawTitle = first(row, ["ZFILE", "ZTITLE", "ZNAME"]) ?? "Untitled Document"
             let cleanTitle = rawTitle.hasSuffix(".pdf") ? String(rawTitle.dropLast(4)) : rawTitle
@@ -59,7 +174,18 @@ public final class MarginNoteImporter {
 
             if filePath.isEmpty || !FileManager.default.fileExists(atPath: filePath) {
                 let fileName = first(row, ["ZFILE", "ZPATH"]) ?? ""
-                if !fileName.isEmpty {
+                if let match = extractedDocuments.first(where: {
+                    let name = $0.lastPathComponent
+                    let titleWithoutExt = $0.deletingPathExtension().lastPathComponent
+                    return (!fileName.isEmpty && name == fileName) ||
+                           name == rawTitle ||
+                           name == (cleanTitle + ".pdf") ||
+                           titleWithoutExt.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame
+                }) {
+                    filePath = match.path
+                } else if extractedDocuments.count == 1 {
+                    filePath = extractedDocuments[0].path
+                } else if !fileName.isEmpty {
                     for dir in documentSearchPaths {
                         let candidate = dir.appendingPathComponent(fileName).path
                         if FileManager.default.fileExists(atPath: candidate) {
@@ -70,23 +196,53 @@ public final class MarginNoteImporter {
                 }
             }
 
+            // Only add documents that have a file path
+            guard !filePath.isEmpty else {
+                continue
+            }
+
             let md5 = first(row, ["ZMD5LONG", "ZMD5", "ZBOOKMD5", "ZMD5STRING"]) ?? rawKey
             var totalPages = Int(first(row, ["ZTOTALPAGES", "ZPAGECOUNT"]) ?? "0") ?? 0
-            if totalPages <= 0, !filePath.isEmpty, let doc = PDFKit.PDFDocument(url: URL(fileURLWithPath: filePath)) {
+            if totalPages <= 0, FileManager.default.fileExists(atPath: filePath), let doc = PDFKit.PDFDocument(url: URL(fileURLWithPath: filePath)) {
                 totalPages = doc.pageCount
             }
 
-            return Document(
-                id: stableUUID(rawKey),
+            if FileManager.default.fileExists(atPath: filePath) {
+                let sidecar = URL(fileURLWithPath: filePath).appendingPathExtension("md5")
+                try? md5.write(to: sidecar, atomically: true, encoding: .utf8)
+            }
+
+            documents.append(Document(
+                id: Document.stableUUID(md5),
                 title: cleanTitle,
                 filePath: filePath,
                 md5: md5,
                 totalPages: totalPages,
                 lastVisited: parseDate(first(row, ["ZLASTVISITED", "ZLASTOPENDATE"]))
-            )
+            ))
         }
 
-        let topicRows = try rows(in: source, table: "ZTOPIC")
+        if documents.isEmpty && !extractedDocuments.isEmpty {
+            for docURL in extractedDocuments {
+                let cleanTitle = docURL.deletingPathExtension().lastPathComponent
+                let totalPages = PDFKit.PDFDocument(url: docURL)?.pageCount ?? 0
+                let md5 = topicToBookMD5s.values.first?.first ?? UUID().uuidString
+                let sidecar = docURL.appendingPathExtension("md5")
+                if !FileManager.default.fileExists(atPath: sidecar.path) {
+                    try? md5.write(to: sidecar, atomically: true, encoding: .utf8)
+                }
+                documents.append(Document(
+                    id: Document.stableUUID(md5),
+                    title: cleanTitle,
+                    filePath: docURL.path,
+                    md5: md5,
+                    totalPages: totalPages,
+                    lastVisited: Date()
+                ))
+            }
+        }
+
+        let topicRows = (try? rows(in: source, table: "ZTOPIC")) ?? []
         var topicKeyMap: [String: UUID] = [:]
         var topics: [Topic] = topicRows.map { row in
             let rawKey = first(row, ["ZTOPICID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
@@ -94,13 +250,19 @@ public final class MarginNoteImporter {
             topicKeyMap[rawKey] = id
             var books = parseStringList(first(row, ["ZBOOKMD5LIST", "ZBOOKLIST", "ZBOOKMD5S"]))
                 .map { $0.replacingOccurrences(of: "BREAK_", with: "") }
-            if let localMD5 = first(row, ["ZLOCALBOOKMD5"]), !localMD5.isEmpty, !books.contains(localMD5) {
-                books.append(localMD5)
+            if let localMD5 = first(row, ["ZLOCALBOOKMD5"]), !localMD5.isEmpty {
+                let parts = localMD5.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                for p in parts where !p.isEmpty && !books.contains(p) {
+                    books.append(p)
+                }
             }
             if let noteBooks = topicToBookMD5s[rawKey] {
                 for nb in noteBooks where !books.contains(nb) {
                     books.append(nb)
                 }
+            }
+            if books.isEmpty && documents.count == 1 {
+                books.append(documents[0].md5)
             }
             let created = parseDate(first(row, ["ZDATE", "ZCREATEDAT", "ZCREATEDATE", "ZCREATED"])) ?? Date()
             let updated = parseDate(first(row, ["ZLASTVISIT", "ZHISTORYDATE", "ZUPDATEDAT", "ZMODIFIEDDATE", "ZUPDATED"])) ?? created
@@ -166,11 +328,90 @@ public final class MarginNoteImporter {
         return MarginNoteImportResult(topics: topics, documents: documents, cards: cards)
     }
 
-    public func importInto(_ database: Database) throws -> MarginNoteImportResult {
+    @discardableResult
+    public func importInto(
+        _ database: Database,
+        conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?
+    ) throws -> MarginNoteImportResult? {
         let result = try read()
-        for topic in result.topics { try database.insertTopic(topic) }
-        for document in result.documents { try database.insertDocument(document) }
-        for card in result.cards { try database.insertCard(card) }
+        let existingTopics = (try? database.allTopics()) ?? []
+
+        var topicsToInsert: [Topic] = []
+        var topicIdMapping: [UUID: UUID] = [:]
+
+        for importedTopic in result.topics {
+            let matchingExisting = existingTopics.first {
+                $0.title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(
+                    importedTopic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                ) == .orderedSame
+            }
+
+            if let existing = matchingExisting {
+                let resolution = conflictResolver?(existing, importedTopic) ?? .replace
+                switch resolution {
+                case .cancel:
+                    return nil
+                case .replace:
+                    let oldCards = (try? database.cardsForTopic(id: existing.id)) ?? []
+                    for c in oldCards { try? database.deleteCard(id: c.id) }
+                    let oldLinks = (try? database.linksForTopic(id: existing.id)) ?? []
+                    for l in oldLinks { try? database.deleteLink(id: l.id) }
+                    try? database.deleteTopic(id: existing.id)
+
+                    // Also delete any orphan/dummy topics with matching title that have 0 cards
+                    for other in existingTopics where other.id != existing.id {
+                        let cleanOther = other.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let cleanImp = importedTopic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if cleanOther.localizedCaseInsensitiveCompare(cleanImp) == .orderedSame ||
+                           cleanOther.localizedCaseInsensitiveContains(cleanImp) ||
+                           cleanImp.localizedCaseInsensitiveContains(cleanOther) {
+                            let otherCards = (try? database.cardsForTopic(id: other.id)) ?? []
+                            if otherCards.isEmpty {
+                                try? database.deleteTopic(id: other.id)
+                            }
+                        }
+                    }
+
+                    topicsToInsert.append(importedTopic)
+                    topicIdMapping[importedTopic.id] = importedTopic.id
+
+                case .merge:
+                    var merged = existing
+                    for bmd5 in importedTopic.bookMD5List where !merged.bookMD5List.contains(bmd5) {
+                        merged.bookMD5List.append(bmd5)
+                    }
+                    merged.updatedAt = Date()
+                    try database.updateTopic(merged)
+                    topicIdMapping[importedTopic.id] = existing.id
+                }
+            } else {
+                topicsToInsert.append(importedTopic)
+                topicIdMapping[importedTopic.id] = importedTopic.id
+            }
+        }
+
+        for topic in topicsToInsert {
+            try database.insertTopic(topic)
+        }
+        for document in result.documents {
+            try database.insertDocument(document)
+        }
+        for card in result.cards {
+            var cardToInsert = card
+            if let targetTopicId = topicIdMapping[card.topicId] {
+                cardToInsert.topicId = targetTopicId
+            }
+            try database.insertCard(cardToInsert)
+        }
+
+        return result
+    }
+
+    @discardableResult
+    public func importInto(_ database: Database) throws -> MarginNoteImportResult {
+        guard let result = try importInto(database, conflictResolver: nil) else {
+            throw DatabaseError.sqlite("Import cancelled")
+        }
         return result
     }
 

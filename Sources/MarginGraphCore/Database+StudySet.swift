@@ -19,6 +19,8 @@ public extension Database {
     func documentsForTopic(id: UUID) throws -> [Document] {
         guard let topic = try getTopic(id: id) else { return [] }
         let allDocs = try allDocuments()
+            .filter { !$0.filePath.isEmpty }
+            .sorted { (FileManager.default.fileExists(atPath: $0.filePath) ? 1 : 0) > (FileManager.default.fileExists(atPath: $1.filePath) ? 1 : 0) }
         var results: [Document] = []
 
         // 1. Direct or prefix match with topic.bookMD5List
@@ -48,6 +50,23 @@ public extension Database {
                         results.append(found)
                     }
                 }
+            }
+        }
+
+        // 3. Fallback to matching document by title or file name
+        if results.isEmpty {
+            let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let found = allDocs.first(where: {
+                let cleanDocTitle = $0.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let dFileName = URL(fileURLWithPath: $0.filePath).deletingPathExtension().lastPathComponent
+                return cleanDocTitle.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame ||
+                       cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle) ||
+                       cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) ||
+                       dFileName.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame ||
+                       cleanTopicTitle.localizedCaseInsensitiveContains(dFileName) ||
+                       dFileName.localizedCaseInsensitiveContains(cleanTopicTitle)
+            }) {
+                results.append(found)
             }
         }
 

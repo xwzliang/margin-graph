@@ -62,6 +62,7 @@ final class AppModel: ObservableObject {
     init() {
         database = try! Database()
         mediaStorage = try! MediaStorage()
+        try? database.syncAvailableDocuments()
         autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
         if let ahrens = topics.first(where: { $0.title.contains("Ahrens") }) {
@@ -99,12 +100,8 @@ final class AppModel: ObservableObject {
 
     func autoImportLiveMarginNoteIfEmpty() {
         let existingTopics = (try? database.allTopics()) ?? []
-        let existingDocs = (try? database.allDocuments()) ?? []
         let totalCards = (try? database.totalCardCount()) ?? 0
-        let ahrensTopic = existingTopics.first(where: { $0.title.contains("Ahrens") })
-        let ahrensCards = ahrensTopic != nil ? ((try? database.cardsForTopic(id: ahrensTopic!.id)) ?? []) : []
-        let hasHighlightRects = ahrensCards.contains { !$0.highlightRects.isEmpty }
-        let needsImport = existingTopics.isEmpty || totalCards == 0 || !hasHighlightRects || existingDocs.contains(where: { $0.filePath.isEmpty })
+        let needsImport = existingTopics.isEmpty || totalCards == 0
         guard needsImport else { return }
 
         let liveCandidates = [
@@ -171,12 +168,52 @@ final class AppModel: ObservableObject {
     }
 
     func openDocumentInReader(document: Document) {
-        if let matchingTopic = topics.first(where: { topic in
+        let cleanDocTitle = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let docFileName = URL(fileURLWithPath: document.filePath).deletingPathExtension().lastPathComponent
+
+        // 1. Direct match on topic.bookMD5List
+        var matchingTopic = topics.first(where: { topic in
             topic.bookMD5List.contains { bmd5 in
                 bmd5 == document.md5 || bmd5.hasPrefix(document.md5) || document.md5.hasPrefix(bmd5)
             }
-        }) {
+        })
+
+        // 2. Match on cards' bookMD5 in the topic
+        if matchingTopic == nil {
+            matchingTopic = topics.first(where: { topic in
+                let cards = (try? database.cardsForTopic(id: topic.id)) ?? []
+                return cards.contains {
+                    guard let bmd5 = $0.bookMD5 else { return false }
+                    return bmd5 == document.md5 || bmd5.hasPrefix(document.md5) || document.md5.hasPrefix(bmd5)
+                }
+            })
+        }
+
+        // 3. Match on topic title vs document title or document filename
+        if matchingTopic == nil {
+            matchingTopic = topics.first(where: { topic in
+                let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                return cleanTopicTitle.localizedCaseInsensitiveCompare(cleanDocTitle) == .orderedSame ||
+                       cleanTopicTitle.localizedCaseInsensitiveCompare(docFileName) == .orderedSame ||
+                       cleanTopicTitle.localizedCaseInsensitiveContains(docFileName) ||
+                       docFileName.localizedCaseInsensitiveContains(cleanTopicTitle) ||
+                       cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) ||
+                       cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle)
+            })
+        }
+
+        if let matchingTopic {
+            if !matchingTopic.bookMD5List.contains(document.md5) {
+                try? database.addDocument(to: matchingTopic.id, md5: document.md5)
+                reloadLibrary()
+            }
             selectedTopicID = matchingTopic.id
+            reloadStudySet()
+        } else {
+            let newTopic = Topic(title: document.title, bookMD5List: [document.md5])
+            try? database.insertTopic(newTopic)
+            reloadLibrary()
+            selectedTopicID = newTopic.id
             reloadStudySet()
         }
         switchToDocument(document)
@@ -197,6 +234,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteDocument(_ document: Document) {
+        try? database.deleteDocument(id: document.id)
         reloadLibrary()
     }
 
@@ -224,19 +262,87 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func openPDFPicker(attachToTopic: Bool = true) {
+    func promptNotebookConflict(existing: Topic, imported: Topic) -> NotebookConflictResolution {
+        let alert = NSAlert()
+        alert.messageText = "Notebook Already Exists"
+        alert.informativeText = "A notebook named \"\(existing.title)\" already exists. Would you like to merge the imported notes with the existing notebook, replace it completely, or cancel the import?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Merge")
+        alert.addButton(withTitle: "Replace")
+        alert.addButton(withTitle: "Cancel")
+        alert.buttons.last?.keyEquivalent = "\u{1b}"
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            return .merge
+        case .alertSecondButtonReturn:
+            return .replace
+        default:
+            return .cancel
+        }
+    }
+
+    func openDocumentPicker(attachToTopic: Bool = false) {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.pdf]
-        panel.allowsMultipleSelection = false
+        let marginpkgType = UTType(filenameExtension: "marginpkg")
+        let marginnotesType = UTType(filenameExtension: "marginnotes")
+        let sqliteType = UTType(filenameExtension: "sqlite")
+        panel.allowedContentTypes = [UTType.pdf, marginpkgType, marginnotesType, sqliteType].compactMap { $0 }
+        panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        openPDF(url: url, attachToTopic: attachToTopic)
+        panel.canChooseFiles = true
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            openOrImportFile(url: url, attachToTopic: attachToTopic)
+        }
+    }
+
+    func openOrImportFile(url: URL, attachToTopic: Bool = false) {
+        let ext = url.pathExtension.lowercased()
+        if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
+            importMarginNoteOrPackage(url: url)
+        } else {
+            openPDF(url: url, attachToTopic: attachToTopic)
+        }
+    }
+
+    func importMarginNoteOrPackage(url: URL) {
+        let importer = MarginNoteImporter(url: url)
+        do {
+            let result = try importer.importInto(database) { [weak self] existing, imported in
+                guard let self else { return .cancel }
+                return self.promptNotebookConflict(existing: existing, imported: imported)
+            }
+            guard let result else {
+                print("Import cancelled by user.")
+                return
+            }
+
+            try? database.syncAvailableDocuments()
+            reloadLibrary()
+            reloadStudySet()
+
+            if let firstDoc = result.documents.first {
+                openDocumentInReader(document: firstDoc)
+            } else if let firstTopic = result.topics.first {
+                enterStudyWorkspace(topic: firstTopic)
+            }
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.runModal()
+        }
+    }
+
+    func openPDFPicker(attachToTopic: Bool = true) {
+        openDocumentPicker(attachToTopic: attachToTopic)
     }
 
     func openPDF(url: URL, attachToTopic: Bool = true) {
         guard let manager = try? PDFDocumentManager(url: url) else { return }
         let existing = try? database.getDocumentByMD5(md5: manager.md5)
         let document = existing ?? Document(
+            id: Document.stableUUID(manager.md5),
             title: manager.title,
             filePath: url.path,
             md5: manager.md5,
@@ -615,7 +721,7 @@ final class AppModel: ObservableObject {
             clean.components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
         }
 
-        var rectsToRemove = rects
+        let rectsToRemove = rects
         if let path = activeDocument?.filePath, let doc = PDFDocument(url: URL(fileURLWithPath: path)) {
             var newEmpRects: [HighlightRect] = []
             for phrase in card.emphasisList {
@@ -810,7 +916,10 @@ final class AppModel: ObservableObject {
 
     func importMarginNote() {
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["sqlite"]
+        let marginpkgType = UTType(filenameExtension: "marginpkg")
+        let marginnotesType = UTType(filenameExtension: "marginnotes")
+        let sqliteType = UTType(filenameExtension: "sqlite")
+        panel.allowedContentTypes = [marginpkgType, marginnotesType, sqliteType].compactMap { $0 }
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -830,14 +939,8 @@ final class AppModel: ObservableObject {
             }
         }
 
-        guard let sourceURL,
-              let result = try? MarginNoteImporter(url: sourceURL).importInto(database) else { return }
-
-        reloadLibrary()
-        if let first = result.topics.first {
-            selectedTopicID = first.id
-        }
-        reloadStudySet()
+        guard let sourceURL else { return }
+        importMarginNoteOrPackage(url: sourceURL)
     }
 
     func exportMarkdown() {
@@ -1773,7 +1876,7 @@ struct MarginGraphApp: App {
                                     model.openDocumentInReader(document: doc)
                                 },
                                 onImportDocument: {
-                                    model.openPDFPicker(attachToTopic: false)
+                                    model.openDocumentPicker(attachToTopic: false)
                                 },
                                 onDeleteDocument: { doc in
                                     model.deleteDocument(doc)
@@ -1825,7 +1928,16 @@ struct MarginGraphApp: App {
                 )
             }
             .onOpenURL { url in
-                model.handleDeepLink(url)
+                if url.isFileURL {
+                    let ext = url.pathExtension.lowercased()
+                    if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
+                        model.importMarginNoteOrPackage(url: url)
+                    } else if ext == "pdf" {
+                        model.openPDF(url: url, attachToTopic: false)
+                    }
+                } else {
+                    model.handleDeepLink(url)
+                }
             }
             .onAppear {
                 DispatchQueue.main.async {
@@ -1850,6 +1962,13 @@ struct MarginGraphApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 920)
         .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Open…") {
+                    model.openDocumentPicker(attachToTopic: false)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+            }
+
             CommandGroup(replacing: .undoRedo) {
                 Button("Undo") {
                     model.undo()

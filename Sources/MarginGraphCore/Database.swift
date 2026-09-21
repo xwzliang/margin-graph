@@ -17,6 +17,8 @@ public enum DatabaseError: Error, LocalizedError {
 }
 
 public final class Database: @unchecked Sendable {
+    public let path: String
+    public var isInMemory: Bool { path == ":memory:" }
     private var db: OpaquePointer?
     private let queue = DispatchQueue(label: "MarginGraph.Database")
     private let encoder = JSONEncoder()
@@ -41,6 +43,7 @@ public final class Database: @unchecked Sendable {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             resolvedPath = directory.appendingPathComponent("MarginGraph.sqlite").path
         }
+        self.path = resolvedPath
 
         if sqlite3_open_v2(resolvedPath, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) != SQLITE_OK {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
@@ -50,6 +53,10 @@ public final class Database: @unchecked Sendable {
         }
 
         try execute("PRAGMA foreign_keys = ON;")
+        try execute("PRAGMA busy_timeout = 5000;")
+        if resolvedPath != ":memory:" {
+            try? execute("PRAGMA journal_mode = WAL;")
+        }
         try initializeSchema()
     }
 
@@ -107,6 +114,7 @@ public final class Database: @unchecked Sendable {
         if try !hasColumn("emphasis_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN emphasis_rects TEXT NOT NULL DEFAULT '[]';")
         }
+        try repairDocumentIDs()
     }
 
     private func hasColumn(_ column: String, in table: String) throws -> Bool {
@@ -120,7 +128,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private func execute(_ sql: String) throws {
+    internal func execute(_ sql: String) throws {
         try queue.sync {
             var error: UnsafeMutablePointer<CChar>?
             guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {
@@ -193,14 +201,71 @@ public final class Database: @unchecked Sendable {
     }
 
     public func insertDocument(_ document: Document) throws {
+        var doc = document
+
+        // 1. Existing by MD5: preserve canonical ID and file path if incoming is empty
+        if let existing = try getDocumentByMD5(md5: document.md5) {
+            doc.id = existing.id
+            if doc.filePath.isEmpty && !existing.filePath.isEmpty {
+                doc.filePath = existing.filePath
+            }
+        } else if let collision = try getDocument(id: doc.id), collision.md5 != doc.md5 {
+            doc.id = Document.stableUUID(doc.md5)
+            if let stillCollision = try getDocument(id: doc.id), stillCollision.md5 != doc.md5 {
+                doc.id = UUID()
+            }
+        }
+
+        // 2. Existing by File Path: deduplicate if another document shares the same physical path
+        if !doc.filePath.isEmpty, let existingByPath = try getDocumentByPath(filePath: doc.filePath), existingByPath.md5 != doc.md5 {
+            let existingCards = (try? cardCountForDocument(md5: existingByPath.md5)) ?? 0
+            let newCards = (try? cardCountForDocument(md5: doc.md5)) ?? 0
+
+            // Prefer incoming if it has >= cards, or if existing has 0 cards, or if incoming is 64-char MarginNote hash vs 32-char fallback
+            let preferNew = (newCards >= existingCards) || (existingCards == 0) || (doc.md5.count == 64 && existingByPath.md5.count == 32)
+            if preferNew {
+                try execute("DELETE FROM documents WHERE id = '\(existingByPath.id.uuidString)';")
+                try migrateDocumentMD5(from: existingByPath.md5, to: doc.md5)
+                let sidecar = URL(fileURLWithPath: doc.filePath).appendingPathExtension("md5")
+                try? doc.md5.write(to: sidecar, atomically: true, encoding: .utf8)
+            } else {
+                // Existing has more cards; adopt existing MD5 and ID
+                doc.md5 = existingByPath.md5
+                doc.id = existingByPath.id
+            }
+        }
+
+        // 3. Purge any duplicate rows that might share the same file_path with a different ID
+        if !doc.filePath.isEmpty {
+            try withStatement("DELETE FROM documents WHERE file_path = ? AND id != ?") { statement in
+                bind(doc.filePath, to: 1, in: statement)
+                bind(doc.id.uuidString, to: 2, in: statement)
+                try requireDone(statement)
+            }
+        }
+
         try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited) VALUES(?,?,?,?,?,?)") { statement in
-            bind(document.id.uuidString, to: 1, in: statement)
-            bind(document.title, to: 2, in: statement)
-            bind(document.filePath, to: 3, in: statement)
-            bind(document.md5, to: 4, in: statement)
-            bind(document.totalPages, to: 5, in: statement)
-            bind(document.lastVisited?.timeIntervalSince1970, to: 6, in: statement)
+            bind(doc.id.uuidString, to: 1, in: statement)
+            bind(doc.title, to: 2, in: statement)
+            bind(doc.filePath, to: 3, in: statement)
+            bind(doc.md5, to: 4, in: statement)
+            bind(doc.totalPages, to: 5, in: statement)
+            bind(doc.lastVisited?.timeIntervalSince1970, to: 6, in: statement)
             try requireDone(statement)
+        }
+    }
+
+    public func repairDocumentIDs() throws {
+        let docs = try allDocuments()
+        for doc in docs {
+            let canonicalID = Document.stableUUID(doc.md5)
+            if doc.id != canonicalID {
+                if let other = try getDocument(id: canonicalID), other.md5 != doc.md5 {
+                    let tempID = UUID()
+                    try execute("UPDATE documents SET id = '\(tempID.uuidString)' WHERE id = '\(other.id.uuidString)';")
+                }
+                try execute("UPDATE documents SET id = '\(canonicalID.uuidString)' WHERE id = '\(doc.id.uuidString)';")
+            }
         }
     }
 
@@ -210,6 +275,44 @@ public final class Database: @unchecked Sendable {
 
     public func getDocumentByMD5(md5: String) throws -> Document? {
         try document(where: "md5 = ?", value: md5)
+    }
+
+    public func getDocumentByPath(filePath: String) throws -> Document? {
+        try document(where: "file_path = ?", value: filePath)
+    }
+
+    public func cardCountForDocument(md5: String) throws -> Int {
+        try withStatement("SELECT count(*) FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%')") { statement in
+            bind(md5, to: 1, in: statement)
+            bind("\(md5)%", to: 2, in: statement)
+            bind(md5, to: 3, in: statement)
+            guard sqlite3_step(statement) == SQLITE_ROW else { return 0 }
+            return int(statement, 0) ?? 0
+        }
+    }
+
+    public func migrateDocumentMD5(from oldMD5: String, to newMD5: String) throws {
+        guard oldMD5 != newMD5, !oldMD5.isEmpty, !newMD5.isEmpty else { return }
+        try withStatement("UPDATE cards SET book_md5 = ? WHERE book_md5 = ?") { statement in
+            bind(newMD5, to: 1, in: statement)
+            bind(oldMD5, to: 2, in: statement)
+            try requireDone(statement)
+        }
+        try withStatement("UPDATE document_bookmarks SET document_md5 = ? WHERE document_md5 = ?") { statement in
+            bind(newMD5, to: 1, in: statement)
+            bind(oldMD5, to: 2, in: statement)
+            try requireDone(statement)
+        }
+        let topics = try allTopics()
+        for var topic in topics {
+            if topic.bookMD5List.contains(oldMD5) {
+                topic.bookMD5List.removeAll { $0 == oldMD5 }
+                if !topic.bookMD5List.contains(newMD5) {
+                    topic.bookMD5List.append(newMD5)
+                }
+                try updateTopic(topic)
+            }
+        }
     }
 
     private func document(where clause: String, value: String) throws -> Document? {

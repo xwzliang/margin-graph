@@ -39,9 +39,18 @@ public struct StudyNotebooksView: View {
 
     private func matchingDocument(for topic: Topic) -> Document? {
         documents.first { doc in
-            topic.bookMD5List.contains { bmd5 in
+            guard !doc.filePath.isEmpty, FileManager.default.fileExists(atPath: doc.filePath) else { return false }
+            let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanDocTitle = doc.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let dFileName = URL(fileURLWithPath: doc.filePath).deletingPathExtension().lastPathComponent
+            return topic.bookMD5List.contains { bmd5 in
                 bmd5 == doc.md5 || bmd5.hasPrefix(doc.md5) || doc.md5.hasPrefix(bmd5)
-            }
+            } || cleanDocTitle.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame
+              || cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle)
+              || cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle)
+              || dFileName.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame
+              || cleanTopicTitle.localizedCaseInsensitiveContains(dFileName)
+              || dFileName.localizedCaseInsensitiveContains(cleanTopicTitle)
         }
     }
 
