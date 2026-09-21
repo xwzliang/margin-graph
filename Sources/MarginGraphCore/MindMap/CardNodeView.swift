@@ -74,7 +74,7 @@ public struct CardNodeView: View {
 
         VStack(alignment: .leading, spacing: 0) {
             // 1. Accent Header Section (Title & chevron)
-            HStack(alignment: .top, spacing: 5) {
+            let header = HStack(alignment: .top, spacing: 5) {
                 if isEditingTitle {
                     InlineTitleEditorView(
                         text: $editingTitleText,
@@ -86,7 +86,8 @@ public struct CardNodeView: View {
                             onCommitTitle?(card.title)
                         }
                     )
-                    .frame(maxWidth: .infinity, minHeight: 20, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                     .onAppear {
                         editingTitleText = card.title
                     }
@@ -118,18 +119,23 @@ public struct CardNodeView: View {
             .padding(.vertical, (!card.title.isEmpty || isEditingTitle || (!hasExcerpt && !hasNotes)) ? 8 : 4)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(cardColors.accent)
-            .contentShape(Rectangle())
-            .gesture(
-                TapGesture(count: 2).onEnded {
-                    onStartEditTitle?()
-                }
-                .exclusively(before:
-                    TapGesture(count: 1).onEnded {
-                        onSelect()
-                    }
-                ),
-                including: isEditingTitle ? .none : .all
-            )
+
+            if isEditingTitle {
+                header
+            } else {
+                header
+                    .contentShape(Rectangle())
+                    .gesture(
+                        TapGesture(count: 2).onEnded {
+                            onStartEditTitle?()
+                        }
+                        .exclusively(before:
+                            TapGesture(count: 1).onEnded {
+                                onSelect()
+                            }
+                        )
+                    )
+            }
 
                 // 2. Cream Body Section (Excerpt & Notes)
                 let hasImage = thumbnail != nil
@@ -191,7 +197,8 @@ public struct CardNodeView: View {
                             TapGesture(count: 1).onEnded {
                                 onSelect()
                             }
-                        )
+                        ),
+                        including: isEditingTitle ? .none : .all
                     )
                 }
 

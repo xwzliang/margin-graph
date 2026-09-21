@@ -205,7 +205,7 @@ public struct MindMapCanvasView: View {
             // Subtle grid with pan and deselect
             grid
                 .contentShape(Rectangle())
-                .gesture(panGesture)
+                .gesture(panGesture, including: editingCardTitleID == nil ? .all : .none)
                 .gesture(
                     SpatialTapGesture(count: 2, coordinateSpace: .named("MindMapCanvas"))
                         .onEnded { event in
@@ -429,11 +429,11 @@ public struct MindMapCanvasView: View {
                 .shadow(color: isBeingDragged ? Color.black.opacity(0.25) : Color.clear, radius: 10, y: 5)
                 .scaleEffect(viewport.zoomScale)
                 .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale)
-                .zIndex(isBeingDragged ? 100 : (isTargeted ? 50 : 1))
+                .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isTargeted ? 50 : 1))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
                 .gesture(
                     nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames),
-                    including: editingCardTitleID == card.id ? .none : .all
+                    including: editingCardTitleID == nil ? .all : .none
                 )
                 .contextMenu {
                     cardContextMenu(for: card)
