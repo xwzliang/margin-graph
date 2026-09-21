@@ -58,6 +58,20 @@ public struct Topic: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+public struct CardDeck: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    public var title: String
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(id: UUID = UUID(), title: String, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id
+        self.title = title
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct HighlightRect: Codable, Hashable, Sendable {
     public var page: Int
     public var x: Double
@@ -169,6 +183,27 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
             return [ExcerptSegment(id: id, text: highlightText, rects: highlightRects)]
         }
         return []
+    }
+
+    public static func allDescendants(of cardId: UUID, in cards: [NoteCard]) -> [NoteCard] {
+        var result: [NoteCard] = []
+        var queue: [UUID] = [cardId]
+        var visited: Set<UUID> = [cardId]
+
+        while !queue.isEmpty {
+            let parentId = queue.removeFirst()
+            let directChildren = cards.filter { $0.groupNoteId == parentId && !visited.contains($0.id) }
+            for child in directChildren {
+                visited.insert(child.id)
+                result.append(child)
+                queue.append(child.id)
+            }
+        }
+        return result
+    }
+
+    public func allDescendants(in cards: [NoteCard]) -> [NoteCard] {
+        NoteCard.allDescendants(of: id, in: cards)
     }
 }
 

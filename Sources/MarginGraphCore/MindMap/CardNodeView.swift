@@ -20,6 +20,7 @@ public struct CardNodeView: View {
     public var onDelete: (() -> Void)?
     public var onNewSibling: (() -> Void)?
     public var onNewChild: (() -> Void)?
+    public var onAddToDeck: (() -> Void)?
 
     @State private var editingTitleText: String = ""
 
@@ -41,7 +42,8 @@ public struct CardNodeView: View {
         onChangeColor: ((Int) -> Void)? = nil,
         onDelete: (() -> Void)? = nil,
         onNewSibling: (() -> Void)? = nil,
-        onNewChild: (() -> Void)? = nil
+        onNewChild: (() -> Void)? = nil,
+        onAddToDeck: (() -> Void)? = nil
     ) {
         self.card = card
         self.isSelected = isSelected
@@ -61,6 +63,7 @@ public struct CardNodeView: View {
         self.onDelete = onDelete
         self.onNewSibling = onNewSibling
         self.onNewChild = onNewChild
+        self.onAddToDeck = onAddToDeck
         self._editingTitleText = State(initialValue: card.title)
     }
 
@@ -236,6 +239,18 @@ public struct CardNodeView: View {
                         .help("Add Child Note (Tab)")
 
                         Button {
+                            onAddToDeck?()
+                        } label: {
+                            Image(systemName: "rectangle.stack.badge.play")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(.white)
+                                .frame(width: 19, height: 19)
+                                .background(Circle().fill(Color(red: 0.15, green: 0.45, blue: 0.85)))
+                        }
+                        .buttonStyle(.plain)
+                        .help("Add to Review Deck")
+
+                        Button {
                             onComment?()
                         } label: {
                             Image(systemName: "text.bubble")
@@ -319,6 +334,9 @@ public struct CardNodeView: View {
             }
             Button("Edit Details…") {
                 onEdit?()
+            }
+            Button("Add to Review Deck…") {
+                onAddToDeck?()
             }
             Divider()
             Button("Copy Title") {

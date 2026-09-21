@@ -22,6 +22,7 @@ public struct MindMapCanvasView: View {
     public var onNewChild: ((UUID) -> Void)?
     public var onNewNote: ((CGPoint) -> Void)?
     public var onUpdateTitle: ((UUID, String) -> Void)?
+    public var onAddToDeck: ((NoteCard) -> Void)?
     @Binding public var editingCardTitleID: UUID?
 
     @State private var viewport = CanvasViewport()
@@ -62,7 +63,8 @@ public struct MindMapCanvasView: View {
         onNewSibling: ((UUID) -> Void)? = nil,
         onNewChild: ((UUID) -> Void)? = nil,
         onNewNote: ((CGPoint) -> Void)? = nil,
-        onUpdateTitle: ((UUID, String) -> Void)? = nil
+        onUpdateTitle: ((UUID, String) -> Void)? = nil,
+        onAddToDeck: ((NoteCard) -> Void)? = nil
     ) {
         self.cards = cards
         self.links = links
@@ -85,6 +87,7 @@ public struct MindMapCanvasView: View {
         self.onNewChild = onNewChild
         self.onNewNote = onNewNote
         self.onUpdateTitle = onUpdateTitle
+        self.onAddToDeck = onAddToDeck
         self._layoutResult = State(initialValue: TreeLayout.layout(cards: cards))
     }
 
@@ -415,7 +418,8 @@ public struct MindMapCanvasView: View {
                         onDeleteCard?(card.id)
                     },
                     onNewSibling: onNewSibling != nil ? { onNewSibling?(card.id) } : nil,
-                    onNewChild: onNewChild != nil ? { onNewChild?(card.id) } : nil
+                    onNewChild: onNewChild != nil ? { onNewChild?(card.id) } : nil,
+                    onAddToDeck: { onAddToDeck?(card) }
                 )
                 .frame(width: frame.width, height: frame.height + extraHeight)
                 .overlay {
@@ -534,6 +538,9 @@ public struct MindMapCanvasView: View {
         }
         Button("Edit Details…") {
             onEditCard?(card)
+        }
+        Button("Add to Review Deck…") {
+            onAddToDeck?(card)
         }
         Divider()
         Button("Copy Title") {

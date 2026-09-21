@@ -35,6 +35,11 @@ final class AppModel: ObservableObject {
     @Published var dueFlashcards: [NoteCard] = []
     @Published var cardCounts: [UUID: Int] = [:]
     @Published var reviewDecks: [ReviewDeckItem] = []
+    @Published var customDecks: [CardDeck] = []
+    @Published var deckCardCounts: [UUID: Int] = [:]
+    @Published var cardForAddToDeck: NoteCard? = nil
+    @Published var activeReviewCards: [NoteCard] = []
+    @Published var activeReviewDocuments: [Document] = []
     @Published var isReviewPresented = false
     @Published var editingCard: NoteCard? = nil
     @Published var editingCardTitleID: UUID? = nil
@@ -124,13 +129,31 @@ final class AppModel: ObservableObject {
     func reloadLibrary() {
         topics = (try? database.allTopics()) ?? []
         documents = (try? database.allDocuments()) ?? []
+        customDecks = (try? database.allDecks()) ?? []
+        deckCardCounts = (try? database.deckCardCounts()) ?? [:]
+        let dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
 
         let counts = (try? database.cardCountsByTopic()) ?? [:]
         let dueCounts = (try? database.dueCardCountsByTopic()) ?? [:]
 
         var decks: [ReviewDeckItem] = []
-        decks.reserveCapacity(topics.count)
+        decks.reserveCapacity(customDecks.count + topics.count)
 
+        // 1. Custom Card Decks
+        for deck in customDecks {
+            let total = deckCardCounts[deck.id] ?? 0
+            let due = dueDeckCounts[deck.id] ?? 0
+            decks.append(ReviewDeckItem(
+                id: deck.id,
+                title: deck.title,
+                dueCount: due,
+                totalCount: total,
+                topicId: nil,
+                deckId: deck.id
+            ))
+        }
+
+        // 2. Topic Study Sets
         for topic in topics {
             let total = counts[topic.id] ?? 0
             let due = dueCounts[topic.id] ?? 0
@@ -1057,15 +1080,57 @@ final class AppModel: ObservableObject {
 
     func startReview() {
         guard !dueFlashcards.isEmpty else { return }
+        activeReviewCards = dueFlashcards
+        activeReviewDocuments = studyDocuments
         isReviewPresented = true
     }
 
     func startReviewForDeck(_ deck: ReviewDeckItem) {
+        if let deckId = deck.deckId {
+            let cards = (try? database.cardsForDeck(deckId: deckId)) ?? []
+            let due = (try? database.dueCardsForDeck(deckId: deckId)) ?? []
+            activeReviewCards = due.isEmpty ? cards : due
+            let md5s = Set(cards.compactMap { $0.bookMD5 })
+            activeReviewDocuments = documents.filter { md5s.contains($0.md5) }
+            isReviewPresented = true
+            return
+        }
+
         if let topicId = deck.topicId,
            let topic = topics.first(where: { $0.id == topicId }) {
             selectTopic(topic)
+            let cards = (try? database.cardsForTopic(id: topicId)) ?? []
+            let due = (try? database.dueCardsForTopic(id: topicId)) ?? []
+            activeReviewCards = due.isEmpty ? cards : due
+            activeReviewDocuments = studyDocuments
         }
         isReviewPresented = true
+    }
+
+    func addCardsToDeck(deckId: UUID?, newTitle: String?, cardIds: [UUID]) {
+        do {
+            let targetDeckId: UUID
+            if let deckId {
+                targetDeckId = deckId
+            } else if let newTitle, !newTitle.isEmpty {
+                let newDeck = try database.createDeck(title: newTitle)
+                targetDeckId = newDeck.id
+            } else {
+                return
+            }
+            try database.addCardsToDeck(cardIds: cardIds, deckId: targetDeckId)
+            reloadLibrary()
+            reloadStudySet()
+        } catch {
+            print("[AppModel] Failed to add cards to deck: \(error)")
+        }
+    }
+
+    func deleteDeck(_ deckItem: ReviewDeckItem) {
+        if let deckId = deckItem.deckId {
+            try? database.deleteDeck(id: deckId)
+            reloadLibrary()
+        }
     }
 
     func handleDeepLink(_ url: URL) {
@@ -1532,6 +1597,20 @@ struct StudyWorkspaceView: View {
                 }
             )
         }
+        .sheet(item: $model.cardForAddToDeck) { card in
+            AddToDeckSheet(
+                card: card,
+                allCards: model.mindMapCards,
+                existingDecks: model.customDecks,
+                deckCardCounts: model.deckCardCounts,
+                onAdd: { deckId, newTitle, cardIds in
+                    model.addCardsToDeck(deckId: deckId, newTitle: newTitle, cardIds: cardIds)
+                },
+                onDismiss: {
+                    model.cardForAddToDeck = nil
+                }
+            )
+        }
         .sheet(isPresented: $model.isManagingDocuments) {
             StudyDocumentManagementSheet(
                 documents: model.studyDocuments,
@@ -1849,6 +1928,9 @@ struct StudyWorkspaceView: View {
                 },
                 onUpdateTitle: { cardID, title in
                     model.updateCardTitle(cardID: cardID, title: title)
+                },
+                onAddToDeck: { card in
+                    model.cardForAddToDeck = card
                 }
             )
         }
@@ -2025,6 +2107,9 @@ struct MarginGraphApp: App {
                                 decks: model.reviewDecks,
                                 onStartReview: { deck in
                                     model.startReviewForDeck(deck)
+                                },
+                                onDeleteDeck: { deck in
+                                    model.deleteDeck(deck)
                                 }
                             )
                         }
@@ -2035,8 +2120,8 @@ struct MarginGraphApp: App {
             .preferredColorScheme(.light)
             .sheet(isPresented: $model.isReviewPresented) {
                 FlashcardReviewView(
-                    cards: model.dueFlashcards.isEmpty ? model.mindMapCards : model.dueFlashcards,
-                    documents: model.studyDocuments,
+                    cards: model.activeReviewCards.isEmpty ? (model.dueFlashcards.isEmpty ? model.mindMapCards : model.dueFlashcards) : model.activeReviewCards,
+                    documents: model.activeReviewDocuments.isEmpty ? model.studyDocuments : model.activeReviewDocuments,
                     database: model.database,
                     mediaStorage: model.mediaStorage,
                     onJumpToPDF: { card in
@@ -2046,6 +2131,7 @@ struct MarginGraphApp: App {
                     },
                     onDismiss: {
                         model.isReviewPresented = false
+                        model.reloadLibrary()
                         model.reloadStudySet()
                     }
                 )

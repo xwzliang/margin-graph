@@ -101,6 +101,19 @@ public final class Database: @unchecked Sendable {
             document_md5 TEXT NOT NULL, page_index INTEGER NOT NULL, created_at REAL NOT NULL,
             PRIMARY KEY(document_md5, page_index)
         );
+        CREATE TABLE IF NOT EXISTS card_decks(
+            id TEXT PRIMARY KEY, title TEXT NOT NULL,
+            created_at REAL NOT NULL, updated_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS deck_cards(
+            deck_id TEXT NOT NULL, card_id TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            PRIMARY KEY(deck_id, card_id),
+            FOREIGN KEY(deck_id) REFERENCES card_decks(id) ON DELETE CASCADE,
+            FOREIGN KEY(card_id) REFERENCES cards(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id);
+        CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards(card_id);
         """)
         if try !hasColumn("highlight_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN highlight_rects TEXT NOT NULL DEFAULT '[]';")
@@ -194,7 +207,7 @@ public final class Database: @unchecked Sendable {
         return try decoder.decode(type, from: data)
     }
 
-    private func requireDone(_ statement: OpaquePointer) throws {
+    internal func requireDone(_ statement: OpaquePointer) throws {
         guard sqlite3_step(statement) == SQLITE_DONE else {
             throw DatabaseError.sqlite(String(cString: sqlite3_errmsg(db)))
         }
@@ -537,7 +550,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private func decodeCard(_ statement: OpaquePointer) throws -> NoteCard? {
+    internal func decodeCard(_ statement: OpaquePointer) throws -> NoteCard? {
         guard let id = text(statement, 0).flatMap(UUID.init(uuidString:)),
               let topicId = text(statement, 1).flatMap(UUID.init(uuidString:)) else { return nil }
 

@@ -6,26 +6,34 @@ public struct ReviewDeckItem: Identifiable {
     public var dueCount: Int
     public var totalCount: Int
     public var topicId: UUID?
+    public var deckId: UUID?
 
-    public init(id: UUID = UUID(), title: String, dueCount: Int, totalCount: Int, topicId: UUID? = nil) {
+    public init(id: UUID = UUID(), title: String, dueCount: Int, totalCount: Int, topicId: UUID? = nil, deckId: UUID? = nil) {
         self.id = id
         self.title = title
         self.dueCount = dueCount
         self.totalCount = totalCount
         self.topicId = topicId
+        self.deckId = deckId
     }
 }
 
 public struct ReviewDecksView: View {
     public var decks: [ReviewDeckItem]
     public var onStartReview: (ReviewDeckItem) -> Void
+    public var onDeleteDeck: ((ReviewDeckItem) -> Void)?
 
     @State private var sortMode: Int = 0 // 0: Recent, 1: Name
     @State private var filter: String = "All"
 
-    public init(decks: [ReviewDeckItem], onStartReview: @escaping (ReviewDeckItem) -> Void) {
+    public init(
+        decks: [ReviewDeckItem],
+        onStartReview: @escaping (ReviewDeckItem) -> Void,
+        onDeleteDeck: ((ReviewDeckItem) -> Void)? = nil
+    ) {
         self.decks = decks
         self.onStartReview = onStartReview
+        self.onDeleteDeck = onDeleteDeck
     }
 
     public var body: some View {
@@ -94,7 +102,11 @@ public struct ReviewDecksView: View {
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 148, maximum: 170), spacing: 24)], spacing: 28) {
                         ForEach(decks) { deck in
-                            ReviewDeckCardView(deck: deck, onStart: { onStartReview(deck) })
+                            ReviewDeckCardView(
+                                deck: deck,
+                                onStart: { onStartReview(deck) },
+                                onDelete: onDeleteDeck != nil ? { onDeleteDeck?(deck) } : nil
+                            )
                         }
                     }
                     .padding(28)
@@ -108,10 +120,12 @@ public struct ReviewDecksView: View {
 public struct ReviewDeckCardView: View {
     public var deck: ReviewDeckItem
     public var onStart: () -> Void
+    public var onDelete: (() -> Void)?
 
-    public init(deck: ReviewDeckItem, onStart: @escaping () -> Void) {
+    public init(deck: ReviewDeckItem, onStart: @escaping () -> Void, onDelete: (() -> Void)? = nil) {
         self.deck = deck
         self.onStart = onStart
+        self.onDelete = onDelete
     }
 
     public var body: some View {
@@ -185,9 +199,22 @@ public struct ReviewDeckCardView: View {
                 // More dots
                 HStack {
                     Spacer()
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                    if let onDelete {
+                        Menu {
+                            Button(role: .destructive, action: onDelete) {
+                                Label("Delete Deck", systemImage: "trash")
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(.secondary.opacity(0.7))
+                        }
+                        .menuStyle(.borderlessButton)
+                    } else {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.secondary.opacity(0.7))
+                    }
                 }
                 .padding(.horizontal, 4)
             }
@@ -195,5 +222,12 @@ public struct ReviewDeckCardView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if let onDelete {
+                Button(role: .destructive, action: onDelete) {
+                    Label("Delete Deck", systemImage: "trash")
+                }
+            }
+        }
     }
 }
