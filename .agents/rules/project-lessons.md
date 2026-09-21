@@ -233,6 +233,27 @@ Structure each entry concisely with actionable rules:
     3. For recursive mindmap branch addition, compute subtrees using BFS/queue traversing `groupNoteId` (`NoteCard.allDescendants(of:in:)`).
     4. Unify review presentation: Distinguish custom decks from topic sets via `ReviewDeckItem(id, title, dueCount, totalCount, topicId, deckId)`. When launching review for a custom deck, query `cardsForDeck` and `dueCardsForDeck`, populate `activeReviewCards`, and discover matching source documents from `cards.bookMD5` so PDF jump-back remains fully functional.
 
+- **Filter Empty (0-Card) Decks from Review Grid**:
+  - **Trap**: Populating review deck items for all topics and custom decks unconditionally floods the Review view with 0-card empty decks (e.g. dozens of imported book documents or topics without note cards), cluttering the UI and confusing the user.
+  - **Rule**: Guard `total > 0` in both custom deck and topic study set loops in `reloadLibrary()`. Decks with 0 cards must never appear in the Review grid. When no decks have cards, display the clean empty state with icon `rectangle.stack.badge.play`.
+
+- **MindMap Drag Snapping & Anchored Roots vs Imported Linear Outlines**:
+  - **Trap 1**: Calling `insertNearNearestLocation` on drag drop searched for the closest card and synchronously looped over all siblings calling `onMove(c.id, CGPoint(x: 0, y: idx * 100))`. Each `onMove` triggered `reloadStudySet()`, executing multiple SQLite roundtrips and full tree layout recomputations on the main thread, causing severe multi-second UI hangs and random relocations.
+  - **Trap 2**: In `TreeLayout`, cards imported from MarginNote have `mindPos = (0.0, y)` representing outline list indices. If all root cards with `mindPos != nil` are treated as anchored roots, large imported topics (e.g. 600+ cards) collapse into a single vertical column 68,000pt tall (`aspect < 0.01`). Conversely, excluding all cards with `bookMD5 != nil` or `startPage != nil` causes user-moved PDF excerpt cards to discard their dropped positions and jump into auto-column coordinates.
+  - **Rule**:
+    1. Distinguish user-moved / user-placed cards by requiring `pos.x > 0 || (card.bookMD5 == nil && card.startPage == nil)` for anchored roots in `TreeLayout`. Imported linear outline cards (`pos.x <= 0`) flow into balanced auto-column wrap layout.
+    2. Implement live 20pt magnetic grid attraction (`TreeLayout.snapToGrid(point, gridSize: 20.0)`) during drag, bounding coordinates to `max(20.0, ...)`.
+    3. On drag end: if overlap >= 25% with another card, reparent as child (`onReparent`); if dropped on empty canvas, commit a single `onMove(card.id, snappedOrigin)` call. If a child card is dragged > 320pt away from its parent tree, detach it (`onReparent(card.id, nil)`).
+
+- **Card Deck Selection, Hierarchy Scope & Topic Promotion**:
+  - **Trap**: If `AddToDeckSheet` only shows custom decks, users who have not yet created a custom deck see an empty list and cannot add to any existing deck shown on the Review page.
+  - **Rule**:
+    1. Provide both the floating toolbar button on selected cards and the docked bottom toolbar button with tooltip `Add to Review Deck`.
+    2. In `AddToDeckSheet`, display a scrollable radio list of all available decks (custom decks + active topic review sets) showing title and card count capsule badges, alongside a dedicated "Or Create a New Deck" radio row with text field.
+    3. If a card has descendants, allow choosing between "This note only (1 card)" and "This note + all N child notes".
+    4. If the user chooses an existing topic deck, seamlessly promote it by creating a `card_decks` record with matching ID, backfilling existing topic cards into `deck_cards`, and inserting the new card(s).
+
+
 
 
 

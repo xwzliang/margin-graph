@@ -2,9 +2,9 @@ import Foundation
 import SQLite3
 
 public extension Database {
-    func createDeck(title: String) throws -> CardDeck {
-        let deck = CardDeck(title: title)
-        try withStatement("INSERT INTO card_decks(id, title, created_at, updated_at) VALUES(?, ?, ?, ?)") { stmt in
+    func createDeck(id: UUID = UUID(), title: String) throws -> CardDeck {
+        let deck = CardDeck(id: id, title: title)
+        try withStatement("INSERT OR REPLACE INTO card_decks(id, title, created_at, updated_at) VALUES(?, ?, ?, ?)") { stmt in
             bind(deck.id.uuidString, to: 1, in: stmt)
             bind(deck.title, to: 2, in: stmt)
             bind(deck.createdAt.timeIntervalSince1970, to: 3, in: stmt)

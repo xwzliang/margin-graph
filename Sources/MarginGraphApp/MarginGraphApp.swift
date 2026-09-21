@@ -37,6 +37,7 @@ final class AppModel: ObservableObject {
     @Published var reviewDecks: [ReviewDeckItem] = []
     @Published var customDecks: [CardDeck] = []
     @Published var deckCardCounts: [UUID: Int] = [:]
+    @Published var dueDeckCounts: [UUID: Int] = [:]
     @Published var cardForAddToDeck: NoteCard? = nil
     @Published var activeReviewCards: [NoteCard] = []
     @Published var activeReviewDocuments: [Document] = []
@@ -131,7 +132,7 @@ final class AppModel: ObservableObject {
         documents = (try? database.allDocuments()) ?? []
         customDecks = (try? database.allDecks()) ?? []
         deckCardCounts = (try? database.deckCardCounts()) ?? [:]
-        let dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
+        dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
 
         let counts = (try? database.cardCountsByTopic()) ?? [:]
         let dueCounts = (try? database.dueCardCountsByTopic()) ?? [:]
@@ -139,9 +140,10 @@ final class AppModel: ObservableObject {
         var decks: [ReviewDeckItem] = []
         decks.reserveCapacity(customDecks.count + topics.count)
 
-        // 1. Custom Card Decks
+        // 1. Custom Card Decks (only show decks with at least 1 card)
         for deck in customDecks {
             let total = deckCardCounts[deck.id] ?? 0
+            guard total > 0 else { continue }
             let due = dueDeckCounts[deck.id] ?? 0
             decks.append(ReviewDeckItem(
                 id: deck.id,
@@ -153,9 +155,12 @@ final class AppModel: ObservableObject {
             ))
         }
 
-        // 2. Topic Study Sets
+        // 2. Topic Study Sets (only show decks with at least 1 card)
+        let customDeckIDs = Set(customDecks.map(\.id))
         for topic in topics {
+            guard !customDeckIDs.contains(topic.id) else { continue }
             let total = counts[topic.id] ?? 0
+            guard total > 0 else { continue }
             let due = dueCounts[topic.id] ?? 0
             decks.append(ReviewDeckItem(
                 id: topic.id,
@@ -1107,13 +1112,37 @@ final class AppModel: ObservableObject {
         isReviewPresented = true
     }
 
+    func availableDecksForAddToSheet() -> [ReviewDeckItem] {
+        var sheetDecks: [ReviewDeckItem] = customDecks.map { deck in
+            ReviewDeckItem(
+                id: deck.id,
+                title: deck.title,
+                dueCount: dueDeckCounts[deck.id] ?? 0,
+                totalCount: deckCardCounts[deck.id] ?? 0,
+                deckId: deck.id
+            )
+        }
+        let customIDs = Set(customDecks.map(\.id))
+        for topicDeck in reviewDecks where !customIDs.contains(topicDeck.id) {
+            sheetDecks.append(topicDeck)
+        }
+        return sheetDecks
+    }
+
     func addCardsToDeck(deckId: UUID?, newTitle: String?, cardIds: [UUID]) {
         do {
             let targetDeckId: UUID
             if let deckId {
                 targetDeckId = deckId
-            } else if let newTitle, !newTitle.isEmpty {
-                let newDeck = try database.createDeck(title: newTitle)
+                if (try? database.getDeck(id: targetDeckId)) == nil,
+                   let topic = topics.first(where: { $0.id == targetDeckId }) {
+                    _ = try database.createDeck(id: targetDeckId, title: topic.title)
+                    let topicCards = (try? database.cardsForTopic(id: targetDeckId)) ?? []
+                    try database.addCardsToDeck(cardIds: topicCards.map(\.id), deckId: targetDeckId)
+                }
+            } else if let newTitle, !newTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                let newDeck = try database.createDeck(title: trimmed)
                 targetDeckId = newDeck.id
             } else {
                 return
@@ -1601,8 +1630,7 @@ struct StudyWorkspaceView: View {
             AddToDeckSheet(
                 card: card,
                 allCards: model.mindMapCards,
-                existingDecks: model.customDecks,
-                deckCardCounts: model.deckCardCounts,
+                existingDecks: model.availableDecksForAddToSheet(),
                 onAdd: { deckId, newTitle, cardIds in
                     model.addCardsToDeck(deckId: deckId, newTitle: newTitle, cardIds: cardIds)
                 },

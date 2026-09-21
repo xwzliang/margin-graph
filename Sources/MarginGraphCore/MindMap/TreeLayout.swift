@@ -124,7 +124,7 @@ public enum TreeLayout {
 
         // Separate free/anchored root cards from auto-column roots
         let (anchoredRoots, autoRoots) = roots.reduce(into: ([NoteCard](), [NoteCard]())) { res, card in
-            if card.groupNoteId == nil, card.bookMD5 == nil, card.startPage == nil, card.mindPos != nil {
+            if card.groupNoteId == nil, let pos = card.mindPos, pos.x > 0 || (card.bookMD5 == nil && card.startPage == nil) {
                 res.0.append(card)
             } else {
                 res.1.append(card)
@@ -221,6 +221,12 @@ public enum TreeLayout {
             return (lhs.mindPos?.y ?? .greatestFiniteMagnitude) < (rhs.mindPos?.y ?? .greatestFiniteMagnitude)
         }
         return lhs.createdAt < rhs.createdAt
+    }
+
+    public static func snapToGrid(_ point: CGPoint, gridSize: CGFloat = 20.0) -> CGPoint {
+        let snappedX = (point.x / gridSize).rounded() * gridSize
+        let snappedY = (point.y / gridSize).rounded() * gridSize
+        return CGPoint(x: snappedX, y: snappedY)
     }
 }
 

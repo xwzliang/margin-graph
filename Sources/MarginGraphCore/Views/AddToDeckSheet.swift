@@ -3,13 +3,12 @@ import SwiftUI
 public struct AddToDeckSheet: View {
     public var card: NoteCard
     public var allCards: [NoteCard]
-    public var existingDecks: [CardDeck]
-    public var deckCardCounts: [UUID: Int]
+    public var existingDecks: [ReviewDeckItem]
     public var onAdd: (_ deckId: UUID?, _ newDeckTitle: String?, _ cardIds: [UUID]) -> Void
     public var onDismiss: () -> Void
 
     @State private var includeChildren: Bool
-    @State private var deckChoiceMode: Int // 0: existing, 1: new
+    @State private var deckChoiceMode: Int // 0: existing deck, 1: create new deck
     @State private var selectedDeckID: UUID?
     @State private var newDeckTitle: String = ""
 
@@ -20,15 +19,13 @@ public struct AddToDeckSheet: View {
     public init(
         card: NoteCard,
         allCards: [NoteCard],
-        existingDecks: [CardDeck],
-        deckCardCounts: [UUID: Int] = [:],
+        existingDecks: [ReviewDeckItem],
         onAdd: @escaping (_ deckId: UUID?, _ newDeckTitle: String?, _ cardIds: [UUID]) -> Void,
         onDismiss: @escaping () -> Void
     ) {
         self.card = card
         self.allCards = allCards
         self.existingDecks = existingDecks
-        self.deckCardCounts = deckCardCounts
         self.onAdd = onAdd
         self.onDismiss = onDismiss
 
@@ -74,19 +71,19 @@ public struct AddToDeckSheet: View {
                 Spacer()
             }
             .padding(.horizontal, 22)
-            .padding(.top, 20)
-            .padding(.bottom, 16)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
 
             Divider()
 
             // Content
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    // Scope / Children Option
+                    // 1. Scope / Children Option
                     if !descendants.isEmpty {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Cards to Include")
-                                .font(.system(size: 12, weight: .semibold))
+                                .font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(.secondary)
 
                             VStack(alignment: .leading, spacing: 6) {
@@ -97,7 +94,7 @@ public struct AddToDeckSheet: View {
                                         Image(systemName: !includeChildren ? "largecircle.fill.circle" : "circle")
                                             .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
                                         Text("This note only (1 card)")
-                                            .font(.system(size: 13))
+                                            .font(.system(size: 12.5))
                                     }
                                 }
                                 .buttonStyle(.plain)
@@ -109,7 +106,7 @@ public struct AddToDeckSheet: View {
                                         Image(systemName: includeChildren ? "largecircle.fill.circle" : "circle")
                                             .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
                                         Text("This note and all its children (\(1 + descendants.count) cards)")
-                                            .font(.system(size: 13))
+                                            .font(.system(size: 12.5))
                                     }
                                 }
                                 .buttonStyle(.plain)
@@ -120,51 +117,97 @@ public struct AddToDeckSheet: View {
                         }
                     }
 
-                    // Card Deck Selection
+                    // 2. Select Existing Deck Section
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Select Card Deck")
-                            .font(.system(size: 12, weight: .semibold))
+                        Text("Select Existing Deck")
+                            .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.secondary)
 
-                        if !existingDecks.isEmpty {
-                            Picker("", selection: $deckChoiceMode) {
-                                Text("Existing Deck").tag(0)
-                                Text("New Deck").tag(1)
-                            }
-                            .pickerStyle(.segmented)
-                            .padding(.bottom, 4)
-                        }
-
-                        if deckChoiceMode == 0 && !existingDecks.isEmpty {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Picker("Deck:", selection: $selectedDeckID) {
-                                    ForEach(existingDecks) { deck in
-                                        let count = deckCardCounts[deck.id] ?? 0
-                                        Text("\(deck.title) (\(count) cards)").tag(Optional(deck.id))
-                                    }
-                                }
-                                .pickerStyle(.menu)
-                            }
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
-                        } else {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Deck Name")
-                                    .font(.system(size: 11, weight: .medium))
+                        if existingDecks.isEmpty {
+                            HStack {
+                                Text("No existing decks found.")
+                                    .font(.system(size: 12))
                                     .foregroundStyle(.secondary)
-
-                                TextField("e.g. Biology Exam Review, Chapter 1...", text: $newDeckTitle)
-                                    .textFieldStyle(.roundedBorder)
-                                    .font(.system(size: 13))
+                                Spacer()
                             }
                             .padding(12)
+                            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                        } else {
+                            VStack(spacing: 2) {
+                                ForEach(existingDecks) { deck in
+                                    let isSelected = (deckChoiceMode == 0 && selectedDeckID == deck.id)
+                                    Button {
+                                        deckChoiceMode = 0
+                                        selectedDeckID = deck.id
+                                    } label: {
+                                        HStack(spacing: 10) {
+                                            Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
+                                                .font(.system(size: 13))
+                                                .foregroundStyle(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.secondary.opacity(0.6))
+
+                                            Image(systemName: "rectangle.stack")
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.secondary)
+
+                                            Text(deck.title)
+                                                .font(.system(size: 12.5, weight: isSelected ? .medium : .regular))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+
+                                            Spacer()
+
+                                            Text("\(deck.totalCount) card\(deck.totalCount == 1 ? "" : "s")")
+                                                .font(.system(size: 11))
+                                                .foregroundStyle(.secondary)
+                                                .padding(.horizontal, 6)
+                                                .padding(.vertical, 2)
+                                                .background(Color(nsColor: .separatorColor).opacity(0.35), in: Capsule())
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 7)
+                                        .background(isSelected ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(6)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                            .frame(maxHeight: 160)
                         }
                     }
+
+                    // 3. Or Create New Deck Section
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            deckChoiceMode = 1
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: deckChoiceMode == 1 ? "largecircle.fill.circle" : "circle")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(deckChoiceMode == 1 ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.secondary.opacity(0.6))
+
+                                Text("Or Create a New Deck")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(deckChoiceMode == 1 ? .primary : .secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        VStack(alignment: .leading, spacing: 6) {
+                            TextField("Enter new deck name...", text: $newDeckTitle)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.system(size: 13))
+                                .onTapGesture {
+                                    deckChoiceMode = 1
+                                }
+                        }
+                        .padding(10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+                    }
                 }
-                .padding(22)
+                .padding(20)
             }
 
             Divider()
@@ -190,7 +233,7 @@ public struct AddToDeckSheet: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 14)
         }
-        .frame(width: 440, height: 360)
+        .frame(width: 460, height: 440)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 

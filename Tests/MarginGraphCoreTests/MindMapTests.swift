@@ -566,5 +566,33 @@ final class MindMapTests: XCTestCase {
         let emphasisToolbar = PDFPopoverToolbarView(mode: .emphasisSelection(phrase: "important phrase"))
         XCTAssertNotNil(emphasisToolbar)
     }
+
+    func testTreeLayoutGridSnappingAndAnchoring() throws {
+        // 1. Grid Snapping
+        let p1 = CGPoint(x: 21.4, y: 39.8)
+        let snapped1 = TreeLayout.snapToGrid(p1, gridSize: 20.0)
+        XCTAssertEqual(snapped1.x, 20.0, accuracy: 0.001)
+        XCTAssertEqual(snapped1.y, 40.0, accuracy: 0.001)
+
+        let p2 = CGPoint(x: 109.9, y: 151.1)
+        let snapped2 = TreeLayout.snapToGrid(p2, gridSize: 20.0)
+        XCTAssertEqual(snapped2.x, 100.0, accuracy: 0.001)
+        XCTAssertEqual(snapped2.y, 160.0, accuracy: 0.001)
+
+        // 2. Anchored root preservation for explicitly moved cards (pos.x > 0)
+        let movedCard = NoteCard(
+            topicId: UUID(),
+            bookMD5: "dummy-md5",
+            mindPos: CGPoint(x: 240, y: 180),
+            startPage: 3
+        )
+        let result = TreeLayout.layout(cards: [movedCard])
+        guard let frame = result.frames[movedCard.id] else {
+            XCTFail("Frame should not be nil")
+            return
+        }
+        XCTAssertEqual(frame.origin.x, 240.0, accuracy: 0.001)
+        XCTAssertEqual(frame.origin.y, 180.0, accuracy: 0.001)
+    }
 }
 

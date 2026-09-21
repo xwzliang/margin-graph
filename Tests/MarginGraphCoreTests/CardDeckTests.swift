@@ -150,4 +150,28 @@ final class CardDeckTests: XCTestCase {
         let dueCounts = try database.dueDeckCardCounts(date: Date())
         XCTAssertEqual(dueCounts[deckB.id], 3)
     }
+
+    func testReviewDeckItemEmptyFilteringAndTopicPromotion() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Biology")
+        try database.insertTopic(topic)
+
+        // Empty deck should have 0 count
+        let emptyDeck = try database.createDeck(title: "Empty Review Deck")
+        let counts1 = try database.deckCardCounts()
+        XCTAssertEqual(counts1[emptyDeck.id] ?? 0, 0)
+
+        // Add card
+        let card = NoteCard(topicId: topic.id, title: "Mitochondria")
+        try database.insertCard(card)
+        try database.addCardsToDeck(cardIds: [card.id], deckId: emptyDeck.id)
+
+        let counts2 = try database.deckCardCounts()
+        XCTAssertEqual(counts2[emptyDeck.id], 1)
+
+        // Verify topic deck promotion: creating deck with matching topic ID
+        let topicDeck = try database.createDeck(id: topic.id, title: topic.title)
+        XCTAssertEqual(topicDeck.id, topic.id)
+        XCTAssertEqual(topicDeck.title, topic.title)
+    }
 }

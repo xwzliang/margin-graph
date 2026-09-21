@@ -256,7 +256,7 @@ public struct MindMapCanvasView: View {
                let selectedID = selectedCardID,
                let card = cards.first(where: { $0.id == selectedID }),
                let cardFrame = frames[card.id] {
-                let toolbarWidth: CGFloat = 380
+                let toolbarWidth: CGFloat = 410
                 let toolbarHeight: CGFloat = 34
                 let screenMinX = cardFrame.minX * viewport.zoomScale + viewport.panOffset.x
                 let screenMinY = cardFrame.minY * viewport.zoomScale + viewport.panOffset.y
@@ -678,6 +678,20 @@ public struct MindMapCanvasView: View {
             .marginNoteTooltip("Edit Note")
 
             Button {
+                onAddToDeck?(card)
+            } label: {
+                Image(systemName: "rectangle.stack.badge.play")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Color.white.opacity(0.9))
+            }
+            .buttonStyle(.plain)
+            .enlargedHitTarget(width: 26, height: 28)
+            .onHover { hovering in
+                if hovering { NSCursor.pointingHand.set() } else { NSCursor.arrow.set() }
+            }
+            .marginNoteTooltip("Add to Review Deck")
+
+            Button {
                 onDeleteCard?(card.id)
             } label: {
                 Image(systemName: "trash")
@@ -941,9 +955,12 @@ public struct MindMapCanvasView: View {
                         x: initialFrame.minX + canvasDelta.x,
                         y: initialFrame.minY + canvasDelta.y
                     )
-                    dragLocations[card.id] = currentOrigin
+                    // Live attraction to the nearest grid automatically (gridSize: 20pt)
+                    let boundedOrigin = CGPoint(x: max(20.0, currentOrigin.x), y: max(20.0, currentOrigin.y))
+                    let snappedOrigin = TreeLayout.snapToGrid(boundedOrigin, gridSize: 20.0)
+                    dragLocations[card.id] = snappedOrigin
 
-                    let draggedRect = CGRect(origin: currentOrigin, size: initialFrame.size)
+                    let draggedRect = CGRect(origin: snappedOrigin, size: initialFrame.size)
                     hoverTargetCardID = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
                 }
             }
@@ -955,18 +972,29 @@ public struct MindMapCanvasView: View {
                     return
                 }
 
-                let finalOrigin = dragLocations[card.id] ?? initialFrame.origin
+                let finalOrigin = dragLocations[card.id] ?? TreeLayout.snapToGrid(initialFrame.origin, gridSize: 20.0)
                 let draggedRect = CGRect(origin: finalOrigin, size: initialFrame.size)
                 let overlapTarget = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
 
                 if let overlapTarget {
-                    // 1. Overlap: Become child of target card (Image 2 & 3)
+                    // 1. Overlap: Become child of target card
                     onReparent(card.id, overlapTarget)
                     onToggleFold(overlapTarget, false)
                     onSelect(card)
                 } else {
-                    // 2. No overlap: Put into nearest card location and move other cards to make space
-                    insertNearNearestLocation(card: card, droppedRect: draggedRect, frames: staticFrames)
+                    // 2. Attracted to nearest grid location automatically
+                    let boundedFinal = CGPoint(x: max(20.0, finalOrigin.x), y: max(20.0, finalOrigin.y))
+                    let snappedOrigin = TreeLayout.snapToGrid(boundedFinal, gridSize: 20.0)
+
+                    // If it was a child card dragged far away from its parent tree, detach it to become a new root tree
+                    if let parentID = card.groupNoteId, let parentFrame = staticFrames[parentID] {
+                        let dist = hypot(snappedOrigin.x - parentFrame.maxX, snappedOrigin.y - parentFrame.midY)
+                        if dist > 320 {
+                            onReparent(card.id, nil)
+                        }
+                    }
+
+                    onMove(card.id, snappedOrigin)
                     onSelect(card)
                 }
 
@@ -993,64 +1021,17 @@ public struct MindMapCanvasView: View {
 
         for other in cards where other.id != draggedID && !descendants.contains(other.id) {
             guard let otherFrame = frames[other.id] else { continue }
-            let hitTargetFrame = otherFrame.insetBy(dx: -12, dy: -12)
-            let intersection = draggedRect.intersection(hitTargetFrame)
+            let intersection = draggedRect.intersection(otherFrame)
             if !intersection.isNull && intersection.width > 0 && intersection.height > 0 {
                 let area = intersection.width * intersection.height
-                if area > maxIntersectionArea {
+                let minOverlap = min(draggedRect.width * draggedRect.height, otherFrame.width * otherFrame.height) * 0.25
+                if area > minOverlap && area > maxIntersectionArea {
                     maxIntersectionArea = area
                     bestTarget = other.id
                 }
             }
         }
         return bestTarget
-    }
-
-    private func insertNearNearestLocation(card: NoteCard, droppedRect: CGRect, frames: [UUID: CGRect]) {
-        let otherCards = cards.filter { $0.id != card.id }
-        guard !otherCards.isEmpty else {
-            onMove(card.id, droppedRect.origin)
-            return
-        }
-
-        let dropCenter = CGPoint(x: droppedRect.midX, y: droppedRect.midY)
-        var closestCard: NoteCard = otherCards[0]
-        var minDistance: CGFloat = .greatestFiniteMagnitude
-
-        for other in otherCards {
-            guard let f = frames[other.id] else { continue }
-            let otherCenter = CGPoint(x: f.midX, y: f.midY)
-            let dist = hypot(dropCenter.x - otherCenter.x, dropCenter.y - otherCenter.y)
-            if dist < minDistance {
-                minDistance = dist
-                closestCard = other
-            }
-        }
-
-        let targetGroupID = closestCard.groupNoteId
-        let siblings = otherCards.filter { $0.groupNoteId == targetGroupID }
-        let sortedSiblings = siblings.sorted { (frames[$0.id]?.minY ?? 0) < (frames[$1.id]?.minY ?? 0) }
-
-        var insertIndex = sortedSiblings.count
-        for (idx, sib) in sortedSiblings.enumerated() {
-            let sibMidY = frames[sib.id]?.midY ?? 0
-            if dropCenter.y < sibMidY {
-                insertIndex = idx
-                break
-            }
-        }
-
-        if card.groupNoteId != targetGroupID {
-            onReparent(card.id, targetGroupID)
-        }
-
-        var newOrder = sortedSiblings
-        newOrder.insert(card, at: insertIndex)
-
-        for (idx, c) in newOrder.enumerated() {
-            let yPosition = CGFloat(idx * 100)
-            onMove(c.id, CGPoint(x: 0, y: yPosition))
-        }
     }
 
     private func drawConnectors(
