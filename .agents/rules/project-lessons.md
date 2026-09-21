@@ -253,6 +253,10 @@ Structure each entry concisely with actionable rules:
     3. If a card has descendants, allow choosing between "This note only (1 card)" and "This note + all N child notes".
     4. If the user chooses an existing topic deck, seamlessly promote it by creating a `card_decks` record with matching ID, backfilling existing topic cards into `deck_cards`, and inserting the new card(s).
 
+- **`VStack` with `.frame(maxHeight:)` Does NOT Clip or Scroll Children**:
+  - **Trap**: Applying `.frame(maxHeight: 160)` to a plain `VStack` does not clip child views or provide scrolling. In SwiftUI, the `VStack` measures full height but reports 160pt to the parent layout, which places subsequent views (such as text fields or instruction labels) directly on top of overflowing child views, causing visual collisions and making items unreachable.
+  - **Rule**: Always wrap overflowable lists in an explicit `ScrollView(.vertical, showsIndicators: true)` with an explicit `.frame(height: calculatedHeight).clipped()`. Ensure the outer dialog has adequate height (`.frame(width: 480, height: sheetHeight)`) without nested outer scroll containers so trackpad and mouse-wheel events route cleanly to the list.
+
 
 
 
