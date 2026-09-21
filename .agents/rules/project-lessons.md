@@ -1,20 +1,32 @@
-# Project lessons
+# Project Lessons & Mandatory Engineering Rules
 
-Maintain concise, durable lessons that are useful for future work in THIS repository.
+> [!IMPORTANT]
+> **MANDATORY AGENT WORKFLOW RULE**:
+> 1. **Before any coding, debugging, or refactoring**: Consult the lessons and traps in this file to avoid re-introducing documented regressions or fighting known framework pitfalls.
+> 2. **Before concluding ANY task**: If the task involved diagnosing an unexpected bug, fixing broken behavior (such as blocked clicks, layout shifts, coordinate offsets, performance lag, or stuck cursors), or learning a non-obvious framework behavior (SwiftUI, AppKit, PDFKit, SQLite), **YOU MUST PROACTIVELY UPDATE THIS FILE** before declaring completion.
+> 3. **Definition of Done**: Updating this file with verified traps and durable rules is part of the definition of done for non-trivial tasks. Do not wait for the user to ask or remind you.
 
-Only add a lesson when it is verified and likely to recur. Prefer actionable rules over narrative history.
+---
 
-Good examples:
-- required test commands or setup steps that are easy to miss;
-- architectural invariants;
-- recurring framework/build-system traps;
-- repository-specific conventions that prevent regressions.
+## Lesson Maintenance Protocol
 
-Do not add:
-- one-off task details;
-- temporary debugging state;
-- secrets or credentials;
-- personal information;
+### Mandatory Update Triggers
+Add or refine a lesson whenever:
+- **Root Cause Diagnosed**: Non-obvious failure cause was identified (e.g. event interception, coordinate shifts, view thrashing).
+- **Framework Quirk Discovered**: An unexpected behavior in SwiftUI, AppKit, PDFKit, or SQLite was solved with a specific workaround.
+- **Architectural Invariant Established**: A design decision was made that must be maintained across sessions to avoid regressions.
+- **Tooling / Test Gotcha Encountered**: A specific build command, test isolation requirement, or setup step was learned.
+
+### Entry Format
+Structure each entry concisely with actionable rules:
+- **Trap / Problem**: Concise description of symptom and root cause.
+- **Rule / Invariant**: Concrete coding rule or pattern to prevent recurrence.
+
+### What NOT to Add
+- One-off temporary debugging states or scratch script paths.
+- Secrets, credentials, or personal information.
+- Unverified hypotheses or narrative conversation history.
+
 
 ## Architecture & Conventions
 - SQLite Linkage: Targets link system `sqlite3` directly using `.linkedLibrary("sqlite3")` without third-party package dependencies.
