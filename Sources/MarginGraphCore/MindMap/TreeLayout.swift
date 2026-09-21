@@ -81,7 +81,6 @@ public enum TreeLayout {
 
         var frames: [UUID: CGRect] = [:]
         var visible = Set<UUID>()
-        var columnStartX: CGFloat = 40
         var nextY: CGFloat = 40
         let totalCards = max(1, cards.count)
         let maxColumnHeight: CGFloat = max(1400.0, 270.0 * sqrt(CGFloat(totalCards)))
@@ -122,65 +121,84 @@ public enum TreeLayout {
             return frame
         }
 
-        // Separate free/anchored root cards from auto-column roots
-        let (anchoredRoots, autoRoots) = roots.reduce(into: ([NoteCard](), [NoteCard]())) { res, card in
-            if card.groupNoteId == nil, let pos = card.mindPos, pos.x > 0 || (card.bookMD5 == nil && card.startPage == nil) {
-                res.0.append(card)
-            } else {
-                res.1.append(card)
-            }
-        }
-
-        for root in autoRoots {
-            if nextY >= maxColumnHeight {
-                let currentMaxX = frames.values.map(\.maxX).max() ?? (columnStartX + configuration.nodeSize.width)
-                columnStartX = currentMaxX + configuration.horizontalSpacing
-                nextY = 40
-            }
-            _ = place(root, depth: 0, baseX: columnStartX)
-        }
-
-        @discardableResult
-        func placeAnchored(_ card: NoteCard, origin: CGPoint) -> CGRect {
-            let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
+        func estimatedSubtreeHeight(_ card: NoteCard) -> CGFloat {
             let cardHeight = estimatedCardHeight(for: card, width: configuration.nodeSize.width)
-            let currentSize = CGSize(width: configuration.nodeSize.width, height: cardHeight)
-
+            let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
             if card.isFolded || cardChildren.isEmpty {
-                let frame = CGRect(origin: origin, size: currentSize)
-                frames[card.id] = frame
-                visible.insert(card.id)
-                return frame
+                return cardHeight
             }
-
-            var childFrames: [CGRect] = []
-            let childX = origin.x + configuration.nodeSize.width + configuration.horizontalSpacing
-            var childY = origin.y
-
+            var childrenHeight: CGFloat = 0
             for child in cardChildren where cardByID[child.id] != nil {
-                let childFrame = placeAnchored(child, origin: CGPoint(x: childX, y: childY))
-                childFrames.append(childFrame)
-                childY += childFrame.height + configuration.verticalSpacing
+                childrenHeight += estimatedSubtreeHeight(child) + configuration.verticalSpacing
             }
-
-            let childCenterY: CGFloat
-            if let first = childFrames.first, let last = childFrames.last {
-                childCenterY = (first.midY + last.midY) / 2
-            } else {
-                childCenterY = origin.y + cardHeight / 2
-            }
-
-            let rootY = childCenterY - cardHeight / 2
-            let frame = CGRect(origin: CGPoint(x: origin.x, y: rootY), size: currentSize)
-            frames[card.id] = frame
-            visible.insert(card.id)
-            return frame
+            return max(cardHeight, childrenHeight)
         }
 
-        for root in anchoredRoots {
-            if let origin = root.mindPos {
-                _ = placeAnchored(root, origin: origin)
+        // Partition roots into Column Containers
+        var columnContainers: [[NoteCard]] = []
+
+        // If roots have explicit columns (clustered by valid canvas X):
+        let rootsWithExplicitX = roots.filter { ($0.mindPos?.x ?? 0) > 20 && ($0.mindPos?.x ?? 0) < 10000 }
+        if !rootsWithExplicitX.isEmpty {
+            var clusters: [(baseX: CGFloat, roots: [NoteCard])] = []
+            for root in rootsWithExplicitX.sorted(by: { ($0.mindPos?.x ?? 0) < ($1.mindPos?.x ?? 0) }) {
+                let x = root.mindPos!.x
+                if let idx = clusters.firstIndex(where: { abs($0.baseX - x) < 140 }) {
+                    clusters[idx].roots.append(root)
+                    clusters[idx].baseX = min(clusters[idx].baseX, x)
+                } else {
+                    clusters.append((baseX: x, roots: [root]))
+                }
             }
+            clusters.sort(by: { $0.baseX < $1.baseX })
+            columnContainers = clusters.map(\.roots)
+        }
+
+        // Unpositioned roots (or when no explicit columns exist):
+        let unpositionedRoots = roots.filter { ($0.mindPos?.x ?? 0) <= 20 || ($0.mindPos?.x ?? 0) >= 10000 }
+        if !unpositionedRoots.isEmpty {
+            var currentColumn: [NoteCard] = []
+            var currentHeight: CGFloat = 0
+            for root in unpositionedRoots {
+                let h = estimatedSubtreeHeight(root) + configuration.verticalSpacing
+                if currentHeight + h > maxColumnHeight && !currentColumn.isEmpty {
+                    columnContainers.append(currentColumn)
+                    currentColumn = [root]
+                    currentHeight = h
+                } else {
+                    currentColumn.append(root)
+                    currentHeight += h
+                }
+            }
+            if !currentColumn.isEmpty {
+                columnContainers.append(currentColumn)
+            }
+        }
+
+        // Lay out each column container sequentially from left to right
+        var columnStartX: CGFloat = 40.0
+        for column in columnContainers {
+            let sortedColumn = column.sorted(by: cardOrder)
+            let explicitX = sortedColumn.compactMap(\.mindPos?.x).filter { $0 > 20 && $0 < 10000 }.min()
+            let baseX = max(columnStartX, explicitX ?? columnStartX)
+
+            let explicitFirstY = sortedColumn.first.flatMap { card -> CGFloat? in
+                guard let y = card.mindPos?.y, (card.mindPos?.x ?? 0) > 20, y > 20, y < 5000 else { return nil }
+                return y
+            }
+            nextY = explicitFirstY ?? 40.0
+
+            for root in sortedColumn {
+                if let savedY = root.mindPos?.y, (root.mindPos?.x ?? 0) > 20, savedY > nextY && savedY < 5000 {
+                    nextY = savedY
+                }
+                _ = place(root, depth: 0, baseX: baseX)
+            }
+
+            // Next column starts after the rightmost edge of this column and its branches
+            let colCardIDs = sortedColumn.flatMap { [$0.id] + $0.allDescendants(in: cards).map(\.id) }
+            let colMaxX = colCardIDs.compactMap { frames[$0]?.maxX }.max() ?? (baseX + configuration.nodeSize.width)
+            columnStartX = colMaxX + configuration.horizontalSpacing
         }
 
         return TreeLayoutResult(frames: frames, visibleCardIDs: visible)

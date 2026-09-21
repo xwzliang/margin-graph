@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import SQLite3
 
 public extension Database {
     func reparentCard(id: UUID, to parentID: UUID?) throws {
@@ -32,6 +33,29 @@ public extension Database {
         card.mindPos = position
         card.updatedAt = Date()
         try updateCard(card)
+    }
+
+    func updateCardPositions(_ updates: [(id: UUID, position: CGPoint)]) throws {
+        guard !updates.isEmpty else { return }
+        try execute("BEGIN TRANSACTION;")
+        do {
+            try withStatement("UPDATE cards SET mind_x = ?, mind_y = ?, updated_at = ? WHERE id = ?") { stmt in
+                let now = Date().timeIntervalSince1970
+                for update in updates {
+                    sqlite3_reset(stmt)
+                    sqlite3_clear_bindings(stmt)
+                    bind(Double(update.position.x), to: 1, in: stmt)
+                    bind(Double(update.position.y), to: 2, in: stmt)
+                    bind(now, to: 3, in: stmt)
+                    bind(update.id.uuidString, to: 4, in: stmt)
+                    try requireDone(stmt)
+                }
+            }
+            try execute("COMMIT;")
+        } catch {
+            try? execute("ROLLBACK;")
+            throw error
+        }
     }
 
     func indentCard(id: UUID, under siblingID: UUID) throws {

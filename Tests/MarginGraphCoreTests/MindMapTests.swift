@@ -594,5 +594,57 @@ final class MindMapTests: XCTestCase {
         XCTAssertEqual(frame.origin.x, 240.0, accuracy: 0.001)
         XCTAssertEqual(frame.origin.y, 180.0, accuracy: 0.001)
     }
+
+    func testColumnContainerLayoutPreventsCardCollisions() throws {
+        let topic = UUID()
+        // Two cards in the same column container with overlapping / identical Y coordinates
+        let card1 = NoteCard(
+            topicId: topic,
+            title: "1.2 The Slip-box",
+            mindPos: CGPoint(x: 340, y: 180)
+        )
+        let card2 = NoteCard(
+            topicId: topic,
+            title: "People who take smart notes simply don't have the need for brainstorming anymore",
+            mindPos: CGPoint(x: 340, y: 190) // Only 10pt apart, would overlap without column container layout
+        )
+
+        let result = TreeLayout.layout(cards: [card1, card2])
+        let frame1 = try XCTUnwrap(result.frames[card1.id])
+        let frame2 = try XCTUnwrap(result.frames[card2.id])
+
+        // Column container guarantees that both cards share the column baseX
+        XCTAssertEqual(frame1.minX, 340.0, accuracy: 0.001)
+        XCTAssertEqual(frame2.minX, 340.0, accuracy: 0.001)
+
+        // Column container guarantees that card2 is pushed below card1 with proper vertical spacing (NO COLLISION)
+        XCTAssertGreaterThanOrEqual(frame2.minY, frame1.maxY + 20.0, "Card 2 must never collide with or overlap Card 1")
+    }
+
+    func testDatabaseBatchCardPositionsUpdate() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Database Batch Test")
+        try database.insertTopic(topic)
+
+        let cardA = NoteCard(topicId: topic.id, title: "Card A", mindPos: CGPoint(x: 40, y: 40))
+        let cardB = NoteCard(topicId: topic.id, title: "Card B", mindPos: CGPoint(x: 40, y: 200))
+        try database.insertCard(cardA)
+        try database.insertCard(cardB)
+
+        // Batch update to swap vertical order and shift column
+        let updates: [(id: UUID, position: CGPoint)] = [
+            (id: cardA.id, position: CGPoint(x: 360, y: 250)),
+            (id: cardB.id, position: CGPoint(x: 360, y: 50))
+        ]
+        try database.updateCardPositions(updates)
+
+        let fetchedA = try XCTUnwrap(database.getCard(id: cardA.id))
+        let fetchedB = try XCTUnwrap(database.getCard(id: cardB.id))
+
+        XCTAssertEqual(fetchedA.mindPos?.x, 360.0)
+        XCTAssertEqual(fetchedA.mindPos?.y, 250.0)
+        XCTAssertEqual(fetchedB.mindPos?.x, 360.0)
+        XCTAssertEqual(fetchedB.mindPos?.y, 50.0)
+    }
 }
 

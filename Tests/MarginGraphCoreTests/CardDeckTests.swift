@@ -174,4 +174,28 @@ final class CardDeckTests: XCTestCase {
         XCTAssertEqual(topicDeck.id, topic.id)
         XCTAssertEqual(topicDeck.title, topic.title)
     }
+
+    func testNewDeckCreationViaAddToDeckFlow() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "AI Notes")
+        try database.insertTopic(topic)
+
+        let card = NoteCard(topicId: topic.id, title: "Deep Learning")
+        try database.insertCard(card)
+
+        // Simulate user creating a new deck named "test"
+        let newTitle = "test"
+        let newDeck = try database.createDeck(title: newTitle)
+        try database.addCardsToDeck(cardIds: [card.id], deckId: newDeck.id)
+
+        let allDecks = try database.allDecks()
+        XCTAssertTrue(allDecks.contains(where: { $0.title == "test" }))
+
+        let deckCards = try database.cardsForDeck(deckId: newDeck.id)
+        XCTAssertEqual(deckCards.count, 1)
+        XCTAssertEqual(deckCards.first?.title, "Deep Learning")
+
+        let counts = try database.deckCardCounts()
+        XCTAssertEqual(counts[newDeck.id], 1)
+    }
 }

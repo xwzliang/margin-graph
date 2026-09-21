@@ -257,6 +257,19 @@ Structure each entry concisely with actionable rules:
   - **Trap**: Applying `.frame(maxHeight: 160)` to a plain `VStack` does not clip child views or provide scrolling. In SwiftUI, the `VStack` measures full height but reports 160pt to the parent layout, which places subsequent views (such as text fields or instruction labels) directly on top of overflowing child views, causing visual collisions and making items unreachable.
   - **Rule**: Always wrap overflowable lists in an explicit `ScrollView(.vertical, showsIndicators: true)` with an explicit `.frame(height: calculatedHeight).clipped()`. Ensure the outer dialog has adequate height (`.frame(width: 480, height: sheetHeight)`) without nested outer scroll containers so trackpad and mouse-wheel events route cleanly to the list.
 
+- **`AddToDeckSheet` New Deck Focus & Mode Synchronization**:
+  - **Trap**: Using `.onTapGesture` on or around a SwiftUI `TextField` does not fire when the user clicks into the text field because AppKit's `NSTextField` intercepts and swallows the mouse-down event. If the view relies on `onTapGesture` to switch `deckChoiceMode` from existing deck (0) to new deck (1), `deckChoiceMode` remains 0, and clicking "Add to Deck" silently ignores the user's typed deck name, adding the card to the first existing deck instead.
+  - **Rule**: Use `@FocusState private var isNewDeckFieldFocused: Bool` bound to `TextField.focused($isNewDeckFieldFocused)`. Add `.onChange(of: isNewDeckFieldFocused) { if $0 { deckChoiceMode = 1 } }` and `.onChange(of: newDeckTitle) { if !$0.isEmpty { deckChoiceMode = 1 } }`. In `submit()`, prioritize `newDeckTitle` whenever it is non-empty (`!trimmed.isEmpty`), ensuring user-typed deck names are never lost or bypassed. When an existing deck is clicked, explicitly clear `newDeckTitle = ""` and set `isNewDeckFieldFocused = false`.
+
+- **Column Container Grid Model vs Free Anchored Roots in MindMap Canvas**:
+  - **Trap**: Splitting root cards into `anchoredRoots` vs `autoRoots` in `TreeLayout` causes moved cards to collide and overlap with existing cards. When a card is moved and assigned `mindPos`, it is removed from `autoRoots` and rendered at its raw `mindPos`. Meanwhile, `autoRoots` reshuffles the remaining cards and places one of them at the exact same location as the moved card. Furthermore, raw MarginNote coordinates (`mind_y = 50,000+`) create massive vertical gaps if treated as absolute canvas coordinates.
+  - **Rule**:
+    1. Define existing card columns as **Column Containers**. Root cards are partitioned into column containers based on horizontal proximity clustering (`colBaseX`).
+    2. Within each column container, cards are stacked strictly sequentially: `nextY = max(colStartY, previousCardSubtreeBottom + verticalSpacing)`. No two cards in the same column can ever collide or overlap.
+    3. Columns are spaced horizontally such that `nextColumn.baseX = max(colBaseX, previousColumnMaxX + horizontalSpacing)`. No two columns or their branches can ever collide.
+    4. During drag: the card smoothly follows the mouse (`dragLocations[card.id] = mouseLocation`).
+    5. On drag end: if overlap >= 25% with another card, reparent as child. Otherwise, determine target column container based on `dropCenterX` (or create a new column if dragged beyond the rightmost column), determine insertion slot based on `dropCenterY`, and compute updated non-overlapping positions for all cards in the column in a single SQLite batch transaction (`updateCardPositions`).
+
 
 
 

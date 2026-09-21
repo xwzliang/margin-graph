@@ -13,6 +13,7 @@ public struct MindMapCanvasView: View {
     public var onNewTopic: (() -> Void)?
     public var onSelect: (NoteCard?) -> Void
     public var onMove: (UUID, CGPoint) -> Void
+    public var onMoveBatch: (([(id: UUID, position: CGPoint)]) -> Void)?
     public var onReparent: (UUID, UUID?) -> Void
     public var onToggleFold: (UUID, Bool) -> Void
     public var onChangeColor: ((UUID, Int) -> Void)?
@@ -55,6 +56,7 @@ public struct MindMapCanvasView: View {
         onNewTopic: (() -> Void)? = nil,
         onSelect: @escaping (NoteCard?) -> Void,
         onMove: @escaping (UUID, CGPoint) -> Void,
+        onMoveBatch: (([(id: UUID, position: CGPoint)]) -> Void)? = nil,
         onReparent: @escaping (UUID, UUID?) -> Void,
         onToggleFold: @escaping (UUID, Bool) -> Void,
         onChangeColor: ((UUID, Int) -> Void)? = nil,
@@ -78,6 +80,7 @@ public struct MindMapCanvasView: View {
         self.onNewTopic = onNewTopic
         self.onSelect = onSelect
         self.onMove = onMove
+        self.onMoveBatch = onMoveBatch
         self.onReparent = onReparent
         self.onToggleFold = onToggleFold
         self.onChangeColor = onChangeColor
@@ -955,12 +958,9 @@ public struct MindMapCanvasView: View {
                         x: initialFrame.minX + canvasDelta.x,
                         y: initialFrame.minY + canvasDelta.y
                     )
-                    // Live attraction to the nearest grid automatically (gridSize: 20pt)
-                    let boundedOrigin = CGPoint(x: max(20.0, currentOrigin.x), y: max(20.0, currentOrigin.y))
-                    let snappedOrigin = TreeLayout.snapToGrid(boundedOrigin, gridSize: 20.0)
-                    dragLocations[card.id] = snappedOrigin
+                    dragLocations[card.id] = currentOrigin
 
-                    let draggedRect = CGRect(origin: snappedOrigin, size: initialFrame.size)
+                    let draggedRect = CGRect(origin: currentOrigin, size: initialFrame.size)
                     hoverTargetCardID = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
                 }
             }
@@ -972,7 +972,7 @@ public struct MindMapCanvasView: View {
                     return
                 }
 
-                let finalOrigin = dragLocations[card.id] ?? TreeLayout.snapToGrid(initialFrame.origin, gridSize: 20.0)
+                let finalOrigin = dragLocations[card.id] ?? initialFrame.origin
                 let draggedRect = CGRect(origin: finalOrigin, size: initialFrame.size)
                 let overlapTarget = findOverlapTarget(draggedID: card.id, draggedRect: draggedRect, frames: staticFrames)
 
@@ -982,19 +982,105 @@ public struct MindMapCanvasView: View {
                     onToggleFold(overlapTarget, false)
                     onSelect(card)
                 } else {
-                    // 2. Attracted to nearest grid location automatically
-                    let boundedFinal = CGPoint(x: max(20.0, finalOrigin.x), y: max(20.0, finalOrigin.y))
-                    let snappedOrigin = TreeLayout.snapToGrid(boundedFinal, gridSize: 20.0)
+                    // 2. Drop into Column Container Grid
+                    let rootCards = cards.filter { $0.groupNoteId == nil }
+                    var colMap: [(baseX: CGFloat, maxX: CGFloat, cards: [NoteCard])] = []
 
-                    // If it was a child card dragged far away from its parent tree, detach it to become a new root tree
-                    if let parentID = card.groupNoteId, let parentFrame = staticFrames[parentID] {
-                        let dist = hypot(snappedOrigin.x - parentFrame.maxX, snappedOrigin.y - parentFrame.midY)
-                        if dist > 320 {
-                            onReparent(card.id, nil)
+                    for r in rootCards.sorted(by: { (staticFrames[$0.id]?.minX ?? 0) < (staticFrames[$1.id]?.minX ?? 0) }) {
+                        guard let f = staticFrames[r.id] else { continue }
+                        if let idx = colMap.firstIndex(where: { abs($0.baseX - f.minX) < 140 }) {
+                            colMap[idx].cards.append(r)
+                            colMap[idx].baseX = min(colMap[idx].baseX, f.minX)
+                            let descIDs = [r.id] + r.allDescendants(in: cards).map(\.id)
+                            let branchMaxX = descIDs.compactMap { staticFrames[$0]?.maxX }.max() ?? f.maxX
+                            colMap[idx].maxX = max(colMap[idx].maxX, branchMaxX)
+                        } else {
+                            let descIDs = [r.id] + r.allDescendants(in: cards).map(\.id)
+                            let branchMaxX = descIDs.compactMap { staticFrames[$0]?.maxX }.max() ?? f.maxX
+                            colMap.append((baseX: f.minX, maxX: branchMaxX, cards: [r]))
+                        }
+                    }
+                    colMap.sort(by: { $0.baseX < $1.baseX })
+
+                    let dropCenterX = finalOrigin.x + initialFrame.width / 2.0
+                    let dropCenterY = finalOrigin.y + initialFrame.height / 2.0
+
+                    let targetColIdx: Int
+                    let targetBaseX: CGFloat
+
+                    if colMap.isEmpty {
+                        targetColIdx = 0
+                        targetBaseX = 40.0
+                    } else if let last = colMap.last, dropCenterX > last.maxX + 40 {
+                        // Dragged beyond rightmost column: Create new column!
+                        targetColIdx = colMap.count
+                        targetBaseX = last.maxX + 80.0
+                    } else {
+                        var bestIdx = 0
+                        var minDiff = CGFloat.greatestFiniteMagnitude
+                        for (i, col) in colMap.enumerated() {
+                            let colCenterX = col.baseX + initialFrame.width / 2.0
+                            let diff = abs(dropCenterX - colCenterX)
+                            if diff < minDiff {
+                                minDiff = diff
+                                bestIdx = i
+                            }
+                        }
+                        targetColIdx = bestIdx
+                        targetBaseX = colMap[bestIdx].baseX
+                    }
+
+                    // Build ordered list of cards in target column
+                    var targetColumnCards: [NoteCard] = []
+                    if targetColIdx < colMap.count {
+                        targetColumnCards = colMap[targetColIdx].cards.filter { $0.id != card.id }
+                        targetColumnCards.sort(by: { (staticFrames[$0.id]?.minY ?? 0) < (staticFrames[$1.id]?.minY ?? 0) })
+                    }
+
+                    // Find insertion index in target column
+                    var insertIdx = targetColumnCards.count
+                    for (i, c) in targetColumnCards.enumerated() {
+                        if let f = staticFrames[c.id], dropCenterY < f.midY {
+                            insertIdx = i
+                            break
                         }
                     }
 
-                    onMove(card.id, snappedOrigin)
+                    targetColumnCards.insert(card, at: insertIdx)
+
+                    var batchUpdates: [(id: UUID, position: CGPoint)] = []
+                    var curY: CGFloat = 40.0
+                    for c in targetColumnCards {
+                        let cardH = TreeLayout.estimatedCardHeight(for: c, width: 220)
+                        batchUpdates.append((id: c.id, position: CGPoint(x: targetBaseX, y: curY)))
+                        curY += cardH + 28.0
+                    }
+
+                    // If card was moved from another column, re-pack that source column as well
+                    if let srcColIdx = colMap.firstIndex(where: { $0.cards.contains(where: { $0.id == card.id }) }),
+                       srcColIdx != targetColIdx {
+                        let srcBaseX = colMap[srcColIdx].baseX
+                        let remainingSrcCards = colMap[srcColIdx].cards.filter { $0.id != card.id }
+                            .sorted(by: { (staticFrames[$0.id]?.minY ?? 0) < (staticFrames[$1.id]?.minY ?? 0) })
+                        var srcY: CGFloat = 40.0
+                        for sc in remainingSrcCards {
+                            let scH = TreeLayout.estimatedCardHeight(for: sc, width: 220)
+                            batchUpdates.append((id: sc.id, position: CGPoint(x: srcBaseX, y: srcY)))
+                            srcY += scH + 28.0
+                        }
+                    }
+
+                    // If it was a child card, detach it to root
+                    if card.groupNoteId != nil {
+                        onReparent(card.id, nil)
+                    }
+
+                    if let onMoveBatch, !batchUpdates.isEmpty {
+                        onMoveBatch(batchUpdates)
+                    } else {
+                        let targetSlotY = batchUpdates.first(where: { $0.id == card.id })?.position.y ?? curY
+                        onMove(card.id, CGPoint(x: targetBaseX, y: targetSlotY))
+                    }
                     onSelect(card)
                 }
 

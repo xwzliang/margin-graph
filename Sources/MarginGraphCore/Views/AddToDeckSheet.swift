@@ -11,6 +11,7 @@ public struct AddToDeckSheet: View {
     @State private var deckChoiceMode: Int // 0: existing deck, 1: create new deck
     @State private var selectedDeckID: UUID?
     @State private var newDeckTitle: String = ""
+    @FocusState private var isNewDeckFieldFocused: Bool
 
     private var descendants: [NoteCard] {
         card.allDescendants(in: allCards)
@@ -44,10 +45,11 @@ public struct AddToDeckSheet: View {
     }
 
     private var canSubmit: Bool {
-        if deckChoiceMode == 0 {
-            return selectedDeckID != nil
+        let trimmed = newDeckTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if deckChoiceMode == 1 {
+            return !trimmed.isEmpty
         } else {
-            return !newDeckTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            return selectedDeckID != nil || !trimmed.isEmpty
         }
     }
 
@@ -159,6 +161,8 @@ public struct AddToDeckSheet: View {
                                     Button {
                                         deckChoiceMode = 0
                                         selectedDeckID = deck.id
+                                        newDeckTitle = ""
+                                        isNewDeckFieldFocused = false
                                     } label: {
                                         HStack(spacing: 10) {
                                             Image(systemName: isSelected ? "largecircle.fill.circle" : "circle")
@@ -224,8 +228,20 @@ public struct AddToDeckSheet: View {
                         TextField("Enter new deck name...", text: $newDeckTitle)
                             .textFieldStyle(.roundedBorder)
                             .font(.system(size: 13))
+                            .focused($isNewDeckFieldFocused)
+                            .onChange(of: isNewDeckFieldFocused) { _, isFocused in
+                                if isFocused {
+                                    deckChoiceMode = 1
+                                }
+                            }
+                            .onChange(of: newDeckTitle) { _, text in
+                                if !text.isEmpty {
+                                    deckChoiceMode = 1
+                                }
+                            }
                             .onTapGesture {
                                 deckChoiceMode = 1
+                                isNewDeckFieldFocused = true
                             }
                             .onSubmit {
                                 if canSubmit { submit() }
@@ -282,12 +298,18 @@ public struct AddToDeckSheet: View {
 
     private func submit() {
         let cardIds = targetCardIDs
-        if deckChoiceMode == 0, let deckId = selectedDeckID {
-            onAdd(deckId, nil, cardIds)
-        } else {
-            let title = newDeckTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !title.isEmpty else { return }
-            onAdd(nil, title, cardIds)
+        let trimmed = newDeckTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if deckChoiceMode == 1 || (!trimmed.isEmpty && selectedDeckID == nil) {
+            guard !trimmed.isEmpty else { return }
+            onAdd(nil, trimmed, cardIds)
+        } else if deckChoiceMode == 0, let deckId = selectedDeckID {
+            if !trimmed.isEmpty {
+                onAdd(nil, trimmed, cardIds)
+            } else {
+                onAdd(deckId, nil, cardIds)
+            }
+        } else if !trimmed.isEmpty {
+            onAdd(nil, trimmed, cardIds)
         }
         onDismiss()
     }

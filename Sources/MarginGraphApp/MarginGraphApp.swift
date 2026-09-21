@@ -838,6 +838,12 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
     }
 
+    func moveCardsBatch(_ updates: [(id: UUID, position: CGPoint)]) {
+        try? database.updateCardPositions(updates)
+        reloadStudySet()
+        objectWillChange.send()
+    }
+
     func reparent(cardID: UUID, to parentID: UUID?) {
         try? database.reparentCard(id: cardID, to: parentID)
         reloadStudySet()
@@ -1934,6 +1940,7 @@ struct StudyWorkspaceView: View {
                     if let card { model.select(card: card) } else { model.deselect() }
                 },
                 onMove: model.move,
+                onMoveBatch: model.moveCardsBatch,
                 onReparent: model.reparent,
                 onToggleFold: model.toggleFold,
                 onChangeColor: { cardID, colorIdx in
