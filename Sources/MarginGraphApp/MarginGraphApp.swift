@@ -15,7 +15,7 @@ public enum WorkspaceViewMode: String, CaseIterable, Identifiable {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var selectedMainTab: MainNavigationTab = .study
+    @Published var selectedMainTab: MainNavigationTab = .document
     @Published var isInStudyWorkspace: Bool = false
     @Published var isOutlineVisible: Bool = false
     @Published var workspaceMode: WorkspaceViewMode = .splitView
@@ -154,15 +154,6 @@ final class AppModel: ObservableObject {
         try? database.syncAvailableDocuments()
         autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
-        if let ahrens = topics.first(where: { $0.title.contains("Ahrens") }) {
-            selectedTopicID = ahrens.id
-        } else if selectedTopicID == nil {
-            selectedTopicID = topics.first?.id
-        }
-        reloadStudySet()
-        if selectedTopicID != nil {
-            isInStudyWorkspace = true
-        }
 
         let center = NotificationCenter.default
         let undoNotifications: [Notification.Name] = [

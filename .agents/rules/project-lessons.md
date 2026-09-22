@@ -346,3 +346,9 @@ Structure each entry concisely with actionable rules:
       3. `selectedCardID` (if no saved position exists)
       4. `zoomToFit(nodes:)` (fallback for new notebooks without saved positions)
     - **Rule**: Only emit `onViewportChanged` when `hasInitialFitted == true` to prevent initial default viewport coordinates `(40, 40)` from broadcasting.
+
+- **Startup Default View & Recency Timestamp Preservation**:
+  - **Trap: Artificial Timestamp Clobbering on App Launch**:
+    Calling document loading logic (`reloadStudySet()`, `switchToDocument()`) during `AppModel.init()` automatically writes `Date()` to SQLite via `updateDocumentLastVisited(...)` and `updateTopicUpdatedAt(...)`. This artificially bumps the first document or hardcoded test topic to the top of the "Recent" sort order on every app restart, completely distorting user recency history.
+    - **Rule**: The app must initialize to the Document shelf view by default (`selectedMainTab = .document`, `isInStudyWorkspace = false`).
+    - **Rule**: Never call `switchToDocument` or force-open study workspaces in `AppModel.init()`. Wait for explicit user action (e.g. clicking a document in the shelf or selecting a topic in Study notebooks) before loading documents and touching recency timestamps.
