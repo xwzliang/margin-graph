@@ -306,6 +306,19 @@ Structure each entry concisely with actionable rules:
     2. In `NoteCard.allDescendants(of:in:)`, pre-group `let childrenByParent = Dictionary(grouping: cards.filter { $0.groupNoteId != nil }, by: { $0.groupNoteId! })` once upfront. BFS steps then perform $O(1)$ dictionary lookups rather than filtering the entire array, reducing complexity from $O(N^2)$ to $O(N)$.
     3. Keep `NSUndoManager` observers focused on committed state changes (`.NSUndoManagerDidCloseUndoGroup`, `.NSUndoManagerDidUndoChange`, `.NSUndoManagerDidRedoChange`), avoiding `.NSUndoManagerDidOpenUndoGroup` to eliminate spurious invalidation cycles during view evaluation.
 
+- **PDF Navigation, Flashcard Review Jumps & Coordinate Synchronization**:
+  - **Trap 1: Continuous Display Mode Lazy Rendering**: In PDFKit with `.singlePageContinuous` or `.continuous` display mode, pages outside the current viewport are not laid out. Calling `pdfView.convert(point, from: page)` for a page without calling `pdfView.go(to: page)` returns `(0, 0)`. The scroll position then clamps to `(0, 0)`, sending the document to the very beginning (page 0). Always call `go(to: page)` first before computing bounds and scrolling to center.
+  - **Trap 2: Asynchronous View Layout Post-Sheet Dismissal**: When jumping to PDF from a sheet modal (like `FlashcardReviewView`), `InteractivePDFView` or `StudyWorkspaceView` may be newly mounted or in mid-transition where `clipView.bounds.height <= 10` or `documentView.bounds.height <= 10`. Any scroll calculation performed immediately will evaluate to zero. Detect unlaid out dimensions and re-attempt `scrollToCenter` via `DispatchQueue.main.asyncAfter(deadline: .now() + 0.05)`.
+  - **Trap 3: SwiftUI Binding Desynchronization & Reversion to Page 0**: In `PDFReaderView`, if `isNewJump` sets `context.coordinator.lastPageIndex = jumpTarget.pageIndex` but the parent `@Binding var currentPageIndex` remains at 0, subsequent view evaluations (e.g. triggered by selection or toolbar changes) trigger `else if lastPageIndex != currentPageIndex`, immediately navigating `view.go(to: page(at: 0))`. Always synchronize `currentPageIndex = jumpTarget.pageIndex` during `isNewJump`.
+  - **Trap 4: Stale `internalJumpTarget` Masking External `jumpTarget`**: In container views, tracking internal navigation with `internalJumpTarget ?? jumpTarget` causes stale internal targets (from TOC or history buttons) to permanently shadow external jump commands. Always prioritize external `jumpTarget ?? internalJumpTarget` and clear `internalJumpTarget = nil` when external `jumpTarget` changes.
+  - **Trap 5: Cross-Topic Flashcard Review Jumps & MindMap Focus**: Cards in custom or cross-topic review decks may belong to topics other than `selectedTopicID`. When jumping to PDF:
+    1. Switch to the card's topic (`selectTopic(topic)`), ensuring `mindMapCards` and `studyDocuments` load the card.
+    2. Switch to the card's document (`switchToDocument(doc)`).
+    3. Unfold any folded ancestor cards (`unfoldAncestors(of: card.id)`) so the card is visible in `TreeLayout`.
+    4. Set `selectedCardID = card.id`, `activeToolbarOwner = .pdf`, and pass `cardIDToCenter: $model.cardIDToCenter` to `MindMapCanvasView`.
+    5. In `MindMapCanvasView`, handle `cardIDToCenter` in `onAppear`, `onChange(of: cardIDToCenter)`, and `onChange(of: proxy.size)` to guarantee centering even across view mounts.
+    6. Include a fallback in `activePDFCards` to load `selectedCardID` directly from the database if not yet cached in `mindMapCards` or `documentCards`.
+
 
 
 

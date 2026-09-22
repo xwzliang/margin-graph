@@ -483,7 +483,7 @@ public struct MarginNotePDFContainerView: View {
                     cards: cards,
                     selectedCardID: selectedCardID,
                     activeToolbarOwner: activeToolbarOwner,
-                    jumpTarget: internalJumpTarget ?? jumpTarget,
+                    jumpTarget: jumpTarget ?? internalJumpTarget,
                     currentPageIndex: $currentPageIndex,
                     searchQuery: searchQuery,
                     searchMatchIndex: currentMatchIndex,
@@ -766,6 +766,7 @@ public struct MarginNotePDFContainerView: View {
         }
         .onChange(of: jumpTarget) { _, target in
             if let target {
+                internalJumpTarget = nil
                 let page = target.pageIndex
                 if pageHistory.isEmpty || (historyIndex < pageHistory.count && pageHistory[historyIndex] != page) {
                     if historyIndex < pageHistory.count - 1 {

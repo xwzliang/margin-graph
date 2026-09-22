@@ -42,12 +42,13 @@ public struct MindMapCanvasView: View {
     @State private var layoutResult: TreeLayoutResult
     @State private var hasInitialFitted = false
     @State private var lastHoverLocation: CGPoint? = nil
-    @State private var cardIDToCenter: UUID? = nil
+    @Binding public var cardIDToCenter: UUID?
 
     public init(
         cards: [NoteCard],
         links: [CardLink] = [],
         selectedCardID: UUID? = nil,
+        cardIDToCenter: Binding<UUID?> = .constant(nil),
         editingCardTitleID: Binding<UUID?> = .constant(nil),
         activeToolbarOwner: ToolbarOwner = .none,
         mediaStorage: MediaStorage? = nil,
@@ -72,6 +73,7 @@ public struct MindMapCanvasView: View {
         self.cards = cards
         self.links = links
         self.selectedCardID = selectedCardID
+        self._cardIDToCenter = cardIDToCenter
         self._editingCardTitleID = editingCardTitleID
         self.activeToolbarOwner = activeToolbarOwner
         self.mediaStorage = mediaStorage
@@ -150,7 +152,11 @@ public struct MindMapCanvasView: View {
                     if proxy.size.width > 20 && proxy.size.height > 20 {
                         viewport.viewportSize = proxy.size
                     }
-                    if !hasInitialFitted && !cards.isEmpty {
+                    if let targetID = cardIDToCenter ?? selectedCardID, let frame = frames[targetID] {
+                        viewport.center(on: frame)
+                        hasInitialFitted = true
+                        cardIDToCenter = nil
+                    } else if !hasInitialFitted && !cards.isEmpty {
                         viewport.zoomToFit(nodes: Array(frames.values))
                         hasInitialFitted = true
                     }
@@ -158,6 +164,19 @@ public struct MindMapCanvasView: View {
                 .onChange(of: proxy.size) { _, size in
                     guard size.width > 20 && size.height > 20 else { return }
                     viewport.viewportSize = size
+                    if let targetID = cardIDToCenter, let frame = frames[targetID] {
+                        viewport.center(on: frame)
+                        cardIDToCenter = nil
+                    }
+                }
+                .onChange(of: cardIDToCenter) { _, newID in
+                    guard let newID else { return }
+                    if let frame = frames[newID] {
+                        withAnimation(.easeInOut(duration: 0.25)) {
+                            viewport.center(on: frame)
+                        }
+                        cardIDToCenter = nil
+                    }
                 }
                 .onChange(of: selectedTopic?.id) { _, _ in
                     hasInitialFitted = false

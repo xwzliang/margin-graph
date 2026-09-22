@@ -332,6 +332,14 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    public func document(byMD5 md5: String) throws -> Document? {
+        try document(where: "md5 = ?", value: md5)
+    }
+
+    public func document(id: UUID) throws -> Document? {
+        try document(where: "id = ?", value: id.uuidString)
+    }
+
     private func document(where clause: String, value: String) throws -> Document? {
         try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited FROM documents WHERE \(clause) LIMIT 1") { statement in
             bind(value, to: 1, in: statement)

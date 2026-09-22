@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
     @Published var mindMapCards: [NoteCard] = []
     @Published var links: [CardLink] = []
     @Published var selectedCardID: UUID?
+    @Published var cardIDToCenter: UUID? = nil
     @Published var activeToolbarOwner: ToolbarOwner = .none
     @Published var jumpTarget: PDFJumpTarget?
     @Published var dueFlashcards: [NoteCard] = []
@@ -107,6 +108,10 @@ final class AppModel: ObservableObject {
         }
         for card in documentCards {
             cardMap[card.id] = card
+        }
+        if let selID = selectedCardID, cardMap[selID] == nil,
+           let card = (try? database.getCard(id: selID)) {
+            cardMap[selID] = card
         }
         return Array(cardMap.values)
     }
@@ -839,6 +844,62 @@ final class AppModel: ObservableObject {
         Swift.print("[App] deleteEmphasisInCard cardID=\(cardID) text=\(text) remainingEmphasis=\(card.emphasisList)")
     }
 
+    func unfoldAncestors(of cardID: UUID) {
+        var current = mindMapCards.first(where: { $0.id == cardID })
+            ?? (try? database.getCard(id: cardID))
+        var visited = Set<UUID>()
+        while let parentID = current?.groupNoteId, !visited.contains(parentID) {
+            visited.insert(parentID)
+            if let parent = mindMapCards.first(where: { $0.id == parentID }) ?? (try? database.getCard(id: parentID)) {
+                if parent.isFolded {
+                    toggleFold(cardID: parent.id, folded: false)
+                }
+                current = parent
+            } else {
+                break
+            }
+        }
+    }
+
+    func jumpToPDFFromReview(card: NoteCard) {
+        isReviewPresented = false
+        isInStudyWorkspace = true
+
+        if workspaceMode == .mindMapOnly {
+            workspaceMode = .splitView
+        }
+
+        if selectedTopicID != card.topicId {
+            if let topic = topics.first(where: { $0.id == card.topicId }) ?? (try? database.getTopic(id: card.topicId)) {
+                selectTopic(topic)
+            }
+        }
+
+        if let md5 = card.bookMD5 {
+            let doc = studyDocuments.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) })
+                ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) })
+                ?? (try? database.document(byMD5: md5))
+            if let doc, activeDocument?.md5 != doc.md5 {
+                switchToDocument(doc)
+            }
+        }
+
+        unfoldAncestors(of: card.id)
+
+        selectedCardID = card.id
+        activeToolbarOwner = .pdf
+        cardIDToCenter = card.id
+        navigateToCard(card)
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.selectedCardID = card.id
+            self.activeToolbarOwner = .pdf
+            self.cardIDToCenter = card.id
+            self.navigateToCard(card)
+        }
+    }
+
     func navigateToCard(_ card: NoteCard) {
         if let md5 = card.bookMD5,
            let document = studyDocuments.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }) ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }),
@@ -846,22 +907,26 @@ final class AppModel: ObservableObject {
             switchToDocument(document)
         }
 
+        let allRects = !card.effectiveSegments.flatMap(\.rects).isEmpty
+            ? card.effectiveSegments.flatMap(\.rects)
+            : card.highlightRects
+
         let targetPage: Int
         if let sp = card.startPage {
             targetPage = sp
-        } else if let hp = card.highlightRects.first?.page {
+        } else if let hp = allRects.first?.page {
             targetPage = hp
         } else {
             return
         }
 
         let bounds: CGRect
-        let pageLines = card.highlightRects.filter { $0.page == targetPage }
+        let pageLines = allRects.filter { $0.page == targetPage }
         if let first = pageLines.first {
             bounds = pageLines.dropFirst().reduce(
                 CGRect(x: first.x, y: first.y, width: first.width, height: first.height)
             ) { $0.union(CGRect(x: $1.x, y: $1.y, width: $1.width, height: $1.height)) }
-        } else if let firstLine = card.highlightRects.first {
+        } else if let firstLine = allRects.first {
             bounds = CGRect(x: firstLine.x, y: firstLine.y, width: firstLine.width, height: firstLine.height)
         } else if let start = card.startPos, let end = card.endPos {
             bounds = CGRect(
@@ -2038,6 +2103,7 @@ struct StudyWorkspaceView: View {
                 cards: model.mindMapCards,
                 links: model.links,
                 selectedCardID: model.selectedCardID,
+                cardIDToCenter: $model.cardIDToCenter,
                 editingCardTitleID: $model.editingCardTitleID,
                 activeToolbarOwner: model.activeToolbarOwner,
                 mediaStorage: model.mediaStorage,
@@ -2273,9 +2339,7 @@ struct MarginGraphApp: App {
                     database: model.database,
                     mediaStorage: model.mediaStorage,
                     onJumpToPDF: { card in
-                        model.isReviewPresented = false
-                        model.isInStudyWorkspace = true
-                        model.select(card: card)
+                        model.jumpToPDFFromReview(card: card)
                     },
                     onDismiss: {
                         model.isReviewPresented = false

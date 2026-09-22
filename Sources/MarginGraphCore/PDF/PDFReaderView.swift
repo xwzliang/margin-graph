@@ -743,6 +743,11 @@ public struct PDFReaderView: NSViewRepresentable {
         if isNewJump, let jumpTarget {
             context.coordinator.lastJump = jumpTarget
             context.coordinator.lastPageIndex = jumpTarget.pageIndex
+            if currentPageIndex != jumpTarget.pageIndex {
+                DispatchQueue.main.async {
+                    self.currentPageIndex = jumpTarget.pageIndex
+                }
+            }
             jump(view, to: jumpTarget)
         } else if context.coordinator.lastPageIndex != currentPageIndex {
             context.coordinator.lastPageIndex = currentPageIndex
@@ -1121,24 +1126,29 @@ public final class InteractivePDFView: PDFView {
               target.pageIndex >= 0 && target.pageIndex < doc.pageCount,
               let page = doc.page(at: target.pageIndex) else { return }
 
+        // Always navigate to page first so that PDFKit loads/renders that page
+        go(to: page)
+
         // If target bounds are empty or near-zero, treat as page jump (show top of page)
         if target.bounds.width <= 2 || target.bounds.height <= 2 {
-            go(to: page)
             return
-        }
-
-        if displayMode == .singlePage && currentPage != page {
-            go(to: page)
         }
 
         layoutDocumentView()
 
         guard let docView = documentView,
               let scrollView = activeScrollView else {
-            go(to: page)
             return
         }
         let clipView = scrollView.contentView
+
+        // If view has not finished layout (e.g. view just mounted or sheet dismissing), retry shortly
+        if clipView.bounds.height <= 10 || docView.bounds.height <= 10 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.scrollToCenter(target: target, animated: animated)
+            }
+            return
+        }
 
         // The top line of the note in page coordinates is target.bounds.maxY
         let topPointInPage = CGPoint(x: target.bounds.midX, y: target.bounds.maxY)

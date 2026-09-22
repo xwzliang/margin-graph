@@ -81,4 +81,42 @@ final class FlashcardReviewTests: XCTestCase {
         XCTAssertTrue(String(lines[1]).contains("book-md5"))
         XCTAssertTrue(String(lines[1]).hasSuffix("\t5"))
     }
+
+    func testDatabaseDocumentLookupByMD5AndID() throws {
+        let database = try Database(inMemory: true)
+        let doc = Document(title: "Sample Book", filePath: "/path/to/sample.pdf", md5: "sample-md5-123", totalPages: 42)
+        try database.insertDocument(doc)
+
+        let byMD5 = try database.document(byMD5: "sample-md5-123")
+        XCTAssertNotNil(byMD5)
+        XCTAssertEqual(byMD5?.title, "Sample Book")
+        XCTAssertEqual(byMD5?.totalPages, 42)
+
+        let byID = try database.document(id: doc.id)
+        XCTAssertNotNil(byID)
+        XCTAssertEqual(byID?.md5, "sample-md5-123")
+
+        let nonexistent = try database.document(byMD5: "non-existent-md5")
+        XCTAssertNil(nonexistent)
+    }
+
+    func testJumpToPDFTargetComputation() {
+        let card = NoteCard(
+            topicId: UUID(),
+            bookMD5: "test-book-md5",
+            title: "Test Note",
+            startPage: 3,
+            highlightRects: [
+                HighlightRect(page: 3, x: 50, y: 120, width: 200, height: 16),
+                HighlightRect(page: 3, x: 50, y: 100, width: 180, height: 16)
+            ]
+        )
+        XCTAssertEqual(card.startPage, 3)
+        XCTAssertEqual(card.highlightRects.count, 2)
+        let bounds = card.highlightRects.reduce(CGRect.null) { $0.union(CGRect(x: $1.x, y: $1.y, width: $1.width, height: $1.height)) }
+        XCTAssertEqual(bounds.minX, 50)
+        XCTAssertEqual(bounds.minY, 100)
+        XCTAssertEqual(bounds.maxX, 250)
+        XCTAssertEqual(bounds.maxY, 136)
+    }
 }
