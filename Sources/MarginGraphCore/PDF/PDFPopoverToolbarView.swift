@@ -79,7 +79,7 @@ public struct PDFPopoverToolbarView: View {
             }
 
             // Main Toolbar Pill
-            HStack(spacing: 7) {
+            HStack(spacing: 5) {
                 switch mode {
                 case .create:
                     // Creation mode (media_1789795402558.png & media_1789816959834.png)
@@ -87,7 +87,7 @@ public struct PDFPopoverToolbarView: View {
                         Text("Copy")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 3)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
@@ -99,7 +99,7 @@ public struct PDFPopoverToolbarView: View {
                                 Text("Emphasize")
                                     .font(.system(size: 11.5, weight: .medium))
                                     .foregroundStyle(.white)
-                                    .padding(.horizontal, 4)
+                                    .padding(.horizontal, 3)
                                     .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.plain)
@@ -110,7 +110,7 @@ public struct PDFPopoverToolbarView: View {
                             Text("As title")
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, 3)
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
@@ -120,7 +120,7 @@ public struct PDFPopoverToolbarView: View {
                             Text("Add note")
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, 3)
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
@@ -130,7 +130,7 @@ public struct PDFPopoverToolbarView: View {
                             Text("Merge")
                                 .font(.system(size: 11.5, weight: .medium))
                                 .foregroundStyle(.white)
-                                .padding(.horizontal, 4)
+                                .padding(.horizontal, 3)
                                 .fixedSize(horizontal: true, vertical: false)
                         }
                         .buttonStyle(.plain)
@@ -185,7 +185,7 @@ public struct PDFPopoverToolbarView: View {
                         Text("Copy")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 3)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
@@ -195,7 +195,7 @@ public struct PDFPopoverToolbarView: View {
                         Text("Emphasize")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 3)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
@@ -205,7 +205,7 @@ public struct PDFPopoverToolbarView: View {
                         Text("As title")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 3)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
@@ -215,7 +215,7 @@ public struct PDFPopoverToolbarView: View {
                         Text("Add note")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 3)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
@@ -225,7 +225,7 @@ public struct PDFPopoverToolbarView: View {
                         Text("Merge")
                             .font(.system(size: 11.5, weight: .medium))
                             .foregroundStyle(.white)
-                            .padding(.horizontal, 4)
+                            .padding(.horizontal, 3)
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.plain)
@@ -343,7 +343,7 @@ public struct PDFPopoverToolbarView: View {
 
     @ViewBuilder
     private func colorSwatches(selectedIdx: Int?) -> some View {
-        HStack(spacing: 5) {
+        HStack(spacing: 4) {
             ForEach(0..<5, id: \.self) { idx in
                 let colors = MarginNoteTheme.cardColors(for: idx)
                 Button {

@@ -352,3 +352,31 @@ Structure each entry concisely with actionable rules:
     Calling document loading logic (`reloadStudySet()`, `switchToDocument()`) during `AppModel.init()` automatically writes `Date()` to SQLite via `updateDocumentLastVisited(...)` and `updateTopicUpdatedAt(...)`. This artificially bumps the first document or hardcoded test topic to the top of the "Recent" sort order on every app restart, completely distorting user recency history.
     - **Rule**: The app must initialize to the Document shelf view by default (`selectedMainTab = .document`, `isInStudyWorkspace = false`).
     - **Rule**: Never call `switchToDocument` or force-open study workspaces in `AppModel.init()`. Wait for explicit user action (e.g. clicking a document in the shelf or selecting a topic in Study notebooks) before loading documents and touching recency timestamps.
+
+- **PDF Annotation Cursor Scaling & Page Edge Clamping**:
+  - **Trap: Cursor Bloat & Page Edge Clipping on Small / Zoomed PDFs**:
+    PDF page annotations (`PDFAnnotation`) live in PDF page point space. Using fixed point values (e.g. `lineHeight + 14`, `knobSize = 11pt`) causes cursors to scale by `scaleFactor`. In small-page PDFs (such as paperbacks with 327pt page width) where `scaleFactor` is 2.5x to 3x, the cursor becomes massive (60px tall, 28px wide knob). Furthermore, when text is near page margins, unconstrained annotations extend past `page.bounds(for: .cropBox)` and get partially clipped/blocked by the edge of the PDF.
+    - **Rule**: Calculate cursor handle dimensions inversely proportional to zoom:
+      `let currentScale = max(0.2, self.scaleFactor)`
+      `let stemWidth = max(1.0, 2.0 / currentScale)`
+      `let stemHeight = lineHeight + (4.0 / currentScale)`
+      `let knobSize = max(5.0, 10.0 / currentScale)`
+      This ensures handles remain crisp and consistent on screen (~2px stem, ~10px knob) across all document formats and zoom levels.
+    - **Rule**: Strictly clamp both stem and knob centers within `page.bounds(for: .cropBox)` with padding:
+      `clampedKnobX = max(cropBox.minX + knobSize/2 + pad, min(point.x, cropBox.maxX - knobSize/2 - pad))`
+      `clampedKnobY = max(cropBox.minY + knobSize/2 + pad, min(knobY, cropBox.maxY - knobSize/2 - pad))`
+      This prevents handles from ever bleeding outside the page cropBox or being clipped by the edge of the PDF.
+
+- **Floating Popover Toolbar Sizing & View Boundary Clamping**:
+  - **Trap: Hardcoded Toolbar Dimensions & Unclamped Overflows**:
+    Hardcoding popover toolbar width (e.g. 520pt) when actual SwiftUI content requires 610pt causes right-side buttons (e.g. font format, trash) to be clipped inside the hosting view. Positioning without strict boundary clamping allows the toolbar to bleed past the right window edge (blocking scrollbars) or above the top window edge when selections start near the top of the viewport.
+    - **Rule**: Always dynamically measure the toolbar's intrinsic size via `NSHostingView(rootView: measureView).fittingSize`.
+    - **Rule**: Apply strict 4-edge clamping:
+      `let minX: CGFloat = 10.0`
+      `let maxX: CGFloat = max(minX, bounds.width - toolbarWidth - 18.0)`
+      `x = max(minX, min(x, maxX))`
+      `let minY: CGFloat = 8.0`
+      `let maxY: CGFloat = max(minY, bounds.height - toolbarHeight - 8.0)`
+      `y = max(minY, min(y, maxY))`
+      This guarantees the popover toolbar is 100% visible inside the window at all times, with its arrow properly pointing towards the selection knob without distortion.
+

@@ -1036,4 +1036,61 @@ final class PDFTests: XCTestCase {
         XCTAssertNotNil(pos)
         XCTAssertEqual(pos?.pageIndex, 2)
     }
+
+    func testHandleProportionalSizingAndPageBoundsClamping() throws {
+        let pdfView = InteractivePDFView(frame: NSRect(x: 0, y: 0, width: 800, height: 1000))
+        let doc = PDFDocument()
+        let page = PDFPage()
+        // Page bounds matching a small paperback (like Screenplay 327 x 568)
+        page.setBounds(CGRect(x: 0, y: 0, width: 327, height: 568), for: .cropBox)
+        doc.insert(page, at: 0)
+        pdfView.document = doc
+        pdfView.scaleFactor = 2.5
+        pdfView.layoutDocumentView()
+
+        // Install handles at the very edge of the page (x = 0, y = 568)
+        let edgeRect = HighlightRect(page: 0, x: 0, y: 550, width: 100, height: 10)
+        pdfView.installHandleAnnotations(for: [edgeRect])
+
+        // Verify annotations exist and are strictly within the page cropBox
+        let crop = page.bounds(for: .cropBox)
+        let handleAnnots = page.annotations.filter {
+            $0.contents?.hasPrefix("MarginGraph-handle") == true
+        }
+        XCTAssertFalse(handleAnnots.isEmpty, "Handle annotations should be installed")
+        for annot in handleAnnots {
+            XCTAssertGreaterThanOrEqual(annot.bounds.minX, crop.minX, "Handle bounds should not bleed past left edge")
+            XCTAssertLessThanOrEqual(annot.bounds.maxX, crop.maxX, "Handle bounds should not bleed past right edge")
+            XCTAssertGreaterThanOrEqual(annot.bounds.minY, crop.minY, "Handle bounds should not bleed past bottom edge")
+            XCTAssertLessThanOrEqual(annot.bounds.maxY, crop.maxY, "Handle bounds should not bleed past top edge")
+
+            // Verify knob size is scaled down proportionally in page points (~4pt = 10pt on screen at 2.5x)
+            if annot is KnobAnnotation {
+                XCTAssertLessThanOrEqual(annot.bounds.width, 7.0, "Knob width in page coords should be scaled proportionally, not fixed 11pt")
+            }
+        }
+    }
+
+    func testPopoverToolbarClampingNeverExceedsViewBounds() throws {
+        let pdfView = InteractivePDFView(frame: NSRect(x: 0, y: 0, width: 600, height: 700))
+        let doc = PDFDocument()
+        let page = PDFPage()
+        page.setBounds(CGRect(x: 0, y: 0, width: 600, height: 700), for: .cropBox)
+        doc.insert(page, at: 0)
+        pdfView.document = doc
+        pdfView.activeToolbarOwner = .pdf
+
+        // Trigger emphasis toolbar at the extreme top right
+        let extremeTopRightRect = HighlightRect(page: 0, x: 550, y: 680, width: 45, height: 14)
+        pdfView.showEmphasisToolbar(phrase: "test phrase", page: page, lineRect: extremeTopRightRect)
+
+        if let toolbar = pdfView.subviews.compactMap({ $0 as? NSHostingView<AnyView> }).first {
+            XCTAssertGreaterThanOrEqual(toolbar.frame.minX, 10.0, "Toolbar left edge should respect margin")
+            XCTAssertLessThanOrEqual(toolbar.frame.maxX, pdfView.bounds.width - 18.0, "Toolbar right edge should not be blocked by window edge")
+            XCTAssertGreaterThanOrEqual(toolbar.frame.minY, 8.0, "Toolbar bottom edge should respect margin")
+            XCTAssertLessThanOrEqual(toolbar.frame.maxY, pdfView.bounds.height - 8.0, "Toolbar top edge should not be blocked by window edge")
+        } else {
+            XCTFail("Toolbar should have been installed")
+        }
+    }
 }

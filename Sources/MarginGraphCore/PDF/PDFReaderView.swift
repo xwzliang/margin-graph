@@ -102,10 +102,7 @@ public final class KnobAnnotation: PDFAnnotation {
     public override func draw(with box: PDFDisplayBox, in context: CGContext) {
         context.saveGState()
         context.setFillColor(fillColor.cgColor)
-        let clip = context.boundingBoxOfClipPath
-        let isLocalSpace = clip.origin.x < 1.0 && clip.origin.y < 1.0 && (bounds.origin.x > clip.maxX || bounds.origin.y > clip.maxY)
-        let drawBounds = isLocalSpace ? CGRect(origin: .zero, size: bounds.size) : bounds
-        context.fillEllipse(in: drawBounds)
+        context.fillEllipse(in: bounds)
         context.restoreGState()
     }
 }
@@ -1446,53 +1443,71 @@ public final class InteractivePDFView: PDFView {
     ) {
         guard let targetPage else { hideToolbar(); return }
 
-        let toolbarWidth: CGFloat
-        if mode == .create {
-            if hasTargetCard {
-                toolbarWidth = isWithinTargetHighlight ? 530.0 : 480.0
-            } else {
-                toolbarWidth = 280.0
-            }
-        } else {
-            toolbarWidth = 520.0
-        }
-        let toolbarHeight: CGFloat = 46.0
+        let currentScale = max(0.2, self.scaleFactor)
 
-        let stemHeight = max(22, endLineHeight + 14)
-        let knobSize: CGFloat = 11.0
+        // Measure intrinsic fitting size of toolbar
+        let measureView = PDFPopoverToolbarView(
+            mode: mode,
+            arrowOffset: 20,
+            isArrowFlipped: false,
+            hasTargetCard: hasTargetCard,
+            isWithinTargetHighlight: isWithinTargetHighlight
+        )
+        let measuredSize = NSHostingView(rootView: measureView).fittingSize
+        let toolbarWidth = max(measuredSize.width, 240.0)
+        let toolbarHeight = max(measuredSize.height, 46.0)
+
+        let stemHeight = endLineHeight + (4.0 / currentScale)
+        let knobSize = max(5.0, 10.0 / currentScale)
+
         // Bottom of the upside-down knob head in page coordinates
-        let knobBottomPage = CGPoint(x: endPoint.x, y: endPoint.y - stemHeight / 2 - 1 - knobSize / 2)
+        let knobBottomPage = CGPoint(x: endPoint.x, y: endPoint.y - stemHeight / 2 - knobSize)
         let knobBottomView = convert(knobBottomPage, from: targetPage)
         let knobXView = knobBottomView.x
 
         var x = knobXView - toolbarWidth / 2.0
-        if bounds.width >= toolbarWidth + 24 {
-            x = max(12, min(x, bounds.width - toolbarWidth - 12))
-        } else {
-            // When toolbar is wider than the PDF view, allow overflow past bounds
-            // so it stays centered around the selection knob as much as possible
-            let minX = bounds.width - toolbarWidth - 12
-            x = max(minX, min(x, 12))
-        }
+        let minX: CGFloat = 10.0
+        let maxX: CGFloat = max(minX, bounds.width - toolbarWidth - 18.0)
+        x = max(minX, min(x, maxX))
 
         let arrowOffset = max(14, min(knobXView - x - 7, toolbarWidth - 28))
 
-        // Distance from bottom of upside-down knob head to top of toolbar
-        let marginBelowKnob: CGFloat = 8.0
-        let fitsBelow = (knobBottomView.y - marginBelowKnob - toolbarHeight) >= 10.0
-        let isArrowFlipped = !fitsBelow
+        let marginFromKnob: CGFloat = 6.0
+        let spaceBelow = knobBottomView.y - marginFromKnob - toolbarHeight
+        let fitsBelow = spaceBelow >= 10.0
 
-        let y: CGFloat
+        let sPage = startPage ?? targetPage
+        let sPt = startPoint ?? endPoint
+        let sHeight = (startLineHeight ?? endLineHeight) + (4.0 / currentScale)
+        let knobTopPage = CGPoint(x: sPt.x, y: sPt.y + sHeight / 2 + knobSize)
+        let knobTopView = convert(knobTopPage, from: sPage)
+
+        let spaceAbove = bounds.height - (knobTopView.y + marginFromKnob + toolbarHeight)
+        let fitsAbove = spaceAbove >= 10.0
+
+        let isArrowFlipped: Bool
+        var y: CGFloat
+
         if fitsBelow {
-            y = knobBottomView.y - marginBelowKnob - toolbarHeight
+            isArrowFlipped = false
+            y = knobBottomView.y - marginFromKnob - toolbarHeight
+        } else if fitsAbove {
+            isArrowFlipped = true
+            y = knobTopView.y + marginFromKnob
         } else {
-            let sPage = startPage ?? targetPage
-            let sPt = startPoint ?? endPoint
-            let sHeight = max(22, (startLineHeight ?? endLineHeight) + 14)
-            let knobTopPage = CGPoint(x: sPt.x, y: sPt.y + sHeight / 2 + 1 + knobSize / 2)
-            let knobTopView = convert(knobTopPage, from: sPage)
-            y = knobTopView.y + 8.0
+            if spaceAbove >= spaceBelow {
+                isArrowFlipped = true
+                y = knobTopView.y + marginFromKnob
+            } else {
+                isArrowFlipped = false
+                y = knobBottomView.y - marginFromKnob - toolbarHeight
+            }
         }
+
+        // Strict vertical clamping inside view bounds
+        let minY: CGFloat = 8.0
+        let maxY: CGFloat = max(minY, bounds.height - toolbarHeight - 8.0)
+        y = max(minY, min(y, maxY))
 
         let toolbarView = PDFPopoverToolbarView(
             mode: mode,
@@ -1570,14 +1585,16 @@ public final class InteractivePDFView: PDFView {
         let topCenterView = convert(topCenterPage, from: page)
 
         var x = topCenterView.x - toolbarWidth / 2.0
-        x = max(12, min(x, bounds.width - toolbarWidth - 12))
+        let minX: CGFloat = 10.0
+        let maxX: CGFloat = max(minX, bounds.width - toolbarWidth - 18.0)
+        x = max(minX, min(x, maxX))
 
         let arrowOffset = max(14, min(topCenterView.x - x - 7, toolbarWidth - 28))
 
         let fitsAbove = (topCenterView.y + 6.0 + toolbarHeight) <= (bounds.height - 10.0)
         let isArrowFlipped = fitsAbove
 
-        let y: CGFloat
+        var y: CGFloat
         if fitsAbove {
             y = topCenterView.y + 6.0
         } else {
@@ -1585,6 +1602,9 @@ public final class InteractivePDFView: PDFView {
             let bottomCenterView = convert(bottomCenterPage, from: page)
             y = bottomCenterView.y - toolbarHeight - 6.0
         }
+        let minY: CGFloat = 8.0
+        let maxY: CGFloat = max(minY, bounds.height - toolbarHeight - 8.0)
+        y = max(minY, min(y, maxY))
 
         let toolbarView = PDFPopoverToolbarView(
             mode: .emphasisSelection(phrase: phrase),
@@ -2791,23 +2811,50 @@ public final class InteractivePDFView: PDFView {
 
     private func addHandle(to page: PDFPage, at point: CGPoint, lineHeight: CGFloat, accent: NSColor, isStart: Bool, isPending: Bool = false) {
         let cursorColor = MarginNoteTheme.nsCursorColor
-        let height = max(22, lineHeight + 14)
-        let barBounds = CGRect(x: point.x - 1.0, y: point.y - height / 2, width: 2.0, height: height)
+        let currentScale = max(0.2, self.scaleFactor)
+
+        // 1. Proportional cursor dimensions in PDF page points
+        let stemWidth = max(1.0, 2.0 / currentScale)
+        let stemHeight = lineHeight + (4.0 / currentScale)
+        let knobSize = max(5.0, 10.0 / currentScale)
+
+        let pageBounds = page.bounds(for: .cropBox)
+        let pad = 1.0 / currentScale
+
+        // Clamp stem within page cropBox so it is never clipped by the edge of the PDF
+        let clampedBarX = max(pageBounds.minX + stemWidth / 2 + pad, min(point.x, pageBounds.maxX - stemWidth / 2 - pad))
+        let clampedBarY = max(pageBounds.minY + stemHeight / 2 + pad, min(point.y, pageBounds.maxY - stemHeight / 2 - pad))
+        let barBounds = CGRect(
+            x: clampedBarX - stemWidth / 2,
+            y: clampedBarY - stemHeight / 2,
+            width: stemWidth,
+            height: stemHeight
+        )
         let bar = PDFAnnotation(bounds: barBounds, forType: .square, withProperties: nil)
         bar.color = cursorColor
         bar.interiorColor = cursorColor
         let border = PDFBorder()
-        border.lineWidth = 1.0
-        border.style = .solid
+        border.lineWidth = 0
         bar.border = border
         bar.contents = isPending ? (isStart ? "MarginGraph-pending-handle-start" : "MarginGraph-pending-handle-end")
                                  : (isStart ? "MarginGraph-handle-start" : "MarginGraph-handle-end")
         page.addAnnotation(bar)
 
-        let knobSize: CGFloat = 11.0
-        let knobY = isStart ? (point.y + height / 2 + 1) : (point.y - height / 2 - 1)
-        let knobBounds = CGRect(x: point.x - knobSize / 2, y: knobY - knobSize / 2, width: knobSize, height: knobSize)
-        let knob = KnobAnnotation(bounds: knobBounds, forType: .square, withProperties: nil)
+        // 2. Position knob right on top (start) or bottom (end) of stem
+        let rawKnobY = isStart
+            ? (barBounds.maxY + knobSize / 2 - (1.0 / currentScale))
+            : (barBounds.minY - knobSize / 2 + (1.0 / currentScale))
+
+        // Clamp knob center strictly inside page cropBox
+        let clampedKnobX = max(pageBounds.minX + knobSize / 2 + pad, min(clampedBarX, pageBounds.maxX - knobSize / 2 - pad))
+        let clampedKnobY = max(pageBounds.minY + knobSize / 2 + pad, min(rawKnobY, pageBounds.maxY - knobSize / 2 - pad))
+        let knobBounds = CGRect(
+            x: clampedKnobX - knobSize / 2,
+            y: clampedKnobY - knobSize / 2,
+            width: knobSize,
+            height: knobSize
+        )
+        let knob = KnobAnnotation(bounds: knobBounds, forType: .circle, withProperties: nil)
         knob.fillColor = cursorColor
         knob.color = cursorColor
         knob.interiorColor = cursorColor
@@ -2825,17 +2872,21 @@ public final class InteractivePDFView: PDFView {
         isStart: Bool
     ) -> (isHit: Bool, distance: CGFloat) {
         guard handlePage === currentPage else { return (false, .infinity) }
-        let stemHeight = max(22, lineHeight + 14)
-        let knobY = isStart ? (handlePoint.y + stemHeight / 2 + 1) : (handlePoint.y - stemHeight / 2 - 1)
+        let currentScale = max(0.2, self.scaleFactor)
+        let stemHeight = lineHeight + (4.0 / currentScale)
+        let knobSize = max(5.0, 10.0 / currentScale)
+        let knobY = isStart
+            ? (handlePoint.y + stemHeight / 2 + knobSize / 2 - (1.0 / currentScale))
+            : (handlePoint.y - stemHeight / 2 - knobSize / 2 + (1.0 / currentScale))
         let knobCenter = CGPoint(x: handlePoint.x, y: knobY)
 
-        let distToKnob = hypot(point.x - knobCenter.x, point.y - knobCenter.y)
-        let dx = abs(point.x - handlePoint.x)
-        let dy = max(0, abs(point.y - handlePoint.y) - stemHeight / 2)
+        let distToKnob = hypot(point.x - knobCenter.x, point.y - knobCenter.y) * currentScale
+        let dx = abs(point.x - handlePoint.x) * currentScale
+        let dy = max(0, abs(point.y - handlePoint.y) - stemHeight / 2) * currentScale
         let distToBar = hypot(dx, dy)
 
         let minDistance = min(distToKnob, distToBar)
-        let isHit = (distToKnob <= 18.0) || (dx <= 14.0 && abs(point.y - handlePoint.y) <= (stemHeight / 2 + 10.0))
+        let isHit = (distToKnob <= 22.0) || (dx <= 16.0 && abs(point.y - handlePoint.y) * currentScale <= (stemHeight * currentScale / 2 + 14.0))
         return (isHit, minDistance)
     }
 
