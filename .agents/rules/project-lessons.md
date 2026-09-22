@@ -380,3 +380,17 @@ Structure each entry concisely with actionable rules:
       `y = max(minY, min(y, maxY))`
       This guarantees the popover toolbar is 100% visible inside the window at all times, with its arrow properly pointing towards the selection knob without distortion.
 
+- **PDFKit Annotation Custom Drawing vs Native Subtypes with Non-Zero CropBox Origins**:
+  - **Trap: Custom `draw(with:in:)` Displacements and Crescent Clipping on Non-Zero CropBox PDFs**:
+    Overriding `draw(with:in:)` in `PDFAnnotation` subclasses and drawing `context.fillEllipse(in: bounds)` assumes the drawing context aligns directly with annotation bounds. On PDFs with non-zero `cropBox.origin` (such as Screenplay's `cropBox.origin.x = ±4.0`), PDFKit's tile rasterizer passes a clipping rect and CTM shifted by `cropBox.origin`. This causes custom-drawn shapes to be drawn outside their tile clipping rect (appearing as clipped crescents or slivers) and displaced horizontally from native `.square` annotations, making the selection knob appear disconnected from the vertical pole.
+    - **Rule**: Prefer PDFKit's native `PDFAnnotationSubtype.circle` with `interiorColor = color` and `border.lineWidth = 0` over overriding `draw(with:in:)`. Native PDFKit drawing handles non-zero cropBox origins, rotation, and sub-pixel alignment seamlessly without custom drawing bugs.
+    - **Rule**: Always share the exact same `clampedX` horizontal center for both stem and knob (`clampedX = max(cropBox.minX + halfKnob + pad, min(point.x, cropBox.maxX - halfKnob - pad))`), and overlap in Y (`knobBounds.minY = barBounds.maxY - overlap` for start handle, `knobBounds.maxY = barBounds.minY + overlap` for end handle). Both stem and knob must be clamped within `cropBox.minY + pad ... cropBox.maxY - pad` so neither can be cut off by PDF page edges.
+
+- **Decoupling Real-Time Viewport / Scroll Tracking from Root `@Published` State**:
+  - **Trap: Full-Application View Redraw Thrashing During Continuous Scroll / Pan**:
+    Storing continuous navigation coordinates (like `documentCurrentPage`, `documentPageOffsets`, `documentMindPan`, `documentMindZoom`) as `@Published` properties on the root `AppModel` causes every scroll notification in `PDFReaderView` and every frame of panning in `MindMapCanvasView` to fire `AppModel.objectWillChange.send()`. This forces the entire application window (all split panes, toolbars, and canvases) to re-evaluate body and layout at 60/120Hz during active scrolling and panning, causing dramatic lag and sluggishness. Spawning unthrottled Swift concurrency `Task`s on every mouse move compounds the issue.
+    - **Rule**: In-memory position caches used solely for restoration on document switch or persistence to disk MUST NOT be `@Published`. Store them as plain properties on the model.
+    - **Rule**: Throttle high-frequency scroll notifications (e.g. at most once every 250ms during active scrolling + 300ms debounce on rest) and canvas viewport updates (e.g. 200ms debounce). Use lightweight `DispatchWorkItem` on the main queue for debounced saves instead of allocating concurrency `Task`s.
+    - **Rule**: Never instantiate ad-hoc `NSHostingView(rootView: ...).fittingSize` during continuous `mouseDragged` events. Cache measured toolbar sizes per mode, hide action toolbars during active dragging, and show them cleanly on `mouseUp`.
+
+

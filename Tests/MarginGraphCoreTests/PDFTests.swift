@@ -1093,4 +1093,49 @@ final class PDFTests: XCTestCase {
             XCTFail("Toolbar should have been installed")
         }
     }
+
+    func testHandleStemAndKnobExactAlignmentAndZeroGap() throws {
+        let pdfView = InteractivePDFView(frame: NSRect(x: 0, y: 0, width: 800, height: 1000))
+        let doc = PDFDocument()
+        let page = PDFPage()
+        // Page with non-zero cropBox origin (matching Screenplay Page 66)
+        page.setBounds(CGRect(x: -4.0, y: 0.0, width: 323.0, height: 567.0), for: .cropBox)
+        doc.insert(page, at: 0)
+        pdfView.document = doc
+        pdfView.scaleFactor = 2.0
+        pdfView.layoutDocumentView()
+
+        let lineRect = HighlightRect(page: 0, x: 26.88, y: 495.05, width: 93.24, height: 10.2)
+        pdfView.installHandleAnnotations(for: [lineRect])
+
+        let startBar = page.annotations.first(where: { $0.contents == "MarginGraph-handle-start" })
+        let startKnob = page.annotations.first(where: { $0.contents == "MarginGraph-handle-knob-start" })
+        let endBar = page.annotations.first(where: { $0.contents == "MarginGraph-handle-end" })
+        let endKnob = page.annotations.first(where: { $0.contents == "MarginGraph-handle-knob-end" })
+
+        XCTAssertNotNil(startBar)
+        XCTAssertNotNil(startKnob)
+        XCTAssertNotNil(endBar)
+        XCTAssertNotNil(endKnob)
+
+        guard let sBar = startBar, let sKnob = startKnob,
+              let eBar = endBar, let eKnob = endKnob else { return }
+
+        // Exact horizontal center alignment
+        XCTAssertEqual(sBar.bounds.midX, sKnob.bounds.midX, accuracy: 0.001, "Start bar and knob must share exact midX")
+        XCTAssertEqual(eBar.bounds.midX, eKnob.bounds.midX, accuracy: 0.001, "End bar and knob must share exact midX")
+
+        // Seamless attachment without any vertical gap
+        XCTAssertLessThanOrEqual(sKnob.bounds.minY, sBar.bounds.maxY, "Start knob must overlap or touch top of start bar")
+        XCTAssertGreaterThanOrEqual(eKnob.bounds.maxY, eBar.bounds.minY, "End knob must overlap or touch bottom of end bar")
+
+        // Edge containment
+        let crop = page.bounds(for: .cropBox)
+        for annot in [sBar, sKnob, eBar, eKnob] {
+            XCTAssertGreaterThanOrEqual(annot.bounds.minX, crop.minX)
+            XCTAssertLessThanOrEqual(annot.bounds.maxX, crop.maxX)
+            XCTAssertGreaterThanOrEqual(annot.bounds.minY, crop.minY)
+            XCTAssertLessThanOrEqual(annot.bounds.maxY, crop.maxY)
+        }
+    }
 }

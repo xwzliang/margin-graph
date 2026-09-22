@@ -45,6 +45,7 @@ public struct MindMapCanvasView: View {
     @State private var layoutResult: TreeLayoutResult
     @State private var hasInitialFitted = false
     @State private var lastHoverLocation: CGPoint? = nil
+    @State private var viewportDebounceWorkItem: DispatchWorkItem? = nil
     @Binding public var cardIDToCenter: UUID?
 
     public init(
@@ -220,13 +221,17 @@ public struct MindMapCanvasView: View {
                 }
                 .onChange(of: viewport.panOffset) { _, newPan in
                     if hasInitialFitted {
-                        onViewportChanged?(newPan, viewport.zoomScale)
+                        scheduleViewportChange(pan: newPan, zoom: viewport.zoomScale)
                     }
                 }
                 .onChange(of: viewport.zoomScale) { _, newZoom in
                     if hasInitialFitted {
-                        onViewportChanged?(viewport.panOffset, newZoom)
+                        scheduleViewportChange(pan: viewport.panOffset, zoom: newZoom)
                     }
+                }
+                .onDisappear {
+                    viewportDebounceWorkItem?.perform()
+                    viewportDebounceWorkItem = nil
                 }
                 .onChange(of: selectedCardID) { _, newID in
                     if let newID, let frame = frames[newID] {
@@ -257,6 +262,15 @@ public struct MindMapCanvasView: View {
                     }
                 }
         }
+    }
+
+    private func scheduleViewportChange(pan: CGPoint, zoom: CGFloat) {
+        viewportDebounceWorkItem?.cancel()
+        let item = DispatchWorkItem {
+            onViewportChanged?(pan, zoom)
+        }
+        viewportDebounceWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: item)
     }
 
     private func magnifyGesture(proxy: GeometryProxy) -> some Gesture {

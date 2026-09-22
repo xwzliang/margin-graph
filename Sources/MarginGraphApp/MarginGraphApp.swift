@@ -47,14 +47,14 @@ final class AppModel: ObservableObject {
     @Published var editingCardTitleID: UUID? = nil
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
-    @Published var documentCurrentPage: [String: Int] = [:]
-    @Published var documentPageOffsets: [String: Double] = [:]
-    @Published var documentMindPan: [String: CGPoint] = [:]
-    @Published var documentMindZoom: [String: CGFloat] = [:]
-    @Published var topicMindPan: [UUID: CGPoint] = [:]
-    @Published var topicMindZoom: [UUID: CGFloat] = [:]
+    var documentCurrentPage: [String: Int] = [:]
+    var documentPageOffsets: [String: Double] = [:]
+    var documentMindPan: [String: CGPoint] = [:]
+    var documentMindZoom: [String: CGFloat] = [:]
+    var topicMindPan: [UUID: CGPoint] = [:]
+    var topicMindZoom: [UUID: CGFloat] = [:]
 
-    private var pendingPositionSaveTask: Task<Void, Never>? = nil
+    private var positionSaveWorkItem: DispatchWorkItem? = nil
     private var pendingDocPositions: [String: (page: Int, offset: Double)] = [:]
     private var pendingDocMindMaps: [String: (pan: CGPoint, zoom: CGFloat)] = [:]
     private var pendingTopicMindMaps: [UUID: (pan: CGPoint, zoom: CGFloat)] = [:]
@@ -101,17 +101,17 @@ final class AppModel: ObservableObject {
     }
 
     private func schedulePositionSave() {
-        pendingPositionSaveTask?.cancel()
-        pendingPositionSaveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            guard !Task.isCancelled else { return }
+        positionSaveWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
             self?.flushPendingPositions()
         }
+        positionSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: item)
     }
 
     func flushPendingPositions() {
-        pendingPositionSaveTask?.cancel()
-        pendingPositionSaveTask = nil
+        positionSaveWorkItem?.cancel()
+        positionSaveWorkItem = nil
 
         for (md5, pos) in pendingDocPositions {
             try? database.updateDocumentPosition(md5: md5, pageIndex: pos.page, pageOffsetY: pos.offset)

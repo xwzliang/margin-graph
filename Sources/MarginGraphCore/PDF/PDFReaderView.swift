@@ -79,12 +79,17 @@ public final class DottedLineAnnotation: PDFAnnotation {
 }
 
 public final class KnobAnnotation: PDFAnnotation {
-    public var fillColor: NSColor = MarginNoteTheme.nsCursorColor
+    public var fillColor: NSColor = MarginNoteTheme.nsCursorColor {
+        didSet {
+            self.color = fillColor
+            self.interiorColor = fillColor
+        }
+    }
 
     public override init(bounds: CGRect, forType type: PDFAnnotationSubtype, withProperties properties: [AnyHashable : Any]?) {
-        super.init(bounds: bounds, forType: type, withProperties: properties)
-        self.color = MarginNoteTheme.nsCursorColor
-        self.interiorColor = MarginNoteTheme.nsCursorColor
+        super.init(bounds: bounds, forType: .circle, withProperties: properties)
+        self.color = fillColor
+        self.interiorColor = fillColor
         let border = PDFBorder()
         border.lineWidth = 0
         self.border = border
@@ -92,18 +97,11 @@ public final class KnobAnnotation: PDFAnnotation {
 
     public required init?(coder: NSCoder) {
         super.init(coder: coder)
-        self.color = MarginNoteTheme.nsCursorColor
-        self.interiorColor = MarginNoteTheme.nsCursorColor
+        self.color = fillColor
+        self.interiorColor = fillColor
         let border = PDFBorder()
         border.lineWidth = 0
         self.border = border
-    }
-
-    public override func draw(with box: PDFDisplayBox, in context: CGContext) {
-        context.saveGState()
-        context.setFillColor(fillColor.cgColor)
-        context.fillEllipse(in: bounds)
-        context.restoreGState()
     }
 }
 
@@ -1002,6 +1000,8 @@ public final class InteractivePDFView: PDFView {
     public var onPositionChanged: ((Int, CGFloat) -> Void)?
     internal var isRestoringPosition: Bool = false
     private var pendingRestorePosition: (pageIndex: Int, pageOffsetY: CGFloat)? = nil
+    private var lastScrollPositionUpdateTime: TimeInterval = 0
+    private var scrollPositionDebounceWorkItem: DispatchWorkItem? = nil
     var selectionTool: PDFSelectionTool = .textSelection
     var marqueeColor: NSColor = .systemYellow
     var bookMD5: String = ""
@@ -1336,16 +1336,32 @@ public final class InteractivePDFView: PDFView {
         ) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.applySubtlePageSeparators()
-                self.updateToolbarPosition()
+                if self.toolbarHostingView?.isHidden == false {
+                    self.updateToolbarPosition()
+                }
                 if let clip = self.pdfScrollView?.contentView {
                     let currentOrigin = clip.bounds.origin
                     if let last = self.lastClipOrigin {
                         if currentOrigin != last {
                             self.lastClipOrigin = currentOrigin
                             self.onScroll?()
-                            if !self.isRestoringPosition, let pos = self.currentVisiblePosition() {
-                                self.onPositionChanged?(pos.pageIndex, pos.pageOffsetY)
+                            if !self.isRestoringPosition {
+                                let now = CACurrentMediaTime()
+                                if now - self.lastScrollPositionUpdateTime > 0.25 {
+                                    self.lastScrollPositionUpdateTime = now
+                                    if let pos = self.currentVisiblePosition() {
+                                        self.onPositionChanged?(pos.pageIndex, pos.pageOffsetY)
+                                    }
+                                }
+                                self.scrollPositionDebounceWorkItem?.cancel()
+                                let item = DispatchWorkItem { [weak self] in
+                                    guard let self, !self.isRestoringPosition else { return }
+                                    if let pos = self.currentVisiblePosition() {
+                                        self.onPositionChanged?(pos.pageIndex, pos.pageOffsetY)
+                                    }
+                                }
+                                self.scrollPositionDebounceWorkItem = item
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.30, execute: item)
                             }
                         }
                     } else {
@@ -1357,6 +1373,8 @@ public final class InteractivePDFView: PDFView {
     }
 
     func removeScrollObserver() {
+        scrollPositionDebounceWorkItem?.cancel()
+        scrollPositionDebounceWorkItem = nil
         if let scrollObserver {
             NotificationCenter.default.removeObserver(scrollObserver)
             self.scrollObserver = nil
@@ -1430,6 +1448,38 @@ public final class InteractivePDFView: PDFView {
         }
     }
 
+    private static var toolbarSizeCache: [String: CGSize] = [:]
+
+    private func measuredToolbarSize(
+        for mode: PDFPopoverMode,
+        hasTargetCard: Bool,
+        isWithinTargetHighlight: Bool
+    ) -> CGSize {
+        let key: String
+        switch mode {
+        case .create:
+            key = "create_\(hasTargetCard)_\(isWithinTargetHighlight)"
+        case .edit:
+            key = "edit"
+        case .emphasisSelection:
+            key = "emphasis"
+        }
+        if let cached = Self.toolbarSizeCache[key] {
+            return cached
+        }
+        let measureView = PDFPopoverToolbarView(
+            mode: mode,
+            arrowOffset: 20,
+            isArrowFlipped: false,
+            hasTargetCard: hasTargetCard,
+            isWithinTargetHighlight: isWithinTargetHighlight
+        )
+        let measured = NSHostingView(rootView: measureView).fittingSize
+        let safeSize = CGSize(width: max(measured.width, 240.0), height: max(measured.height, 46.0))
+        Self.toolbarSizeCache[key] = safeSize
+        return safeSize
+    }
+
     private func showToolbar(
         mode: PDFPopoverMode,
         targetPage: PDFPage?,
@@ -1445,17 +1495,13 @@ public final class InteractivePDFView: PDFView {
 
         let currentScale = max(0.2, self.scaleFactor)
 
-        // Measure intrinsic fitting size of toolbar
-        let measureView = PDFPopoverToolbarView(
-            mode: mode,
-            arrowOffset: 20,
-            isArrowFlipped: false,
+        let measuredSize = measuredToolbarSize(
+            for: mode,
             hasTargetCard: hasTargetCard,
             isWithinTargetHighlight: isWithinTargetHighlight
         )
-        let measuredSize = NSHostingView(rootView: measureView).fittingSize
-        let toolbarWidth = max(measuredSize.width, 240.0)
-        let toolbarHeight = max(measuredSize.height, 46.0)
+        let toolbarWidth = measuredSize.width
+        let toolbarHeight = measuredSize.height
 
         let stemHeight = endLineHeight + (4.0 / currentScale)
         let knobSize = max(5.0, 10.0 / currentScale)
@@ -1555,7 +1601,6 @@ public final class InteractivePDFView: PDFView {
         )
 
         let frame = CGRect(x: x, y: y, width: toolbarWidth, height: toolbarHeight)
-        Swift.print("[Toolbar] showToolbar mode=\(mode) knobBottomView=\(knobBottomView) frame=\(frame) bounds=\(bounds)")
         if let existing = toolbarHostingView {
             existing.rootView = AnyView(toolbarView)
             existing.frame = frame
@@ -2356,15 +2401,7 @@ public final class InteractivePDFView: PDFView {
                             startPage: firstPage,
                             endPage: lastPage
                         )
-                        showToolbar(
-                            mode: .edit(colorIndex: cards.first(where: { $0.id == cardID })?.colorIndex ?? 0),
-                            targetPage: lastPage,
-                            endPoint: endPt,
-                            endLineHeight: CGFloat(last.height),
-                            startPage: firstPage,
-                            startPoint: startPt,
-                            startLineHeight: CGFloat(first.height)
-                        )
+                        hideToolbar()
                     } else {
                         // Pending selection drag
                         let text = PDFHighlightResolver.normalizeExcerptParagraphs(selection)
@@ -2378,18 +2415,7 @@ public final class InteractivePDFView: PDFView {
                             endPoint: endPt
                         )
                         renderPendingHighlight(pending)
-                        let isWithin = checkIfPendingWithinTarget(pending, targetCardID: targetCardID)
-                        showToolbar(
-                            mode: .create,
-                            targetPage: lastPage,
-                            endPoint: endPt,
-                            endLineHeight: CGFloat(last.height),
-                            startPage: firstPage,
-                            startPoint: startPt,
-                            startLineHeight: CGFloat(first.height),
-                            hasTargetCard: targetCardID != nil,
-                            isWithinTargetHighlight: isWithin
-                        )
+                        hideToolbar()
                     }
                 }
             }
@@ -2820,13 +2846,42 @@ public final class InteractivePDFView: PDFView {
 
         let pageBounds = page.bounds(for: .cropBox)
         let pad = 1.0 / currentScale
+        let halfKnob = knobSize / 2
 
-        // Clamp stem within page cropBox so it is never clipped by the edge of the PDF
-        let clampedBarX = max(pageBounds.minX + stemWidth / 2 + pad, min(point.x, pageBounds.maxX - stemWidth / 2 - pad))
-        let clampedBarY = max(pageBounds.minY + stemHeight / 2 + pad, min(point.y, pageBounds.maxY - stemHeight / 2 - pad))
+        // Clamp horizontal center so BOTH stem and knob share the exact same X center
+        // and stay strictly inside page bounds
+        let clampedX = max(pageBounds.minX + halfKnob + pad, min(point.x, pageBounds.maxX - halfKnob - pad))
+
+        // Position bar and knob in Y
+        let barHalfHeight = stemHeight / 2
+        let overlap = 1.0 / currentScale
+
+        let barY: CGFloat
+        let knobY: CGFloat
+
+        if isStart {
+            // Knob sits on top of the bar.
+            // Raw bar is centered at point.y. Top of knob is barY + barHalfHeight + knobSize - overlap.
+            let rawBarY = point.y
+            let rawKnobTop = rawBarY + barHalfHeight + knobSize - overlap
+            let topOverflow = max(0, rawKnobTop - (pageBounds.maxY - pad))
+            let bottomUnderflow = max(0, (pageBounds.minY + pad) - (rawBarY - barHalfHeight))
+            barY = rawBarY - topOverflow + bottomUnderflow
+            knobY = (barY + barHalfHeight) + halfKnob - overlap
+        } else {
+            // Knob sits at the bottom of the bar.
+            // Raw bar is centered at point.y. Bottom of knob is barY - barHalfHeight - knobSize + overlap.
+            let rawBarY = point.y
+            let rawKnobBottom = rawBarY - barHalfHeight - knobSize + overlap
+            let bottomUnderflow = max(0, (pageBounds.minY + pad) - rawKnobBottom)
+            let topOverflow = max(0, (rawBarY + barHalfHeight) - (pageBounds.maxY - pad))
+            barY = rawBarY + bottomUnderflow - topOverflow
+            knobY = (barY - barHalfHeight) - halfKnob + overlap
+        }
+
         let barBounds = CGRect(
-            x: clampedBarX - stemWidth / 2,
-            y: clampedBarY - stemHeight / 2,
+            x: clampedX - stemWidth / 2,
+            y: barY - barHalfHeight,
             width: stemWidth,
             height: stemHeight
         )
@@ -2840,17 +2895,9 @@ public final class InteractivePDFView: PDFView {
                                  : (isStart ? "MarginGraph-handle-start" : "MarginGraph-handle-end")
         page.addAnnotation(bar)
 
-        // 2. Position knob right on top (start) or bottom (end) of stem
-        let rawKnobY = isStart
-            ? (barBounds.maxY + knobSize / 2 - (1.0 / currentScale))
-            : (barBounds.minY - knobSize / 2 + (1.0 / currentScale))
-
-        // Clamp knob center strictly inside page cropBox
-        let clampedKnobX = max(pageBounds.minX + knobSize / 2 + pad, min(clampedBarX, pageBounds.maxX - knobSize / 2 - pad))
-        let clampedKnobY = max(pageBounds.minY + knobSize / 2 + pad, min(rawKnobY, pageBounds.maxY - knobSize / 2 - pad))
         let knobBounds = CGRect(
-            x: clampedKnobX - knobSize / 2,
-            y: clampedKnobY - knobSize / 2,
+            x: clampedX - halfKnob,
+            y: knobY - halfKnob,
             width: knobSize,
             height: knobSize
         )
@@ -2858,6 +2905,9 @@ public final class InteractivePDFView: PDFView {
         knob.fillColor = cursorColor
         knob.color = cursorColor
         knob.interiorColor = cursorColor
+        let knobBorder = PDFBorder()
+        knobBorder.lineWidth = 0
+        knob.border = knobBorder
         knob.contents = isPending ? (isStart ? "MarginGraph-pending-handle-knob-start" : "MarginGraph-pending-handle-knob-end")
                                   : (isStart ? "MarginGraph-handle-knob-start" : "MarginGraph-handle-knob-end")
         page.addAnnotation(knob)
@@ -2875,9 +2925,11 @@ public final class InteractivePDFView: PDFView {
         let currentScale = max(0.2, self.scaleFactor)
         let stemHeight = lineHeight + (4.0 / currentScale)
         let knobSize = max(5.0, 10.0 / currentScale)
+        let halfKnob = knobSize / 2
+        let overlap = 1.0 / currentScale
         let knobY = isStart
-            ? (handlePoint.y + stemHeight / 2 + knobSize / 2 - (1.0 / currentScale))
-            : (handlePoint.y - stemHeight / 2 - knobSize / 2 + (1.0 / currentScale))
+            ? (handlePoint.y + stemHeight / 2 + halfKnob - overlap)
+            : (handlePoint.y - stemHeight / 2 - halfKnob + overlap)
         let knobCenter = CGPoint(x: handlePoint.x, y: knobY)
 
         let distToKnob = hypot(point.x - knobCenter.x, point.y - knobCenter.y) * currentScale
