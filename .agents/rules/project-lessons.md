@@ -110,6 +110,12 @@ Structure each entry concisely with actionable rules:
   - **Trap**: Relying on vertical padding (`.padding(.vertical, 7)`) for top toolbars across sibling panes (e.g. Outline Sidebar, MindMap View, and PDF View). Sibling view hierarchies often contain buttons or controls of different intrinsic heights (e.g. 32pt in MindMap header vs 28pt in PDF toolbar vs 24pt in search bar). Symmetric vertical padding results in mismatched total bar heights (e.g. 46pt vs 42pt), breaking horizontal alignment of bottom separator lines across the divider.
   - **Rule**: Standardize top toolbars to an explicit shared height constant (`MarginNoteTheme.topToolbarHeight: CGFloat = 44.0`) with identical bottom overlay separator lines (`Rectangle().frame(height: 0.5).foregroundStyle(MarginNoteTheme.separatorColor), alignment: .bottom`) so all headers align into an unbroken horizontal line across the entire window.
 
+- **Co-Updating Document & Study Recency vs Isolated Review Deck Recency**:
+  - **Trap**: Leaving view recency updates uncoordinated or tangled. Opening a document did not touch its study notebook (or vice-versa), so the default "Recent" sort left related items detached or stale. Tangling deck reviews with study notebook timestamps would cause reviewing flashcards to reshuffle the Study notebook page.
+  - **Rule**:
+    1. **Document & Study Synchronization**: When opening a document or switching documents in reader/workspace, touch both `document.lastVisited` and `matchingTopic.updatedAt` to `Date()`. Similarly, when opening a notebook for study, touch `topic.updatedAt` and all associated documents' `lastVisited` to `Date()`. This ensures that recently viewed documents and notebooks always sort to the top together.
+    2. **Isolated Review Deck Recency**: Track review deck recency independently via a dedicated `deck_reviews` table storing `last_reviewed` timestamps. In `ReviewDecksView`, sorting by "Recent" strictly checks `lastReviewed`, moving reviewed decks to first place without perturbing the Document or Study notebook sort orders.
+
 ## Inline Canvas Text Editing & Gesture Disambiguation
 - **Disambiguating Single Tap vs Double Tap on Canvas**:
   In SwiftUI on macOS, attaching both `.onTapGesture(count: 2)` and `.onTapGesture(count: 1)` to the same view without explicit exclusion causes the single-tap gesture to fire immediately on the first click of a double-click sequence, creating a race condition where single-tap deselects or commits state right as double-tap creates a note.

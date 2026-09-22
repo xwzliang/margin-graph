@@ -141,6 +141,7 @@ final class AppModel: ObservableObject {
 
         let counts = (try? database.cardCountsByTopic()) ?? [:]
         let dueCounts = (try? database.dueCardCountsByTopic()) ?? [:]
+        let deckReviews = (try? database.allDeckReviews()) ?? [:]
 
         var decks: [ReviewDeckItem] = []
         decks.reserveCapacity(customDecks.count + topics.count)
@@ -150,13 +151,15 @@ final class AppModel: ObservableObject {
             let total = deckCardCounts[deck.id] ?? 0
             guard total > 0 else { continue }
             let due = dueDeckCounts[deck.id] ?? 0
+            let lastReviewed = deckReviews[deck.id]
             decks.append(ReviewDeckItem(
                 id: deck.id,
                 title: deck.title,
                 dueCount: due,
                 totalCount: total,
                 topicId: nil,
-                deckId: deck.id
+                deckId: deck.id,
+                lastReviewed: lastReviewed
             ))
         }
 
@@ -167,12 +170,14 @@ final class AppModel: ObservableObject {
             let total = counts[topic.id] ?? 0
             guard total > 0 else { continue }
             let due = dueCounts[topic.id] ?? 0
+            let lastReviewed = deckReviews[topic.id]
             decks.append(ReviewDeckItem(
                 id: topic.id,
                 title: topic.title,
                 dueCount: due,
                 totalCount: total,
-                topicId: topic.id
+                topicId: topic.id,
+                lastReviewed: lastReviewed
             ))
         }
 
@@ -193,6 +198,19 @@ final class AppModel: ObservableObject {
     }
 
     func enterStudyWorkspace(topic: Topic) {
+        let now = Date()
+        try? database.updateTopicUpdatedAt(id: topic.id, date: now)
+        let associatedDocs = (try? database.documentsForTopic(id: topic.id)) ?? []
+        for doc in associatedDocs {
+            try? database.updateDocumentLastVisited(id: doc.id, date: now)
+        }
+        if associatedDocs.isEmpty {
+            for bmd5 in topic.bookMD5List {
+                try? database.updateDocumentLastVisited(md5: bmd5, date: now)
+            }
+        }
+        reloadLibrary()
+
         selectTopic(topic)
         workspaceMode = .splitView
         isInStudyWorkspace = true
@@ -203,6 +221,9 @@ final class AppModel: ObservableObject {
     }
 
     func openDocumentInReader(document: Document) {
+        let now = Date()
+        try? database.updateDocumentLastVisited(id: document.id, date: now)
+
         let cleanDocTitle = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let docFileName = URL(fileURLWithPath: document.filePath).deletingPathExtension().lastPathComponent
 
@@ -238,14 +259,15 @@ final class AppModel: ObservableObject {
         }
 
         if let matchingTopic {
+            try? database.updateTopicUpdatedAt(id: matchingTopic.id, date: now)
             if !matchingTopic.bookMD5List.contains(document.md5) {
                 try? database.addDocument(to: matchingTopic.id, md5: document.md5)
-                reloadLibrary()
             }
+            reloadLibrary()
             selectedTopicID = matchingTopic.id
             reloadStudySet()
         } else {
-            let newTopic = Topic(title: document.title, bookMD5List: [document.md5])
+            let newTopic = Topic(title: document.title, bookMD5List: [document.md5], createdAt: now, updatedAt: now)
             try? database.insertTopic(newTopic)
             reloadLibrary()
             selectedTopicID = newTopic.id
@@ -399,6 +421,12 @@ final class AppModel: ObservableObject {
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
         activeDocument = document
         manager = loaded
+        let now = Date()
+        try? database.updateDocumentLastVisited(id: document.id, date: now)
+        if let topicID = selectedTopicID {
+            try? database.updateTopicUpdatedAt(id: topicID, date: now)
+        }
+        reloadLibrary()
         loadBookmarks()
         reloadDocumentCards()
     }
@@ -1168,12 +1196,20 @@ final class AppModel: ObservableObject {
 
     func startReview() {
         guard !dueFlashcards.isEmpty else { return }
+        if let topicID = selectedTopicID {
+            try? database.recordDeckReview(id: topicID, date: Date())
+            reloadLibrary()
+        }
         activeReviewCards = dueFlashcards
         activeReviewDocuments = studyDocuments
         isReviewPresented = true
     }
 
     func startReviewForDeck(_ deck: ReviewDeckItem) {
+        let now = Date()
+        try? database.recordDeckReview(id: deck.id, date: now)
+        reloadLibrary()
+
         if let deckId = deck.deckId {
             let cards = (try? database.cardsForDeck(deckId: deckId)) ?? []
             let due = (try? database.dueCardsForDeck(deckId: deckId)) ?? []

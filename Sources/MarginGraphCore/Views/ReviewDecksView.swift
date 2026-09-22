@@ -7,14 +7,16 @@ public struct ReviewDeckItem: Identifiable {
     public var totalCount: Int
     public var topicId: UUID?
     public var deckId: UUID?
+    public var lastReviewed: Date?
 
-    public init(id: UUID = UUID(), title: String, dueCount: Int, totalCount: Int, topicId: UUID? = nil, deckId: UUID? = nil) {
+    public init(id: UUID = UUID(), title: String, dueCount: Int, totalCount: Int, topicId: UUID? = nil, deckId: UUID? = nil, lastReviewed: Date? = nil) {
         self.id = id
         self.title = title
         self.dueCount = dueCount
         self.totalCount = totalCount
         self.topicId = topicId
         self.deckId = deckId
+        self.lastReviewed = lastReviewed
     }
 }
 
@@ -34,6 +36,21 @@ public struct ReviewDecksView: View {
         self.decks = decks
         self.onStartReview = onStartReview
         self.onDeleteDeck = onDeleteDeck
+    }
+
+    private var sortedDecks: [ReviewDeckItem] {
+        if sortMode == 0 {
+            return decks.sorted {
+                let d0 = $0.lastReviewed ?? .distantPast
+                let d1 = $1.lastReviewed ?? .distantPast
+                if d0 != d1 {
+                    return d0 > d1
+                }
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
+        } else {
+            return decks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+        }
     }
 
     public var body: some View {
@@ -89,7 +106,7 @@ public struct ReviewDecksView: View {
 
             // Grid
             ScrollView {
-                if decks.isEmpty {
+                if sortedDecks.isEmpty {
                     VStack(spacing: 16) {
                         Image(systemName: "rectangle.stack.badge.play")
                             .font(.system(size: 48))
@@ -101,7 +118,7 @@ public struct ReviewDecksView: View {
                     .frame(maxWidth: .infinity, minHeight: 300)
                 } else {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 148, maximum: 170), spacing: 24)], spacing: 28) {
-                        ForEach(decks) { deck in
+                        ForEach(sortedDecks) { deck in
                             ReviewDeckCardView(
                                 deck: deck,
                                 onStart: { onStartReview(deck) },

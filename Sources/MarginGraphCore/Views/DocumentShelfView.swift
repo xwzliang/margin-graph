@@ -25,7 +25,14 @@ public struct DocumentShelfView: View {
 
     private var sortedDocuments: [Document] {
         if sortMode == 0 {
-            return documents.sorted { ($0.lastVisited ?? .distantPast) > ($1.lastVisited ?? .distantPast) }
+            return documents.sorted {
+                let d0 = $0.lastVisited ?? .distantPast
+                let d1 = $1.lastVisited ?? .distantPast
+                if d0 != d1 {
+                    return d0 > d1
+                }
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
         } else {
             return documents.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         }

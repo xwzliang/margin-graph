@@ -193,4 +193,20 @@ public extension Database {
             }
         }
     }
+
+    func updateDocumentLastVisited(id: UUID, date: Date = Date()) throws {
+        try withStatement("UPDATE documents SET last_visited = ? WHERE id = ?") { stmt in
+            bind(date.timeIntervalSince1970, to: 1, in: stmt)
+            bind(id.uuidString, to: 2, in: stmt)
+            try requireDone(stmt)
+        }
+    }
+
+    func updateDocumentLastVisited(md5: String, date: Date = Date()) throws {
+        try withStatement("UPDATE documents SET last_visited = ? WHERE md5 = ?") { stmt in
+            bind(date.timeIntervalSince1970, to: 1, in: stmt)
+            bind(md5, to: 2, in: stmt)
+            try requireDone(stmt)
+        }
+    }
 }

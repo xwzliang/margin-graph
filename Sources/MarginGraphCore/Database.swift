@@ -114,6 +114,10 @@ public final class Database: @unchecked Sendable {
         );
         CREATE INDEX IF NOT EXISTS idx_deck_cards_deck ON deck_cards(deck_id);
         CREATE INDEX IF NOT EXISTS idx_deck_cards_card ON deck_cards(card_id);
+        CREATE TABLE IF NOT EXISTS deck_reviews(
+            deck_id TEXT PRIMARY KEY,
+            last_reviewed REAL NOT NULL
+        );
         """)
         if try !hasColumn("highlight_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN highlight_rects TEXT NOT NULL DEFAULT '[]';")

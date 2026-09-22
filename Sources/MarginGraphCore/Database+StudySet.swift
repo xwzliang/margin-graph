@@ -72,4 +72,12 @@ public extension Database {
 
         return results
     }
+
+    func updateTopicUpdatedAt(id: UUID, date: Date = Date()) throws {
+        try withStatement("UPDATE topics SET updated_at = ? WHERE id = ?") { stmt in
+            bind(date.timeIntervalSince1970, to: 1, in: stmt)
+            bind(id.uuidString, to: 2, in: stmt)
+            try requireDone(stmt)
+        }
+    }
 }

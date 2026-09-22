@@ -31,7 +31,12 @@ public struct StudyNotebooksView: View {
 
     private var sortedTopics: [Topic] {
         if sortMode == 0 {
-            return topics.sorted { $0.updatedAt > $1.updatedAt }
+            return topics.sorted {
+                if $0.updatedAt != $1.updatedAt {
+                    return $0.updatedAt > $1.updatedAt
+                }
+                return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+            }
         } else {
             return topics.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         }

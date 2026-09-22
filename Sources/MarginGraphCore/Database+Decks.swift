@@ -148,4 +148,25 @@ public extension Database {
         }
         return result
     }
+
+    func recordDeckReview(id: UUID, date: Date = Date()) throws {
+        try withStatement("INSERT OR REPLACE INTO deck_reviews(deck_id, last_reviewed) VALUES(?, ?)") { stmt in
+            bind(id.uuidString, to: 1, in: stmt)
+            bind(date.timeIntervalSince1970, to: 2, in: stmt)
+            try requireDone(stmt)
+        }
+    }
+
+    func allDeckReviews() throws -> [UUID: Date] {
+        try withStatement("SELECT deck_id, last_reviewed FROM deck_reviews") { stmt in
+            var result: [UUID: Date] = [:]
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let idStr = text(stmt, 0), let id = UUID(uuidString: idStr) {
+                    let time = double(stmt, 1) ?? 0
+                    result[id] = Date(timeIntervalSince1970: time)
+                }
+            }
+            return result
+        }
+    }
 }

@@ -198,4 +198,60 @@ final class CardDeckTests: XCTestCase {
         let counts = try database.deckCardCounts()
         XCTAssertEqual(counts[newDeck.id], 1)
     }
+
+    func testDeckReviewRecordingAndRecentSorting() throws {
+        let database = try Database(inMemory: true)
+        let deck1 = try database.createDeck(title: "Deck 1")
+        let deck2 = try database.createDeck(title: "Deck 2")
+
+        var reviews = try database.allDeckReviews()
+        XCTAssertTrue(reviews.isEmpty)
+
+        // Review deck2 first
+        let reviewDate = Date(timeIntervalSince1970: 1000)
+        try database.recordDeckReview(id: deck2.id, date: reviewDate)
+
+        reviews = try database.allDeckReviews()
+        XCTAssertEqual(reviews[deck2.id], reviewDate)
+        XCTAssertNil(reviews[deck1.id])
+
+        // Review deck1 later
+        let laterDate = Date(timeIntervalSince1970: 2000)
+        try database.recordDeckReview(id: deck1.id, date: laterDate)
+
+        reviews = try database.allDeckReviews()
+        XCTAssertEqual(reviews[deck1.id], laterDate)
+        XCTAssertEqual(reviews[deck2.id], reviewDate)
+
+        // When sorted by Recent, deck1 should come before deck2
+        let items = [
+            ReviewDeckItem(id: deck2.id, title: "Deck 2", dueCount: 1, totalCount: 1, lastReviewed: reviews[deck2.id]),
+            ReviewDeckItem(id: deck1.id, title: "Deck 1", dueCount: 1, totalCount: 1, lastReviewed: reviews[deck1.id])
+        ]
+        let sorted = items.sorted {
+            let d0 = $0.lastReviewed ?? .distantPast
+            let d1 = $1.lastReviewed ?? .distantPast
+            if d0 != d1 { return d0 > d1 }
+            return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
+        }
+        XCTAssertEqual(sorted.first?.id, deck1.id)
+    }
+
+    func testDocumentAndTopicRecentSortingCoupling() throws {
+        let database = try Database(inMemory: true)
+        let doc = Document(title: "Deep Work", filePath: "/tmp/deep_work.pdf", md5: "md5_dw", totalPages: 200)
+        try database.insertDocument(doc)
+        let topic = Topic(title: "Deep Work", bookMD5List: ["md5_dw"])
+        try database.insertTopic(topic)
+
+        let now = Date()
+        try database.updateDocumentLastVisited(id: doc.id, date: now)
+        try database.updateTopicUpdatedAt(id: topic.id, date: now)
+
+        let fetchedDoc = try XCTUnwrap(database.getDocument(id: doc.id))
+        let fetchedTopic = try XCTUnwrap(database.getTopic(id: topic.id))
+
+        XCTAssertEqual(fetchedDoc.lastVisited?.timeIntervalSince1970 ?? 0, now.timeIntervalSince1970, accuracy: 0.1)
+        XCTAssertEqual(fetchedTopic.updatedAt.timeIntervalSince1970, now.timeIntervalSince1970, accuracy: 0.1)
+    }
 }
