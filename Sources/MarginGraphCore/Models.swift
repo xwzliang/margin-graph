@@ -8,14 +8,36 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
     public var md5: String
     public var totalPages: Int
     public var lastVisited: Date?
+    public var lastPageIndex: Int
+    public var lastPageOffsetY: Double
+    public var mindPanX: Double?
+    public var mindPanY: Double?
+    public var mindZoomScale: Double?
 
-    public init(id: UUID = UUID(), title: String, filePath: String, md5: String, totalPages: Int, lastVisited: Date? = nil) {
+    public init(
+        id: UUID = UUID(),
+        title: String,
+        filePath: String,
+        md5: String,
+        totalPages: Int,
+        lastVisited: Date? = nil,
+        lastPageIndex: Int = 0,
+        lastPageOffsetY: Double = 0.0,
+        mindPanX: Double? = nil,
+        mindPanY: Double? = nil,
+        mindZoomScale: Double? = nil
+    ) {
         self.id = id
         self.title = title
         self.filePath = filePath
         self.md5 = md5
         self.totalPages = totalPages
         self.lastVisited = lastVisited
+        self.lastPageIndex = lastPageIndex
+        self.lastPageOffsetY = lastPageOffsetY
+        self.mindPanX = mindPanX
+        self.mindPanY = mindPanY
+        self.mindZoomScale = mindZoomScale
     }
 
     public static func stableUUID(_ raw: String) -> UUID {
@@ -48,13 +70,31 @@ public struct Topic: Codable, Hashable, Sendable, Identifiable {
     public var bookMD5List: [String]
     public var createdAt: Date
     public var updatedAt: Date
+    public var mindPanX: Double?
+    public var mindPanY: Double?
+    public var mindZoomScale: Double?
+    public var lastDocumentMD5: String?
 
-    public init(id: UUID = UUID(), title: String, bookMD5List: [String] = [], createdAt: Date = Date(), updatedAt: Date = Date()) {
+    public init(
+        id: UUID = UUID(),
+        title: String,
+        bookMD5List: [String] = [],
+        createdAt: Date = Date(),
+        updatedAt: Date = Date(),
+        mindPanX: Double? = nil,
+        mindPanY: Double? = nil,
+        mindZoomScale: Double? = nil,
+        lastDocumentMD5: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.bookMD5List = bookMD5List
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.mindPanX = mindPanX
+        self.mindPanY = mindPanY
+        self.mindZoomScale = mindZoomScale
+        self.lastDocumentMD5 = lastDocumentMD5
     }
 }
 

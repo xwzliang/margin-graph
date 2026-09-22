@@ -48,6 +48,86 @@ final class AppModel: ObservableObject {
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
     @Published var documentCurrentPage: [String: Int] = [:]
+    @Published var documentPageOffsets: [String: Double] = [:]
+    @Published var documentMindPan: [String: CGPoint] = [:]
+    @Published var documentMindZoom: [String: CGFloat] = [:]
+    @Published var topicMindPan: [UUID: CGPoint] = [:]
+    @Published var topicMindZoom: [UUID: CGFloat] = [:]
+
+    private var pendingPositionSaveTask: Task<Void, Never>? = nil
+    private var pendingDocPositions: [String: (page: Int, offset: Double)] = [:]
+    private var pendingDocMindMaps: [String: (pan: CGPoint, zoom: CGFloat)] = [:]
+    private var pendingTopicMindMaps: [UUID: (pan: CGPoint, zoom: CGFloat)] = [:]
+
+    var currentMindPan: CGPoint? {
+        if let md5 = activeDocument?.md5, let pan = documentMindPan[md5] {
+            return pan
+        }
+        if let topicID = selectedTopicID, let pan = topicMindPan[topicID] {
+            return pan
+        }
+        return nil
+    }
+
+    var currentMindZoom: CGFloat? {
+        if let md5 = activeDocument?.md5, let zoom = documentMindZoom[md5] {
+            return zoom
+        }
+        if let topicID = selectedTopicID, let zoom = topicMindZoom[topicID] {
+            return zoom
+        }
+        return nil
+    }
+
+    func updatePDFPosition(md5: String, pageIndex: Int, pageOffsetY: Double) {
+        documentCurrentPage[md5] = pageIndex
+        documentPageOffsets[md5] = pageOffsetY
+        pendingDocPositions[md5] = (pageIndex, pageOffsetY)
+        schedulePositionSave()
+    }
+
+    func updateMindMapPosition(pan: CGPoint, zoom: CGFloat) {
+        if let md5 = activeDocument?.md5 {
+            documentMindPan[md5] = pan
+            documentMindZoom[md5] = zoom
+            pendingDocMindMaps[md5] = (pan, zoom)
+        }
+        if let topicID = selectedTopicID {
+            topicMindPan[topicID] = pan
+            topicMindZoom[topicID] = zoom
+            pendingTopicMindMaps[topicID] = (pan, zoom)
+        }
+        schedulePositionSave()
+    }
+
+    private func schedulePositionSave() {
+        pendingPositionSaveTask?.cancel()
+        pendingPositionSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            self?.flushPendingPositions()
+        }
+    }
+
+    func flushPendingPositions() {
+        pendingPositionSaveTask?.cancel()
+        pendingPositionSaveTask = nil
+
+        for (md5, pos) in pendingDocPositions {
+            try? database.updateDocumentPosition(md5: md5, pageIndex: pos.page, pageOffsetY: pos.offset)
+        }
+        pendingDocPositions.removeAll()
+
+        for (md5, mm) in pendingDocMindMaps {
+            try? database.updateDocumentMindMapPosition(md5: md5, panX: Double(mm.pan.x), panY: Double(mm.pan.y), zoomScale: Double(mm.zoom))
+        }
+        pendingDocMindMaps.removeAll()
+
+        for (topicID, mm) in pendingTopicMindMaps {
+            try? database.updateTopicMindMapPosition(id: topicID, panX: Double(mm.pan.x), panY: Double(mm.pan.y), zoomScale: Double(mm.zoom))
+        }
+        pendingTopicMindMaps.removeAll()
+    }
 
     let database: Database
     let mediaStorage: MediaStorage
@@ -93,6 +173,11 @@ final class AppModel: ObservableObject {
         for name in undoNotifications {
             center.addObserver(forName: name, object: undoManager, queue: .main) { [weak self] _ in
                 self?.objectWillChange.send()
+            }
+        }
+        center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.flushPendingPositions()
             }
         }
     }
@@ -189,6 +274,30 @@ final class AppModel: ObservableObject {
         cardCounts = counts
         reviewDecks = decks
 
+        for doc in documents {
+            if documentCurrentPage[doc.md5] == nil {
+                documentCurrentPage[doc.md5] = doc.lastPageIndex
+            }
+            if documentPageOffsets[doc.md5] == nil {
+                documentPageOffsets[doc.md5] = doc.lastPageOffsetY
+            }
+            if documentMindPan[doc.md5] == nil, let px = doc.mindPanX, let py = doc.mindPanY {
+                documentMindPan[doc.md5] = CGPoint(x: px, y: py)
+            }
+            if documentMindZoom[doc.md5] == nil, let z = doc.mindZoomScale {
+                documentMindZoom[doc.md5] = CGFloat(z)
+            }
+        }
+
+        for topic in topics {
+            if topicMindPan[topic.id] == nil, let px = topic.mindPanX, let py = topic.mindPanY {
+                topicMindPan[topic.id] = CGPoint(x: px, y: py)
+            }
+            if topicMindZoom[topic.id] == nil, let z = topic.mindZoomScale {
+                topicMindZoom[topic.id] = CGFloat(z)
+            }
+        }
+
         if selectedTopicID == nil || !topics.contains(where: { $0.id == selectedTopicID }) {
             selectedTopicID = topics.first?.id
         }
@@ -203,6 +312,7 @@ final class AppModel: ObservableObject {
     }
 
     func enterStudyWorkspace(topic: Topic) {
+        flushPendingPositions()
         let now = Date()
         try? database.updateTopicUpdatedAt(id: topic.id, date: now)
         let associatedDocs = (try? database.documentsForTopic(id: topic.id)) ?? []
@@ -222,10 +332,12 @@ final class AppModel: ObservableObject {
     }
 
     func exitStudyWorkspace() {
+        flushPendingPositions()
         isInStudyWorkspace = false
     }
 
     func openDocumentInReader(document: Document) {
+        flushPendingPositions()
         let now = Date()
         try? database.updateDocumentLastVisited(id: document.id, date: now)
 
@@ -315,6 +427,8 @@ final class AppModel: ObservableObject {
 
         if let activeDocument, studyDocuments.contains(where: { $0.md5 == activeDocument.md5 }) {
             reloadDocumentCards()
+        } else if let lastMD5 = selectedTopic?.lastDocumentMD5, let lastDoc = studyDocuments.first(where: { $0.md5 == lastMD5 }) {
+            switchToDocument(lastDoc)
         } else if let first = studyDocuments.first {
             switchToDocument(first)
         } else {
@@ -423,6 +537,7 @@ final class AppModel: ObservableObject {
     }
 
     func switchToDocument(_ document: Document) {
+        flushPendingPositions()
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
         activeDocument = document
         manager = loaded
@@ -430,6 +545,7 @@ final class AppModel: ObservableObject {
         try? database.updateDocumentLastVisited(id: document.id, date: now)
         if let topicID = selectedTopicID {
             try? database.updateTopicUpdatedAt(id: topicID, date: now)
+            try? database.updateTopicLastDocument(id: topicID, md5: document.md5)
         }
         reloadLibrary()
         loadBookmarks()
@@ -2105,6 +2221,11 @@ struct StudyWorkspaceView: View {
                 selectedCardID: model.selectedCardID,
                 cardIDToCenter: $model.cardIDToCenter,
                 editingCardTitleID: $model.editingCardTitleID,
+                initialPanOffset: model.currentMindPan,
+                initialZoomScale: model.currentMindZoom,
+                onViewportChanged: { [weak model] pan, zoom in
+                    model?.updateMindMapPosition(pan: pan, zoom: zoom)
+                },
                 activeToolbarOwner: model.activeToolbarOwner,
                 mediaStorage: model.mediaStorage,
                 topics: model.topics,
@@ -2175,9 +2296,13 @@ struct StudyWorkspaceView: View {
                 studyDocuments: model.studyDocuments,
                 activeDocument: model.activeDocument,
                 bookmarks: model.documentBookmarks,
-                initialPageIndex: model.documentCurrentPage[manager.md5] ?? 0,
+                initialPageIndex: model.documentCurrentPage[manager.md5] ?? model.activeDocument?.lastPageIndex ?? 0,
+                initialPageOffsetY: model.documentPageOffsets[manager.md5] ?? model.activeDocument?.lastPageOffsetY ?? 0.0,
                 onPageChanged: { [weak model] page in
                     model?.documentCurrentPage[manager.md5] = page
+                },
+                onPositionChanged: { [weak model] page, offset in
+                    model?.updatePDFPosition(md5: manager.md5, pageIndex: page, pageOffsetY: offset)
                 },
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
@@ -2277,6 +2402,7 @@ struct MarginGraphApp: App {
                         }
                     )
                     .onChange(of: model.selectedMainTab) { _, _ in
+                        model.flushPendingPositions()
                         model.isInStudyWorkspace = false
                     }
                     .transition(.move(edge: .leading))

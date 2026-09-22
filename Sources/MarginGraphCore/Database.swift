@@ -68,11 +68,20 @@ public final class Database: @unchecked Sendable {
         try execute("""
         CREATE TABLE IF NOT EXISTS documents(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, file_path TEXT NOT NULL,
-            md5 TEXT NOT NULL UNIQUE, total_pages INTEGER NOT NULL, last_visited REAL
+            md5 TEXT NOT NULL UNIQUE, total_pages INTEGER NOT NULL, last_visited REAL,
+            last_page_index INTEGER NOT NULL DEFAULT 0,
+            last_page_offset_y REAL NOT NULL DEFAULT 0.0,
+            mind_pan_x REAL,
+            mind_pan_y REAL,
+            mind_zoom_scale REAL
         );
         CREATE TABLE IF NOT EXISTS topics(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, book_md5_list TEXT NOT NULL,
-            created_at REAL NOT NULL, updated_at REAL NOT NULL
+            created_at REAL NOT NULL, updated_at REAL NOT NULL,
+            mind_pan_x REAL,
+            mind_pan_y REAL,
+            mind_zoom_scale REAL,
+            last_document_md5 TEXT
         );
         CREATE TABLE IF NOT EXISTS cards(
             id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, book_md5 TEXT, title TEXT NOT NULL,
@@ -130,6 +139,33 @@ public final class Database: @unchecked Sendable {
         }
         if try !hasColumn("emphasis_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN emphasis_rects TEXT NOT NULL DEFAULT '[]';")
+        }
+        if try !hasColumn("last_page_index", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN last_page_index INTEGER NOT NULL DEFAULT 0;")
+        }
+        if try !hasColumn("last_page_offset_y", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN last_page_offset_y REAL NOT NULL DEFAULT 0.0;")
+        }
+        if try !hasColumn("mind_pan_x", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN mind_pan_x REAL;")
+        }
+        if try !hasColumn("mind_pan_y", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN mind_pan_y REAL;")
+        }
+        if try !hasColumn("mind_zoom_scale", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN mind_zoom_scale REAL;")
+        }
+        if try !hasColumn("mind_pan_x", in: "topics") {
+            try execute("ALTER TABLE topics ADD COLUMN mind_pan_x REAL;")
+        }
+        if try !hasColumn("mind_pan_y", in: "topics") {
+            try execute("ALTER TABLE topics ADD COLUMN mind_pan_y REAL;")
+        }
+        if try !hasColumn("mind_zoom_scale", in: "topics") {
+            try execute("ALTER TABLE topics ADD COLUMN mind_zoom_scale REAL;")
+        }
+        if try !hasColumn("last_document_md5", in: "topics") {
+            try execute("ALTER TABLE topics ADD COLUMN last_document_md5 TEXT;")
         }
         try repairDocumentIDs()
     }
@@ -226,6 +262,15 @@ public final class Database: @unchecked Sendable {
             if doc.filePath.isEmpty && !existing.filePath.isEmpty {
                 doc.filePath = existing.filePath
             }
+            if doc.lastPageIndex == 0 && doc.lastPageOffsetY == 0 && existing.lastPageIndex != 0 {
+                doc.lastPageIndex = existing.lastPageIndex
+                doc.lastPageOffsetY = existing.lastPageOffsetY
+            }
+            if doc.mindPanX == nil && existing.mindPanX != nil {
+                doc.mindPanX = existing.mindPanX
+                doc.mindPanY = existing.mindPanY
+                doc.mindZoomScale = existing.mindZoomScale
+            }
         } else if let collision = try getDocument(id: doc.id), collision.md5 != doc.md5 {
             doc.id = Document.stableUUID(doc.md5)
             if let stillCollision = try getDocument(id: doc.id), stillCollision.md5 != doc.md5 {
@@ -261,13 +306,18 @@ public final class Database: @unchecked Sendable {
             }
         }
 
-        try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited) VALUES(?,?,?,?,?,?)") { statement in
+        try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale) VALUES(?,?,?,?,?,?,?,?,?,?,?)") { statement in
             bind(doc.id.uuidString, to: 1, in: statement)
             bind(doc.title, to: 2, in: statement)
             bind(doc.filePath, to: 3, in: statement)
             bind(doc.md5, to: 4, in: statement)
             bind(doc.totalPages, to: 5, in: statement)
             bind(doc.lastVisited?.timeIntervalSince1970, to: 6, in: statement)
+            bind(doc.lastPageIndex, to: 7, in: statement)
+            bind(doc.lastPageOffsetY, to: 8, in: statement)
+            bind(doc.mindPanX, to: 9, in: statement)
+            bind(doc.mindPanY, to: 10, in: statement)
+            bind(doc.mindZoomScale, to: 11, in: statement)
             try requireDone(statement)
         }
     }
@@ -341,7 +391,7 @@ public final class Database: @unchecked Sendable {
     }
 
     private func document(where clause: String, value: String) throws -> Document? {
-        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited FROM documents WHERE \(clause) LIMIT 1") { statement in
+        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale FROM documents WHERE \(clause) LIMIT 1") { statement in
             bind(value, to: 1, in: statement)
             guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
             return decodeDocument(statement)
@@ -349,7 +399,7 @@ public final class Database: @unchecked Sendable {
     }
 
     public func allDocuments() throws -> [Document] {
-        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited FROM documents ORDER BY title") { statement in
+        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale FROM documents ORDER BY title") { statement in
             var result: [Document] = []
             while sqlite3_step(statement) == SQLITE_ROW {
                 if let row = decodeDocument(statement) { result.append(row) }
@@ -369,30 +419,80 @@ public final class Database: @unchecked Sendable {
             filePath: path,
             md5: md5,
             totalPages: int(statement, 4) ?? 0,
-            lastVisited: double(statement, 5).map(Date.init(timeIntervalSince1970:))
+            lastVisited: double(statement, 5).map(Date.init(timeIntervalSince1970:)),
+            lastPageIndex: int(statement, 6) ?? 0,
+            lastPageOffsetY: double(statement, 7) ?? 0.0,
+            mindPanX: double(statement, 8),
+            mindPanY: double(statement, 9),
+            mindZoomScale: double(statement, 10)
         )
+    }
+
+    public func updateDocumentPosition(md5: String, pageIndex: Int, pageOffsetY: Double) throws {
+        try withStatement("UPDATE documents SET last_page_index = ?, last_page_offset_y = ? WHERE md5 = ?") { statement in
+            bind(pageIndex, to: 1, in: statement)
+            bind(pageOffsetY, to: 2, in: statement)
+            bind(md5, to: 3, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    public func updateDocumentMindMapPosition(md5: String, panX: Double, panY: Double, zoomScale: Double) throws {
+        try withStatement("UPDATE documents SET mind_pan_x = ?, mind_pan_y = ?, mind_zoom_scale = ? WHERE md5 = ?") { statement in
+            bind(panX, to: 1, in: statement)
+            bind(panY, to: 2, in: statement)
+            bind(zoomScale, to: 3, in: statement)
+            bind(md5, to: 4, in: statement)
+            try requireDone(statement)
+        }
     }
 
     public func insertTopic(_ topic: Topic) throws {
         let books = try jsonString(topic.bookMD5List)
-        try withStatement("INSERT OR REPLACE INTO topics(id,title,book_md5_list,created_at,updated_at) VALUES(?,?,?,?,?)") { statement in
+        try withStatement("INSERT OR REPLACE INTO topics(id,title,book_md5_list,created_at,updated_at,mind_pan_x,mind_pan_y,mind_zoom_scale,last_document_md5) VALUES(?,?,?,?,?,?,?,?,?)") { statement in
             bind(topic.id.uuidString, to: 1, in: statement)
             bind(topic.title, to: 2, in: statement)
             bind(books, to: 3, in: statement)
             bind(topic.createdAt.timeIntervalSince1970, to: 4, in: statement)
             bind(topic.updatedAt.timeIntervalSince1970, to: 5, in: statement)
+            bind(topic.mindPanX, to: 6, in: statement)
+            bind(topic.mindPanY, to: 7, in: statement)
+            bind(topic.mindZoomScale, to: 8, in: statement)
+            bind(topic.lastDocumentMD5, to: 9, in: statement)
             try requireDone(statement)
         }
     }
 
     public func updateTopic(_ topic: Topic) throws {
         let books = try jsonString(topic.bookMD5List)
-        try withStatement("UPDATE topics SET title=?,book_md5_list=?,created_at=?,updated_at=? WHERE id=?") { statement in
+        try withStatement("UPDATE topics SET title=?,book_md5_list=?,created_at=?,updated_at=?,mind_pan_x=?,mind_pan_y=?,mind_zoom_scale=?,last_document_md5=? WHERE id=?") { statement in
             bind(topic.title, to: 1, in: statement)
             bind(books, to: 2, in: statement)
             bind(topic.createdAt.timeIntervalSince1970, to: 3, in: statement)
             bind(topic.updatedAt.timeIntervalSince1970, to: 4, in: statement)
-            bind(topic.id.uuidString, to: 5, in: statement)
+            bind(topic.mindPanX, to: 5, in: statement)
+            bind(topic.mindPanY, to: 6, in: statement)
+            bind(topic.mindZoomScale, to: 7, in: statement)
+            bind(topic.lastDocumentMD5, to: 8, in: statement)
+            bind(topic.id.uuidString, to: 9, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    public func updateTopicMindMapPosition(id: UUID, panX: Double, panY: Double, zoomScale: Double) throws {
+        try withStatement("UPDATE topics SET mind_pan_x = ?, mind_pan_y = ?, mind_zoom_scale = ? WHERE id = ?") { statement in
+            bind(panX, to: 1, in: statement)
+            bind(panY, to: 2, in: statement)
+            bind(zoomScale, to: 3, in: statement)
+            bind(id.uuidString, to: 4, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    public func updateTopicLastDocument(id: UUID, md5: String) throws {
+        try withStatement("UPDATE topics SET last_document_md5 = ? WHERE id = ?") { statement in
+            bind(md5, to: 1, in: statement)
+            bind(id.uuidString, to: 2, in: statement)
             try requireDone(statement)
         }
     }
@@ -402,7 +502,7 @@ public final class Database: @unchecked Sendable {
     }
 
     public func getTopic(id: UUID) throws -> Topic? {
-        try withStatement("SELECT id,title,book_md5_list,created_at,updated_at FROM topics WHERE id=?") { statement in
+        try withStatement("SELECT id,title,book_md5_list,created_at,updated_at,mind_pan_x,mind_pan_y,mind_zoom_scale,last_document_md5 FROM topics WHERE id=?") { statement in
             bind(id.uuidString, to: 1, in: statement)
             guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
             return try decodeTopic(statement)
@@ -410,7 +510,7 @@ public final class Database: @unchecked Sendable {
     }
 
     public func allTopics() throws -> [Topic] {
-        try withStatement("SELECT id,title,book_md5_list,created_at,updated_at FROM topics ORDER BY title") { statement in
+        try withStatement("SELECT id,title,book_md5_list,created_at,updated_at,mind_pan_x,mind_pan_y,mind_zoom_scale,last_document_md5 FROM topics ORDER BY title") { statement in
             var result: [Topic] = []
             while sqlite3_step(statement) == SQLITE_ROW {
                 if let row = try decodeTopic(statement) { result.append(row) }
@@ -428,7 +528,11 @@ public final class Database: @unchecked Sendable {
             title: title,
             bookMD5List: books,
             createdAt: Date(timeIntervalSince1970: double(statement, 3) ?? 0),
-            updatedAt: Date(timeIntervalSince1970: double(statement, 4) ?? 0)
+            updatedAt: Date(timeIntervalSince1970: double(statement, 4) ?? 0),
+            mindPanX: double(statement, 5),
+            mindPanY: double(statement, 6),
+            mindZoomScale: double(statement, 7),
+            lastDocumentMD5: text(statement, 8)
         )
     }
 

@@ -1008,4 +1008,32 @@ final class PDFTests: XCTestCase {
         let dividerXExtreme = totalWidth - candidateExtreme
         XCTAssertEqual(dividerXExtreme, 320, "Divider should not go past minimum MindMap width")
     }
+
+    func testRestorePositionAndCurrentVisiblePosition() throws {
+        let pdfView = InteractivePDFView(frame: NSRect(x: 0, y: 0, width: 600, height: 800))
+        let doc = PDFDocument()
+        for _ in 0..<5 {
+            let page = PDFPage()
+            page.setBounds(CGRect(x: 0, y: 0, width: 600, height: 800), for: .cropBox)
+            doc.insert(page, at: doc.pageCount)
+        }
+        pdfView.document = doc
+        pdfView.displayMode = .singlePageContinuous
+        pdfView.layoutDocumentView()
+
+        var reportedPage: Int?
+        var reportedOffset: CGFloat?
+        pdfView.onPositionChanged = { page, offset in
+            reportedPage = page
+            reportedOffset = offset
+        }
+
+        // Restore to page 2, offset 150
+        pdfView.restorePosition(pageIndex: 2, pageOffsetY: 150)
+
+        // After restoring, currentVisiblePosition should be page 2
+        let pos = pdfView.currentVisiblePosition()
+        XCTAssertNotNil(pos)
+        XCTAssertEqual(pos?.pageIndex, 2)
+    }
 }

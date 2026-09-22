@@ -80,7 +80,9 @@ public struct MarginNotePDFContainerView: View {
     public var bookmarks: Set<Int>
     public var onToggleBookmark: ((Int, Bool) -> Void)?
     public var initialPageIndex: Int
+    public var initialPageOffsetY: CGFloat
     public var onPageChanged: ((Int) -> Void)?
+    public var onPositionChanged: ((Int, CGFloat) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -114,7 +116,9 @@ public struct MarginNotePDFContainerView: View {
         activeDocument: Document? = nil,
         bookmarks: Set<Int> = [],
         initialPageIndex: Int = 0,
+        initialPageOffsetY: CGFloat = 0,
         onPageChanged: ((Int) -> Void)? = nil,
+        onPositionChanged: ((Int, CGFloat) -> Void)? = nil,
         onSwitchDocument: ((Document) -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
         onToggleBookmark: ((Int, Bool) -> Void)? = nil,
@@ -141,7 +145,9 @@ public struct MarginNotePDFContainerView: View {
         self.activeDocument = activeDocument
         self.bookmarks = bookmarks
         self.initialPageIndex = initialPageIndex
+        self.initialPageOffsetY = initialPageOffsetY
         self.onPageChanged = onPageChanged
+        self.onPositionChanged = onPositionChanged
         self.onSwitchDocument = onSwitchDocument
         self.onManageDocuments = onManageDocuments
         self.onToggleBookmark = onToggleBookmark
@@ -485,10 +491,15 @@ public struct MarginNotePDFContainerView: View {
                     activeToolbarOwner: activeToolbarOwner,
                     jumpTarget: jumpTarget ?? internalJumpTarget,
                     currentPageIndex: $currentPageIndex,
+                    initialPageOffsetY: initialPageOffsetY,
                     searchQuery: searchQuery,
                     searchMatchIndex: currentMatchIndex,
                     onSearchResultCount: { count in
                         totalMatches = count
+                    },
+                    onPositionChanged: { page, offset in
+                        onPageChanged?(page)
+                        onPositionChanged?(page, offset)
                     },
                     onExcerpt: onExcerpt,
                     onCreateCardWithColor: onCreateCardWithColor,

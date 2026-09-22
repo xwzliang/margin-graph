@@ -24,6 +24,9 @@ public struct MindMapCanvasView: View {
     public var onNewNote: ((CGPoint) -> Void)?
     public var onUpdateTitle: ((UUID, String) -> Void)?
     public var onAddToDeck: ((NoteCard) -> Void)?
+    public var initialPanOffset: CGPoint?
+    public var initialZoomScale: CGFloat?
+    public var onViewportChanged: ((CGPoint, CGFloat) -> Void)?
     @Binding public var editingCardTitleID: UUID?
 
     @State private var viewport = CanvasViewport()
@@ -50,6 +53,9 @@ public struct MindMapCanvasView: View {
         selectedCardID: UUID? = nil,
         cardIDToCenter: Binding<UUID?> = .constant(nil),
         editingCardTitleID: Binding<UUID?> = .constant(nil),
+        initialPanOffset: CGPoint? = nil,
+        initialZoomScale: CGFloat? = nil,
+        onViewportChanged: ((CGPoint, CGFloat) -> Void)? = nil,
         activeToolbarOwner: ToolbarOwner = .none,
         mediaStorage: MediaStorage? = nil,
         topics: [Topic] = [],
@@ -75,6 +81,9 @@ public struct MindMapCanvasView: View {
         self.selectedCardID = selectedCardID
         self._cardIDToCenter = cardIDToCenter
         self._editingCardTitleID = editingCardTitleID
+        self.initialPanOffset = initialPanOffset
+        self.initialZoomScale = initialZoomScale
+        self.onViewportChanged = onViewportChanged
         self.activeToolbarOwner = activeToolbarOwner
         self.mediaStorage = mediaStorage
         self.topics = topics
@@ -152,10 +161,17 @@ public struct MindMapCanvasView: View {
                     if proxy.size.width > 20 && proxy.size.height > 20 {
                         viewport.viewportSize = proxy.size
                     }
-                    if let targetID = cardIDToCenter ?? selectedCardID, let frame = frames[targetID] {
+                    if let targetID = cardIDToCenter, let frame = frames[targetID] {
                         viewport.center(on: frame)
                         hasInitialFitted = true
                         cardIDToCenter = nil
+                    } else if let savedPan = initialPanOffset, let savedZoom = initialZoomScale {
+                        viewport.panOffset = savedPan
+                        viewport.zoomScale = savedZoom
+                        hasInitialFitted = true
+                    } else if let targetID = selectedCardID, let frame = frames[targetID] {
+                        viewport.center(on: frame)
+                        hasInitialFitted = true
                     } else if !hasInitialFitted && !cards.isEmpty {
                         viewport.zoomToFit(nodes: Array(frames.values))
                         hasInitialFitted = true
@@ -179,7 +195,38 @@ public struct MindMapCanvasView: View {
                     }
                 }
                 .onChange(of: selectedTopic?.id) { _, _ in
-                    hasInitialFitted = false
+                    if let targetID = cardIDToCenter, let frame = frames[targetID] {
+                        viewport.center(on: frame)
+                        hasInitialFitted = true
+                        cardIDToCenter = nil
+                    } else if let savedPan = initialPanOffset, let savedZoom = initialZoomScale {
+                        viewport.panOffset = savedPan
+                        viewport.zoomScale = savedZoom
+                        hasInitialFitted = true
+                    } else {
+                        hasInitialFitted = false
+                        if !cards.isEmpty {
+                            viewport.zoomToFit(nodes: Array(frames.values))
+                            hasInitialFitted = true
+                        }
+                    }
+                }
+                .onChange(of: initialPanOffset) { _, newPan in
+                    if let newPan, let newZoom = initialZoomScale {
+                        viewport.panOffset = newPan
+                        viewport.zoomScale = newZoom
+                        hasInitialFitted = true
+                    }
+                }
+                .onChange(of: viewport.panOffset) { _, newPan in
+                    if hasInitialFitted {
+                        onViewportChanged?(newPan, viewport.zoomScale)
+                    }
+                }
+                .onChange(of: viewport.zoomScale) { _, newZoom in
+                    if hasInitialFitted {
+                        onViewportChanged?(viewport.panOffset, newZoom)
+                    }
                 }
                 .onChange(of: selectedCardID) { _, newID in
                     if let newID, let frame = frames[newID] {

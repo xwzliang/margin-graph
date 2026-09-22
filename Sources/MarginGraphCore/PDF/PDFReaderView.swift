@@ -595,6 +595,8 @@ public struct PDFReaderView: NSViewRepresentable {
     public var activeToolbarOwner: ToolbarOwner
     public var jumpTarget: PDFJumpTarget?
     @Binding public var currentPageIndex: Int
+    public var initialPageOffsetY: CGFloat = 0
+    public var onPositionChanged: ((Int, CGFloat) -> Void)? = nil
     public var onExcerpt: ((PDFExcerpt) -> Void)?
     public var onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)?
     public var onEditCard: ((UUID) -> Void)?
@@ -623,9 +625,11 @@ public struct PDFReaderView: NSViewRepresentable {
         activeToolbarOwner: ToolbarOwner = .none,
         jumpTarget: PDFJumpTarget? = nil,
         currentPageIndex: Binding<Int> = .constant(0),
+        initialPageOffsetY: CGFloat = 0,
         searchQuery: String = "",
         searchMatchIndex: Int = 0,
         onSearchResultCount: ((Int) -> Void)? = nil,
+        onPositionChanged: ((Int, CGFloat) -> Void)? = nil,
         onExcerpt: ((PDFExcerpt) -> Void)? = nil,
         onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)? = nil,
         onEditCard: ((UUID) -> Void)? = nil,
@@ -650,9 +654,11 @@ public struct PDFReaderView: NSViewRepresentable {
         self.activeToolbarOwner = activeToolbarOwner
         self.jumpTarget = jumpTarget
         self._currentPageIndex = currentPageIndex
+        self.initialPageOffsetY = initialPageOffsetY
         self.searchQuery = searchQuery
         self.searchMatchIndex = searchMatchIndex
         self.onSearchResultCount = onSearchResultCount
+        self.onPositionChanged = onPositionChanged
         self.onExcerpt = onExcerpt
         self.onCreateCardWithColor = onCreateCardWithColor
         self.onEditCard = onEditCard
@@ -681,8 +687,9 @@ public struct PDFReaderView: NSViewRepresentable {
         view.pageBreakMargins = NSEdgeInsets(top: 0.25, left: 0, bottom: 0.25, right: 0)
         view.backgroundColor = NSColor(white: 0.92, alpha: 1.0)
         view.document = manager.document
-        if currentPageIndex > 0, let page = view.document?.page(at: currentPageIndex) {
-            view.go(to: page)
+        view.onPositionChanged = onPositionChanged
+        if currentPageIndex > 0 || initialPageOffsetY > 1 {
+            view.restorePosition(pageIndex: currentPageIndex, pageOffsetY: initialPageOffsetY)
             context.coordinator.lastPageIndex = currentPageIndex
         }
         configure(view)
@@ -710,9 +717,12 @@ public struct PDFReaderView: NSViewRepresentable {
 
     public func updateNSView(_ view: InteractivePDFView, context: Context) {
         context.coordinator.parent = self
+        view.onPositionChanged = onPositionChanged
         if view.document !== manager.document {
             view.document = manager.document
             context.coordinator.setupObserver(for: view)
+            view.restorePosition(pageIndex: currentPageIndex, pageOffsetY: initialPageOffsetY)
+            context.coordinator.lastPageIndex = currentPageIndex
         }
 
         view.displayMode = displayMode == .continuous ? .singlePageContinuous : .singlePage
@@ -963,10 +973,19 @@ public struct PDFReaderView: NSViewRepresentable {
                 MainActor.assumeIsolated {
                     guard let self, let view, let doc = view.document, let current = view.currentPage else { return }
                     let idx = doc.index(for: current)
-                    if idx != NSNotFound && self.parent.currentPageIndex != idx {
-                        self.lastPageIndex = idx
-                        self.parent.currentPageIndex = idx
-                        self.parent.onScroll?()
+                    if idx != NSNotFound {
+                        if self.parent.currentPageIndex != idx {
+                            self.lastPageIndex = idx
+                            self.parent.currentPageIndex = idx
+                            self.parent.onScroll?()
+                        }
+                        if !view.isRestoringPosition {
+                            if let pos = view.currentVisiblePosition() {
+                                self.parent.onPositionChanged?(pos.pageIndex, pos.pageOffsetY)
+                            } else {
+                                self.parent.onPositionChanged?(idx, 0)
+                            }
+                        }
                     }
                 }
             }
@@ -983,6 +1002,9 @@ public struct PDFReaderView: NSViewRepresentable {
 }
 
 public final class InteractivePDFView: PDFView {
+    public var onPositionChanged: ((Int, CGFloat) -> Void)?
+    internal var isRestoringPosition: Bool = false
+    private var pendingRestorePosition: (pageIndex: Int, pageOffsetY: CGFloat)? = nil
     var selectionTool: PDFSelectionTool = .textSelection
     var marqueeColor: NSColor = .systemYellow
     var bookMD5: String = ""
@@ -1215,9 +1237,76 @@ public final class InteractivePDFView: PDFView {
         super.viewDidMoveToWindow()
         if window != nil {
             setupScrollObserver()
+            if let pending = pendingRestorePosition {
+                pendingRestorePosition = nil
+                restorePosition(pageIndex: pending.pageIndex, pageOffsetY: pending.pageOffsetY)
+            }
         } else {
             removeScrollObserver()
             hideToolbar()
+        }
+    }
+
+    public func currentVisiblePosition() -> (pageIndex: Int, pageOffsetY: CGFloat)? {
+        guard let doc = document, doc.pageCount > 0 else { return nil }
+        let topPointInView = NSPoint(x: bounds.midX, y: isFlipped ? bounds.minY + 5 : bounds.maxY - 5)
+        guard let page = self.page(for: topPointInView, nearest: true) else {
+            if let current = self.currentPage {
+                let idx = doc.index(for: current)
+                return (idx, 0)
+            }
+            return nil
+        }
+        let idx = doc.index(for: page)
+        guard idx != NSNotFound else { return nil }
+        let pointInPage = convert(topPointInView, to: page)
+        let pageBounds = page.bounds(for: .cropBox)
+        let offsetY = max(0, pageBounds.maxY - pointInPage.y)
+        return (idx, offsetY)
+    }
+
+    public func restorePosition(pageIndex: Int, pageOffsetY: CGFloat) {
+        guard let doc = document, pageIndex >= 0, pageIndex < doc.pageCount,
+              let page = doc.page(at: pageIndex) else { return }
+
+        if pageOffsetY <= 1 {
+            isRestoringPosition = true
+            go(to: page)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.isRestoringPosition = false
+            }
+            return
+        }
+
+        layoutDocumentView()
+        guard let scrollView = activeScrollView,
+              let docView = documentView else {
+            isRestoringPosition = true
+            go(to: page)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.isRestoringPosition = false
+            }
+            return
+        }
+        let clipView = scrollView.contentView
+        if clipView.bounds.height <= 10 || docView.bounds.height <= 10 {
+            pendingRestorePosition = (pageIndex, pageOffsetY)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                if let pending = self?.pendingRestorePosition {
+                    self?.pendingRestorePosition = nil
+                    self?.restorePosition(pageIndex: pending.pageIndex, pageOffsetY: pending.pageOffsetY)
+                }
+            }
+            return
+        }
+
+        isRestoringPosition = true
+        let pageBounds = page.bounds(for: .cropBox)
+        let targetY = max(pageBounds.minY, pageBounds.maxY - pageOffsetY)
+        let dest = PDFDestination(page: page, at: CGPoint(x: pageBounds.minX, y: targetY))
+        go(to: dest)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.20) { [weak self] in
+            self?.isRestoringPosition = false
         }
     }
 
@@ -1258,6 +1347,9 @@ public final class InteractivePDFView: PDFView {
                         if currentOrigin != last {
                             self.lastClipOrigin = currentOrigin
                             self.onScroll?()
+                            if !self.isRestoringPosition, let pos = self.currentVisiblePosition() {
+                                self.onPositionChanged?(pos.pageIndex, pos.pageOffsetY)
+                            }
                         }
                     } else {
                         self.lastClipOrigin = currentOrigin

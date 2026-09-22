@@ -319,10 +319,30 @@ Structure each entry concisely with actionable rules:
     5. In `MindMapCanvasView`, handle `cardIDToCenter` in `onAppear`, `onChange(of: cardIDToCenter)`, and `onChange(of: proxy.size)` to guarantee centering even across view mounts.
     6. Include a fallback in `activePDFCards` to load `selectedCardID` directly from the database if not yet cached in `mindMapCards` or `documentCards`.
 
-
-
-
-
-
-
-
+- **Document and MindMap Position Persistence Across Sessions & App Restarts**:
+  - **Trap 1: Disk I/O Thrashing & UI Freezes on Active Scrolling / Dragging**:
+    High-frequency gesture events (trackpad momentum scrolling in PDFKit, canvas dragging / pinch-to-zoom in SwiftUI) fire up to 120 times per second. Executing synchronous SQLite `UPDATE` statements on every event immediately causes main-thread frame drops, disk thrashing, and beachball hangs.
+    - **Rule**: Update in-memory state dictionaries (`documentCurrentPage`, `documentPageOffsets`, `documentMindPan`, `documentMindZoom`, `topicMindPan`, `topicMindZoom`) synchronously for instant 0-latency UI access, and debounce SQLite writes using a 300ms timer (`schedulePositionSave()`).
+    - **Rule**: Synchronously commit all pending updates (`flushPendingPositions()`) upon document switching (`switchToDocument`), workspace exit, sidebar tab changes, and application shutdown (`NSApplication.willTerminateNotification`).
+  - **Trap 2: Overwriting Saved Reading Positions with Transient Defaults**:
+    Upon loading a PDF, `PDFView` initializes at page 0 before layout completes or before programmatic restoration executes. If scroll or page-change observers broadcast immediately during view setup, they will overwrite the user's saved position (e.g. page 15) with page 0.
+    - **Rule**: Set an internal guard flag (`isRestoringPosition = true`) during `restorePosition` and release it only after layout settles (`DispatchQueue.main.asyncAfter(deadline: .now() + 0.20)`). Suppress `onPositionChanged` callbacks while `isRestoringPosition` is active.
+    - **Rule**: In `insertDocument`, if an existing database document already has non-zero position data (`lastPageIndex > 0 || lastPageOffsetY > 0 || mindPanX != nil`), never overwrite it with default zeros/nils from re-import or discovery scans.
+  - **Trap 3: Zoom-Independent PDF Page Offset Calculation**:
+    Storing raw viewport scroll offsets (`clipView.bounds.origin.y`) fails because window resizes and display scale factors alter absolute scroll coordinates.
+    - **Rule**: Calculate position relative to page coordinate space:
+      ```swift
+      let topPointInView = NSPoint(x: bounds.midX, y: isFlipped ? bounds.minY + 5 : bounds.maxY - 5)
+      let pointInPage = convert(topPointInView, to: page)
+      let pageBounds = page.bounds(for: .cropBox)
+      let offsetY = max(0, pageBounds.maxY - pointInPage.y)
+      ```
+      To restore: `PDFDestination(page: page, at: CGPoint(x: pageBounds.minX, y: max(pageBounds.minY, pageBounds.maxY - offsetY)))` and call `view.go(to: dest)`. Because PDF page points are always 72 points/inch in PDF space, this is completely zoom- and window-size independent.
+  - **Trap 4: Viewport Restoration Priority in MindMap Canvas**:
+    Calling `zoomToFit` on view appear resets the user's canvas position to fit all nodes from the beginning every time a document or notebook is opened.
+    - **Rule**: In `MindMapCanvasView.onAppear` and `.onChange(of: selectedTopic?.id)`, respect strict priority:
+      1. `cardIDToCenter` (explicit request to focus a card, e.g. review jump)
+      2. `initialPanOffset` & `initialZoomScale` (saved session position)
+      3. `selectedCardID` (if no saved position exists)
+      4. `zoomToFit(nodes:)` (fallback for new notebooks without saved positions)
+    - **Rule**: Only emit `onViewportChanged` when `hasInitialFitted == true` to prevent initial default viewport coordinates `(40, 40)` from broadcasting.

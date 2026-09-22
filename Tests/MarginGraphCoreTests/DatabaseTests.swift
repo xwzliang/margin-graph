@@ -339,5 +339,84 @@ final class DatabaseTests: XCTestCase {
             XCTAssertTrue(FileManager.default.fileExists(atPath: screenplayDocs[0].filePath))
         }
     }
+
+    func testDocumentAndTopicPositionPersistence() throws {
+        let db = try Database(inMemory: true)
+        let docMD5 = "test_md5_persistence"
+        let doc = Document(
+            title: "Test Book",
+            filePath: "/tmp/test_book.pdf",
+            md5: docMD5,
+            totalPages: 50,
+            lastPageIndex: 7,
+            lastPageOffsetY: 145.5,
+            mindPanX: 80.0,
+            mindPanY: -120.0,
+            mindZoomScale: 1.5
+        )
+        try db.insertDocument(doc)
+
+        let fetched = try db.getDocumentByMD5(md5: docMD5)
+        XCTAssertNotNil(fetched)
+        XCTAssertEqual(fetched?.lastPageIndex, 7)
+        XCTAssertEqual(fetched?.lastPageOffsetY, 145.5)
+        XCTAssertEqual(fetched?.mindPanX, 80.0)
+        XCTAssertEqual(fetched?.mindPanY, -120.0)
+        XCTAssertEqual(fetched?.mindZoomScale, 1.5)
+
+        // Update PDF position
+        try db.updateDocumentPosition(md5: docMD5, pageIndex: 12, pageOffsetY: 310.0)
+        let updatedPDF = try db.getDocumentByMD5(md5: docMD5)
+        XCTAssertEqual(updatedPDF?.lastPageIndex, 12)
+        XCTAssertEqual(updatedPDF?.lastPageOffsetY, 310.0)
+
+        // Update MindMap position
+        try db.updateDocumentMindMapPosition(md5: docMD5, panX: 250.0, panY: -400.0, zoomScale: 0.8)
+        let updatedMM = try db.getDocumentByMD5(md5: docMD5)
+        XCTAssertEqual(updatedMM?.mindPanX, 250.0)
+        XCTAssertEqual(updatedMM?.mindPanY, -400.0)
+        XCTAssertEqual(updatedMM?.mindZoomScale, 0.8)
+
+        // Test topic position persistence
+        let topic = Topic(
+            title: "Topic Persistence",
+            bookMD5List: [docMD5],
+            mindPanX: 50.0,
+            mindPanY: 75.0,
+            mindZoomScale: 1.1,
+            lastDocumentMD5: docMD5
+        )
+        try db.insertTopic(topic)
+
+        let fetchedTopic = try db.getTopic(id: topic.id)
+        XCTAssertNotNil(fetchedTopic)
+        XCTAssertEqual(fetchedTopic?.mindPanX, 50.0)
+        XCTAssertEqual(fetchedTopic?.mindPanY, 75.0)
+        XCTAssertEqual(fetchedTopic?.mindZoomScale, 1.1)
+        XCTAssertEqual(fetchedTopic?.lastDocumentMD5, docMD5)
+
+        // Update topic mindmap position and last document
+        try db.updateTopicMindMapPosition(id: topic.id, panX: -100.0, panY: 200.0, zoomScale: 2.0)
+        try db.updateTopicLastDocument(id: topic.id, md5: "other_doc_md5")
+
+        let updatedTopic = try db.getTopic(id: topic.id)
+        XCTAssertEqual(updatedTopic?.mindPanX, -100.0)
+        XCTAssertEqual(updatedTopic?.mindPanY, 200.0)
+        XCTAssertEqual(updatedTopic?.mindZoomScale, 2.0)
+        XCTAssertEqual(updatedTopic?.lastDocumentMD5, "other_doc_md5")
+
+        // Test preserving position when inserting an existing document with default values
+        let incomingWithDefaults = Document(
+            title: "Test Book Re-import",
+            filePath: "/tmp/test_book.pdf",
+            md5: docMD5,
+            totalPages: 50
+        )
+        try db.insertDocument(incomingWithDefaults)
+        let preserved = try db.getDocumentByMD5(md5: docMD5)
+        XCTAssertEqual(preserved?.lastPageIndex, 12, "Re-inserting default doc should preserve existing lastPageIndex")
+        XCTAssertEqual(preserved?.lastPageOffsetY, 310.0, "Re-inserting default doc should preserve existing lastPageOffsetY")
+        XCTAssertEqual(preserved?.mindPanX, 250.0, "Re-inserting default doc should preserve existing mindPanX")
+    }
 }
 
