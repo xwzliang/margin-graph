@@ -108,8 +108,8 @@ public struct CardNodeView: View {
                     Text(card.title)
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(Color(white: 0.12))
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
                         .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
                 } else if !hasExcerpt && !hasNotes {
                     Text("Untitled Note")
                         .font(.system(size: 11.5, weight: .regular))
@@ -315,11 +315,12 @@ public struct CardNodeView: View {
                     .background(Color(white: 0.94))
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(MarginNoteTheme.cardBodyBackground)
             .clipShape(RoundedRectangle(cornerRadius: 7))
             .overlay(
                 RoundedRectangle(cornerRadius: 7)
-                    .stroke(cardColors.border, lineWidth: 1)
+                    .stroke(isSelected ? Color.clear : cardColors.border, lineWidth: 1)
             )
             // Blue selection handles overlay when selected
             .overlay(

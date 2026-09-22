@@ -393,4 +393,13 @@ Structure each entry concisely with actionable rules:
     - **Rule**: Throttle high-frequency scroll notifications (e.g. at most once every 250ms during active scrolling + 300ms debounce on rest) and canvas viewport updates (e.g. 200ms debounce). Use lightweight `DispatchWorkItem` on the main queue for debounced saves instead of allocating concurrency `Task`s.
     - **Rule**: Never instantiate ad-hoc `NSHostingView(rootView: ...).fittingSize` during continuous `mouseDragged` events. Cache measured toolbar sizes per mode, hide action toolbars during active dragging, and show them cleanly on `mouseUp`.
 
+- **MindMap Card Selection Outline, Multi-Line Layout & Inset Borders**:
+  - **Trap 1: Header / Content Width Mismatch Inside `VStack`**:
+    In `CardNodeView`, placing `.frame(maxWidth: .infinity)` *before* `.fixedSize(horizontal: false, vertical: true)` on multi-line title text inside an `HStack` within an unconstrained `VStack` causes SwiftUI's layout solver to size the header view based on ideal wrapped line lengths rather than expanding to the parent card frame (e.g. 220pt or 240pt). When `MindMapCanvasView` centers or pads the card view, a 2-5 pixel strip of `cardBodyBackground` (cream/white) is exposed along the edge of the colored accent header. Inside the blue dashed selection border, this appears as an un-aesthetic "white stroke" or "white edge".
+  - **Trap 2: Double-Border Bleed Through Selection Dashes**:
+    Drawing `RoundedRectangle.stroke(cardColors.border, lineWidth: 1)` unconditionally under `selectionOverlay` (`RoundedRectangle.strokeBorder(MarginNoteTheme.cursorBlue, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))`) causes the light/pastel card border to stick out 0.5pt outside the card perimeter (since `.stroke` centers on the border while `.strokeBorder` insets inside) and shine through the dash gaps `[4, 3]` as a light/white outline around the selection.
+  - **Rule**:
+    1. In `CardNodeView`, apply `.fixedSize(horizontal: false, vertical: true)` *before* `.frame(maxWidth: .infinity, alignment: .topLeading)` on multi-line text, and apply `.frame(maxWidth: .infinity, alignment: .topLeading)` to the outer `VStack` so all card sections (accent header, excerpt body, and docked action bar) always expand to 100% of the parent card frame without any background bleed.
+    2. When `isSelected == true`, hide the underlying card border: `.stroke(isSelected ? Color.clear : cardColors.border, lineWidth: 1)`. When selected, the card perimeter is cleanly defined exclusively by `selectionOverlay`, eliminating any underlying border bleed through dash gaps or outer perimeter halos.
+
 

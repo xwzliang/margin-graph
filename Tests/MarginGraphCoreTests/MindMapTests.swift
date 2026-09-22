@@ -769,6 +769,35 @@ final class MindMapTests: XCTestCase {
     func testTopToolbarHeightIsStandardized() {
         XCTAssertEqual(MarginNoteTheme.topToolbarHeight, 44.0)
     }
+
+    @MainActor
+    func testSelectedCardHeaderFillsWidthWithoutWhiteBorder() {
+        let card = NoteCard(
+            id: UUID(),
+            topicId: UUID(),
+            title: "Many people who can distinguish between profit and pleasure, between understanding and entertainment, nevertheless fail to carry out their reading plans. The reason is that they do not know how to be demanding readers.",
+            highlightText: "But the sad fact is that many people who can distinguish between profit and pleasure-between understanding, on the one hand, and entertainment or the mere satisfaction of curi osity, on the other hand-nevertheless fail to carry out their reading plans. They fail even if they know which books give which. The reason is that they do not know how to be demand ing readers, how to keep their mind on what they are doing by making it do the work without which no profit can be earned.",
+            notesText: "",
+            colorIndex: 2
+        )
+
+        for w: CGFloat in [220, 240] {
+            let h = NSHostingView(rootView: CardNodeView(card: card, isSelected: true, hasChildren: false, onSelect: {}, onToggleFold: {}).frame(width: w))
+            h.frame = CGRect(origin: .zero, size: CGSize(width: w, height: 400))
+            h.layoutSubtreeIfNeeded()
+            guard let r = h.bitmapImageRepForCachingDisplay(in: h.bounds) else {
+                XCTFail("Failed to cache display")
+                continue
+            }
+            h.cacheDisplay(in: h.bounds, to: r)
+
+            // Across the right edge at y=50 (header area), verify no cream background bleed
+            // Cream cardBodyBackground has red > 0.9, green > 0.9, blue < 0.9
+            for x in (r.pixelsWide - 6)..<r.pixelsWide {
+                let c = r.colorAt(x: x, y: 50)!
+                let isCreamBleed = c.redComponent > 0.88 && c.greenComponent > 0.88 && c.blueComponent < 0.88
+                XCTAssertFalse(isCreamBleed, "Found white/cream bleed pixel at x=\(x) for w=\(w): \(c)")
+            }
+        }
+    }
 }
-
-
