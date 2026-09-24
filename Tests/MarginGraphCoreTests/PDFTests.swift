@@ -1139,30 +1139,32 @@ final class PDFTests: XCTestCase {
         let lineRect = HighlightRect(page: 0, x: 26.88, y: 495.05, width: 93.24, height: 10.2)
         pdfView.installHandleAnnotations(for: [lineRect])
 
-        let startBar = page.annotations.first(where: { $0.contents == "MarginGraph-handle-start" })
-        let startKnob = page.annotations.first(where: { $0.contents == "MarginGraph-handle-knob-start" })
-        let endBar = page.annotations.first(where: { $0.contents == "MarginGraph-handle-end" })
-        let endKnob = page.annotations.first(where: { $0.contents == "MarginGraph-handle-knob-end" })
+        let handles = page.annotations.filter { $0.contents?.hasPrefix("MarginGraph-handle") == true }
+        XCTAssertEqual(handles.count, 2, "Unified cursor handles should produce exactly 1 start handle and 1 end handle")
 
-        XCTAssertNotNil(startBar)
-        XCTAssertNotNil(startKnob)
-        XCTAssertNotNil(endBar)
-        XCTAssertNotNil(endKnob)
+        let startHandle = page.annotations.first(where: { $0.contents == "MarginGraph-handle-start" }) as? CursorHandleAnnotation
+        let endHandle = page.annotations.first(where: { $0.contents == "MarginGraph-handle-end" }) as? CursorHandleAnnotation
 
-        guard let sBar = startBar, let sKnob = startKnob,
-              let eBar = endBar, let eKnob = endKnob else { return }
+        XCTAssertNotNil(startHandle)
+        XCTAssertNotNil(endHandle)
 
-        // Exact flush left alignment between stem and teardrop tab
-        XCTAssertEqual(sBar.bounds.minX, sKnob.bounds.minX, accuracy: 0.001, "Start bar and knob must share flush minX")
-        XCTAssertEqual(eBar.bounds.minX, eKnob.bounds.minX, accuracy: 0.001, "End bar and knob must share flush minX")
+        guard let sHandle = startHandle, let eHandle = endHandle else { return }
 
-        // Seamless attachment without any vertical gap
-        XCTAssertLessThanOrEqual(sKnob.bounds.minY, sBar.bounds.maxY, "Start knob must overlap or touch top of start bar")
-        XCTAssertGreaterThanOrEqual(eKnob.bounds.maxY, eBar.bounds.minY, "End knob must overlap or touch bottom of end bar")
+        XCTAssertTrue(sHandle.isStart)
+        XCTAssertFalse(eHandle.isStart)
+
+        // Exact horizontal center alignment: bounds.midX aligns with target point x
+        XCTAssertEqual(sHandle.bounds.midX, CGFloat(lineRect.x), accuracy: 1.0, "Start handle center must align with start point x")
+        XCTAssertEqual(eHandle.bounds.midX, CGFloat(lineRect.x + lineRect.width), accuracy: 1.0, "End handle center must align with end point x")
+
+        // Fixed ratio of line height: stemHeight = max(10.0, lineHeight * 1.15)
+        let expectedHeight = max(10.0, CGFloat(lineRect.height) * 1.15)
+        XCTAssertEqual(sHandle.stemHeight, expectedHeight, accuracy: 0.1, "Stem height should be 1.15x line height")
+        XCTAssertEqual(eHandle.stemHeight, expectedHeight, accuracy: 0.1, "Stem height should be 1.15x line height")
 
         // Edge containment
         let crop = page.bounds(for: .cropBox)
-        for annot in [sBar, sKnob, eBar, eKnob] {
+        for annot in [sHandle, eHandle] {
             XCTAssertGreaterThanOrEqual(annot.bounds.minX, crop.minX)
             XCTAssertLessThanOrEqual(annot.bounds.maxX, crop.maxX)
             XCTAssertGreaterThanOrEqual(annot.bounds.minY, crop.minY)
@@ -1171,27 +1173,23 @@ final class PDFTests: XCTestCase {
     }
 
     func testHandleDimensionsBoundedAtExtremeScales() throws {
-        // 1. Uninitialized or zero scale (e.g. before initial layout)
-        let zeroScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 0.0)
-        XCTAssertEqual(zeroScaleDims.knobSize, 6.0, "Knob size should fall back to 6pt when scale is 0")
-        XCTAssertEqual(zeroScaleDims.stemWidth, 2.0)
-        XCTAssertEqual(zeroScaleDims.stemHeight, 16.0)
+        // 1. Line height 16.0: stemHeight is 16 * 1.15 = 18.4pt
+        let dims16 = InteractivePDFView.handleDimensions(for: 16.0, scale: 1.0)
+        XCTAssertEqual(dims16.stemHeight, 18.4, accuracy: 0.01)
+        XCTAssertEqual(dims16.stemWidth, 2.0)
+        XCTAssertGreaterThanOrEqual(dims16.knobRadius, 3.5)
+        XCTAssertLessThanOrEqual(dims16.knobRadius, 5.5)
+        XCTAssertEqual(dims16.knobSize, dims16.knobRadius)
 
-        // 2. Extremely low scale (e.g. 0.1x zoom)
-        let lowScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 0.1)
-        XCTAssertLessThanOrEqual(lowScaleDims.knobSize, 7.0, "Knob size should never exceed 7pt even at 0.1x scale")
-        XCTAssertLessThanOrEqual(lowScaleDims.stemWidth, 2.5)
+        // 2. Line height 10.0: stemHeight is max(10.0, 10.0 * 1.15) = 11.5pt
+        let dims10 = InteractivePDFView.handleDimensions(for: 10.0, scale: 0.1)
+        XCTAssertEqual(dims10.stemHeight, 11.5, accuracy: 0.01)
+        XCTAssertGreaterThanOrEqual(dims10.knobRadius, 3.5)
 
-        // 3. High scale (e.g. 3.0x zoom)
-        let highScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 3.0)
-        XCTAssertGreaterThanOrEqual(highScaleDims.knobSize, 4.0, "Knob size should have a minimum of 4pt")
-        XCTAssertLessThanOrEqual(highScaleDims.knobSize, 5.0)
-
-        // 4. Normal scale 1.0
-        let normalDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 1.0)
-        XCTAssertEqual(normalDims.knobSize, 6.0)
-        XCTAssertEqual(normalDims.stemWidth, 2.0)
-        XCTAssertEqual(normalDims.stemHeight, 16.0)
+        // 3. Line height 24.0: stemHeight is 24.0 * 1.15 = 27.6pt
+        let dims24 = InteractivePDFView.handleDimensions(for: 24.0, scale: 3.0)
+        XCTAssertEqual(dims24.stemHeight, 27.6, accuracy: 0.01)
+        XCTAssertLessThanOrEqual(dims24.knobRadius, 5.5)
     }
 
     func testReadingOrderSortingAndHandlePlacement() throws {
@@ -1243,21 +1241,18 @@ final class PDFTests: XCTestCase {
         pdfView.installHandleAnnotations(for: expanded, accent: .systemYellow)
 
         let handles = page.annotations.filter { $0.contents?.hasPrefix("MarginGraph-handle") == true }
-        XCTAssertEqual(handles.count, 4, "Should create start bar, start knob, end bar, end knob")
+        XCTAssertEqual(handles.count, 2, "Should create 1 start handle and 1 end handle")
 
-        guard let startBar = handles.first(where: { $0.contents == "MarginGraph-handle-start" }),
-              let endBar = handles.first(where: { $0.contents == "MarginGraph-handle-end" }) else {
-            XCTFail("Start and end bars must be present")
+        guard let startHandle = handles.first(where: { $0.contents == "MarginGraph-handle-start" }),
+              let endHandle = handles.first(where: { $0.contents == "MarginGraph-handle-end" }) else {
+            XCTFail("Start and end handles must be present")
             return
         }
 
-        // Start bar must be at first line's start (left edge, top of block)
-        XCTAssertEqual(startBar.bounds.midX, CGFloat(expanded.first!.x), accuracy: 3.0)
-        XCTAssertEqual(startBar.bounds.midY, CGFloat(expanded.first!.y + expanded.first!.height / 2), accuracy: 3.0)
+        // Start handle must be at first line's start (left edge, top of block)
+        XCTAssertEqual(startHandle.bounds.midX, CGFloat(expanded.first!.x), accuracy: 3.0)
 
-        // End bar must be at last line's end (right edge, bottom of block)
-        XCTAssertEqual(startBar.bounds.midX, CGFloat(expanded.first!.x), accuracy: 3.0)
-        XCTAssertEqual(endBar.bounds.midX, CGFloat(expanded.last!.x + expanded.last!.width), accuracy: 3.0)
-        XCTAssertEqual(endBar.bounds.midY, CGFloat(expanded.last!.y + expanded.last!.height / 2), accuracy: 3.0)
+        // End handle must be at last line's end (right edge, bottom of block)
+        XCTAssertEqual(endHandle.bounds.midX, CGFloat(expanded.last!.x + expanded.last!.width), accuracy: 3.0)
     }
 }
