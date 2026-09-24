@@ -608,11 +608,14 @@ final class AppModel: ObservableObject {
         let lastPos = mindMapCards.last?.mindPos ?? CGPoint(x: 100, y: 100)
         let mindPos = CGPoint(x: lastPos.x, y: lastPos.y + 120)
 
+        // Choose next distinct color index so notes are color-coded on the timeline
+        let nextColor = (mindMapCards.count) % 6
+
         let card = NoteCard(
             id: cardID,
             topicId: topicID,
             bookMD5: activeDocument.md5,
-            title: title.isEmpty ? "Video Excerpt (\(MediaDocumentHelper.formatDuration(startTime)))" : title,
+            title: title,
             highlightText: "",
             notesText: "",
             mindPos: mindPos,
@@ -620,7 +623,7 @@ final class AppModel: ObservableObject {
             endPage: 0,
             startPos: nil,
             endPos: nil,
-            colorIndex: 0,
+            colorIndex: nextColor,
             highlightPicHash: posterHash,
             mediaType: activeDocument.documentType == "audio" ? "audio" : "video",
             videoStartTime: startTime,

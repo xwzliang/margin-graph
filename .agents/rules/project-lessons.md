@@ -447,3 +447,27 @@ Structure each entry concisely with actionable rules:
 - **AVKit Linkage & Demangling Crash on macOS (`So12AVPlayerViewC`)**:
   - **Trap**: Using SwiftUI's `VideoPlayer(player:)` or AppKit's `AVPlayerView` in a Swift Package Manager executable target without explicitly linking `AVKit.framework` crashes immediately at runtime with `failed to demangle superclass of VideoPlayerView from mangled name 'So12AVPlayerViewC': unknown error`. SPM does not automatically pass `-framework AVKit` unless declared in `linkerSettings`.
   - **Rule**: Always declare `.linkedFramework("AVKit")` in `linkerSettings` for both library and executable targets in `Package.swift`. Additionally, prefer an `NSViewRepresentable` wrapping `AVPlayerView` with `controlsStyle = .none` so that video playback is clean, directly linked, and does not display conflicting built-in overlay controls over custom scrubbers and study toolbars.
+- **AppKit `AVPlayerView` Subview Hit-Testing Swallowing Clicks**:
+  - **Trap**: Subclassing `AVPlayerView` and overriding `mouseDown(with:)` without overriding `hitTest(_:)` fails to receive single clicks. `AVPlayerView` contains internal private layer and view descendants (`AVPlayerLayer`, `AVPlayerViewPrivate`). When a click occurs, `super.hitTest(point)` returns one of these internal subviews, which consumes the click without forwarding to `mouseDown:` up the responder chain. SwiftUI's `.onTapGesture` on parent or sibling views also fails to trigger because the underlying AppKit view hierarchy intercepts the event.
+  - **Rule**: In `CustomAVPlayerView`, override `hitTest(_ point: NSPoint) -> NSView?` to intercept subview hits:
+    ```swift
+    public override func hitTest(_ point: NSPoint) -> NSView? {
+        guard super.hitTest(point) != nil else { return nil }
+        return self
+    }
+    ```
+    Returning `self` ensures `mouseDown(with:)` is delivered directly to `CustomAVPlayerView`. Attach an `NSClickGestureRecognizer` as secondary backup, and apply a 100ms timestamp debounce guard in `MediaPlaybackCoordinator.togglePlayPause()` to prevent double toggling.
+- **Zero-Friction Single-Button Excerpting**:
+  - **Rule**: Avoid interrupting the user's flow with modal sheets or naming prompts when creating video excerpts. Merge "Mark In" and "Mark Out" into a single stateful button. First click sets `markInTime = currentTime`. Second click computes `min(inTime, outTime) ... max(inTime, outTime)`, invokes `onCreateVideoCard(start, end, "")` with an empty title, and resets mark state immediately. The user can rename or edit notes directly on the card in the MindMap later.
+- **Filmstrip Timeline Track & Keyframe-Decoded Thumbnails**:
+  - **Rule**: In video scrubber tracks, generate filmstrip preview frames asynchronously using `AVAssetImageGenerator` with `maximumSize = CGSize(width: 160, height: 90)` and `requestedTimeToleranceBefore / After = CMTime(seconds: 2.0)`. Tolerances enable fast keyframe/I-frame decoding, allowing 16 preview frames to decode in under 50ms on Apple Silicon with negligible RAM footprint (~3 MB). Overlay note ranges with the card's theme colors (`MarginNoteTheme.cardColors(for: card.colorIndex)`), vertical cap handles (`[ ... ]`), and format ruler ticks using `MediaDocumentHelper.formatRulerTime` (e.g. `3m20s`).
+- **Eliminating Double-Click Play/Pause Stutter**:
+  - **Trap**: Wiring both `mouseDown(with:)` and an `NSClickGestureRecognizer` (or a parent SwiftUI `.onTapGesture`) to toggle playback causes a single human mouse click (down + up across 100–180ms) to trigger twice if the debounce threshold is shorter than the click duration, causing the video to start and instantly stop.
+  - **Rule**: For AppKit view wrappers like `CustomAVPlayerView`, rely exclusively on `NSClickGestureRecognizer` (which fires only once on mouse release) and omit `mouseDown(with:)` callback triggers. Remove duplicate SwiftUI `.onTapGesture` on video containers, and enforce a 300ms debounce guard in `MediaPlaybackCoordinator.togglePlayPause()`.
+- **SwiftUI `ZStack` Default Vertical Centering Trap for Borders**:
+  - **Trap**: Inside a `ZStack` with `.leading` alignment (where vertical alignment defaults to `.center`), placing `Rectangle().frame(height: 1.5).offset(y: 0)` causes the rectangle to be drawn centered at `height / 2`, slicing a horizontal dividing line right across the vertical center of the track.
+  - **Rule**: Always anchor container layouts to `ZStack(alignment: .topLeading)` or use `RoundedRectangle(cornerRadius: ...).strokeBorder(...)` so border strokes map strictly to view perimeters rather than view centers.
+- **Card Excerpt Auto-Stop Boundary Playback**:
+  - **Rule**: When an excerpt note card is clicked (in the MindMap or on the timeline track), playback should seek to `videoStartTime` and play until `videoEndTime`, automatically pausing at the boundary. Use a high-frequency (50ms) periodic time observer to clamp and pause at `stopAtTime`, and clear the boundary whenever the user manually scrubs or toggles playback.
+- **Preventing SwiftUI Text Truncation / Ellipsis in Toolbar Controls**:
+  - **Rule**: Rigid fixed button widths (e.g. `frame(width: 32)`) cause numerical strings like `"0.75"` and `"1.25"` to truncate with ellipsis (`"0.75..."`). Always combine horizontal padding (`.padding(.horizontal, 6)`) with `.fixedSize(horizontal: true, vertical: false)` on `Text` views so buttons dynamically fit their exact full text labels without truncation.

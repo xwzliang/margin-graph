@@ -86,6 +86,20 @@ public enum MediaDocumentHelper {
         }
     }
 
+    public static func formatRulerTime(_ seconds: Double) -> String {
+        let totalSec = max(0, Int(seconds.rounded()))
+        let h = totalSec / 3600
+        let m = (totalSec % 3600) / 60
+        let s = totalSec % 60
+        if h > 0 {
+            return "\(h)h\(m)m"
+        } else if m > 0 {
+            return "\(m)m\(s)s"
+        } else {
+            return "\(s)s"
+        }
+    }
+
     #if canImport(AppKit)
     public static func generatePosterFrame(url: URL, atSeconds seconds: Double = 1.0, size: CGSize = CGSize(width: 148, height: 180)) -> NSImage? {
         let asset = AVURLAsset(url: url)

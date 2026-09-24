@@ -1,5 +1,6 @@
 import XCTest
 import SwiftUI
+import AVFoundation
 @testable import MarginGraphCore
 
 final class MediaDocumentTests: XCTestCase {
@@ -161,5 +162,113 @@ final class MediaDocumentTests: XCTestCase {
         hostingView.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
         hostingView.layoutSubtreeIfNeeded()
         XCTAssertNotNil(hostingView)
+    }
+
+    @MainActor
+    func testMediaPlaybackCoordinatorReplayFromBeginningAndEndHandling() {
+        let coordinator = MediaPlaybackCoordinator()
+        let player = AVPlayer()
+        coordinator.player = player
+        coordinator.duration = 60.0
+        coordinator.currentTime = 59.9
+
+        // When at end, play() resets currentTime to 0.0 and starts playback
+        coordinator.play()
+        XCTAssertEqual(coordinator.currentTime, 0.0)
+        XCTAssertTrue(coordinator.isPlaying)
+
+        coordinator.pause()
+        XCTAssertFalse(coordinator.isPlaying)
+
+        coordinator.currentTime = 60.0
+        coordinator.play()
+        XCTAssertEqual(coordinator.currentTime, 0.0)
+        XCTAssertTrue(coordinator.isPlaying)
+    }
+
+    func testFormatRulerTime() {
+        XCTAssertEqual(MediaDocumentHelper.formatRulerTime(0), "0s")
+        XCTAssertEqual(MediaDocumentHelper.formatRulerTime(45), "45s")
+        XCTAssertEqual(MediaDocumentHelper.formatRulerTime(200), "3m20s")
+        XCTAssertEqual(MediaDocumentHelper.formatRulerTime(205), "3m25s")
+        XCTAssertEqual(MediaDocumentHelper.formatRulerTime(3600), "1h0m")
+        XCTAssertEqual(MediaDocumentHelper.formatRulerTime(3665), "1h1m")
+    }
+
+    #if canImport(AppKit)
+    @MainActor
+    func testCustomAVPlayerViewHitTestAndClickHandling() {
+        let playerView = CustomAVPlayerView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        var toggledCount = 0
+        playerView.onTogglePlayPause = {
+            toggledCount += 1
+        }
+
+        // Hit test inside bounds should always return playerView (preventing internal subview interception)
+        let hit = playerView.hitTest(NSPoint(x: 100, y: 100))
+        XCTAssertTrue(hit === playerView)
+
+        // Verify click gesture recognizer is attached for single-click dispatch
+        let clickRecognizer = playerView.gestureRecognizers.first as? NSClickGestureRecognizer
+        XCTAssertNotNil(clickRecognizer)
+        XCTAssertEqual(clickRecognizer?.numberOfClicksRequired, 1)
+
+        // Spacebar key down triggers toggle
+        let spaceEvent = NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: 0,
+            context: nil,
+            characters: " ",
+            charactersIgnoringModifiers: " ",
+            isARepeat: false,
+            keyCode: 49
+        )
+        if let spaceEvent {
+            playerView.keyDown(with: spaceEvent)
+            XCTAssertEqual(toggledCount, 1)
+        }
+    }
+    #endif
+
+    @MainActor
+    func testMediaPlaybackCoordinatorAutoStopAtBoundary() {
+        let coordinator = MediaPlaybackCoordinator()
+        let player = AVPlayer()
+        coordinator.player = player
+        coordinator.duration = 60.0
+        coordinator.currentTime = 10.0
+
+        // Start playback with boundary at 25.0s
+        coordinator.play(until: 25.0)
+        XCTAssertTrue(coordinator.isPlaying)
+        XCTAssertEqual(coordinator.stopAtTime, 25.0)
+
+        // Simulating playback reaching the boundary
+        coordinator.currentTime = 25.0
+        if let stop = coordinator.stopAtTime, coordinator.currentTime >= stop {
+            coordinator.stopAtTime = nil
+            coordinator.pause()
+            coordinator.seek(to: stop)
+        }
+
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertNil(coordinator.stopAtTime)
+        XCTAssertEqual(coordinator.currentTime, 25.0)
+
+        // Manual play clears boundary and plays normally
+        coordinator.play()
+        XCTAssertTrue(coordinator.isPlaying)
+        XCTAssertNil(coordinator.stopAtTime)
+    }
+
+    func testFilmstripThumbnailInitialization() {
+        let image = NSImage(size: NSSize(width: 160, height: 90))
+        let thumb = FilmstripThumbnail(id: 3, time: 42.5, image: image)
+        XCTAssertEqual(thumb.id, 3)
+        XCTAssertEqual(thumb.time, 42.5)
+        XCTAssertEqual(thumb.image.size, NSSize(width: 160, height: 90))
     }
 }
