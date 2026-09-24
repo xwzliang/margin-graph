@@ -86,7 +86,8 @@ public extension Database {
             ) else { continue }
 
             for case let fileURL as URL in enumerator {
-                guard fileURL.pathExtension.lowercased() == "pdf" else { continue }
+                let ext = fileURL.pathExtension.lowercased()
+                guard MediaDocumentHelper.isSupportedFile(url: fileURL) && ext != "marginpkg" && ext != "marginnotes" && ext != "sqlite" else { continue }
 
                 // Check sidecar .md5 first
                 var md5: String? = nil
@@ -102,7 +103,7 @@ public extension Database {
                     md5 = content
                 }
 
-                // If already registered and points to an existing file, skip heavy PDF loading!
+                // If already registered and points to an existing file, skip heavy loading!
                 if let md5, let existing = try? getDocumentByMD5(md5: md5),
                    !existing.filePath.isEmpty, FileManager.default.fileExists(atPath: existing.filePath) {
                     continue
@@ -114,7 +115,22 @@ public extension Database {
                     continue
                 }
 
-                if let mgr = try? PDFDocumentManager(url: fileURL, md5: md5) {
+                let docType = MediaDocumentHelper.documentType(for: fileURL)
+                if docType == "video" || docType == "audio" {
+                    let docMD5 = md5 ?? MediaDocumentHelper.computeFileMD5(url: fileURL)
+                    let duration = MediaDocumentHelper.mediaDuration(url: fileURL)
+                    let title = fileURL.deletingPathExtension().lastPathComponent
+                    let newDoc = Document(
+                        id: Document.stableUUID(docMD5),
+                        title: title,
+                        filePath: fileURL.path,
+                        md5: docMD5,
+                        totalPages: Int(duration.rounded()),
+                        lastVisited: nil,
+                        documentType: docType
+                    )
+                    try? insertDocument(newDoc)
+                } else if let mgr = try? PDFDocumentManager(url: fileURL, md5: md5) {
                     let docMD5 = mgr.md5
                     let newDoc = Document(
                         id: Document.stableUUID(docMD5),
@@ -122,7 +138,8 @@ public extension Database {
                         filePath: fileURL.path,
                         md5: docMD5,
                         totalPages: mgr.pageCount,
-                        lastVisited: nil
+                        lastVisited: nil,
+                        documentType: docType
                     )
                     try? insertDocument(newDoc)
 

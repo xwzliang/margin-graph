@@ -9,8 +9,8 @@ let package = Package(
         .executable(name: "MarginGraphApp", targets: ["MarginGraphApp"])
     ],
     targets: [
-        .target(name: "MarginGraphCore", linkerSettings: [.linkedLibrary("sqlite3")]),
-        .executableTarget(name: "MarginGraphApp", dependencies: ["MarginGraphCore"]),
-        .testTarget(name: "MarginGraphCoreTests", dependencies: ["MarginGraphCore"], linkerSettings: [.linkedLibrary("sqlite3")])
+        .target(name: "MarginGraphCore", linkerSettings: [.linkedLibrary("sqlite3"), .linkedFramework("AVKit")]),
+        .executableTarget(name: "MarginGraphApp", dependencies: ["MarginGraphCore"], linkerSettings: [.linkedFramework("AVKit")]),
+        .testTarget(name: "MarginGraphCoreTests", dependencies: ["MarginGraphCore"], linkerSettings: [.linkedLibrary("sqlite3"), .linkedFramework("AVKit")])
     ]
 )

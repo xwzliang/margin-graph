@@ -304,4 +304,151 @@ final class MarginNoteImporterTests: XCTestCase {
         let topicDocs = try database.documentsForTopic(id: survivingTopic.id)
         XCTAssertEqual(topicDocs.map(\.id), [survivingDoc.id])
     }
+
+    func testImportVideoNotesAndHighlightPicAndLinksAndSRS() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_mn_v2_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbURL = tempDir.appendingPathComponent("test.sqlite")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        try exec(db, """
+        CREATE TABLE ZTOPIC (Z_PK INTEGER, ZTOPICID TEXT, ZTITLE TEXT, ZBOOKMD5LIST TEXT);
+        CREATE TABLE ZBOOK (Z_PK INTEGER, ZBOOKID TEXT, ZTITLE TEXT, ZFILEPATH TEXT, ZMD5 TEXT, ZTOTALPAGES INTEGER);
+        CREATE TABLE ZBOOKNOTE (
+            Z_PK INTEGER, ZNOTEID TEXT, ZTOPICID TEXT, ZBOOKMD5 TEXT, ZNOTETITLE TEXT,
+            ZHIGHLIGHT_TEXT TEXT, ZNOTES_TEXT TEXT, ZGROUPNOTEID TEXT, ZMINDPOS TEXT, ZMINDLINKS TEXT,
+            ZHIGHLIGHT_STYLE TEXT, ZSTARTPOS TEXT, ZENDPOS TEXT, ZHIGHLIGHT_PIC BLOB
+        );
+        CREATE TABLE ZMEDIA (Z_PK INTEGER, ZMD5 TEXT, ZDATA BLOB);
+        CREATE TABLE ZACTIVITY (Z_PK INTEGER, ZACTION TEXT, ZNOTEID TEXT, ZINFO TEXT, ZTIME REAL);
+        """)
+
+        let topicID = UUID()
+        let videoCardID = UUID()
+        let picCardID = UUID()
+        let videoMD5 = "video-lecture-md5"
+        let mediaCropMD5 = "media-crop-md5"
+
+        // Create dummy video file
+        let videoFilePath = tempDir.appendingPathComponent("lecture1.mp4").path
+        FileManager.default.createFile(atPath: videoFilePath, contents: Data([0x00, 0x00, 0x00, 0x18]), attributes: nil)
+
+        // Generate a 32x32 red PNG image for ZMEDIA
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 32 * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(red: 1.0, green: 0.0, blue: 0.0, alpha: 1.0)
+        ctx.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        let cgImage = ctx.makeImage()!
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        let pngData = rep.representation(using: .png, properties: [:])!
+
+        // Insert ZMEDIA row
+        var mediaStmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(db, "INSERT INTO ZMEDIA (Z_PK, ZMD5, ZDATA) VALUES (1, ?, ?)", -1, &mediaStmt, nil), SQLITE_OK)
+        sqlite3_bind_text(mediaStmt, 1, mediaCropMD5, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        _ = pngData.withUnsafeBytes { raw in
+            sqlite3_bind_blob(mediaStmt, 2, raw.baseAddress, Int32(raw.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        XCTAssertEqual(sqlite3_step(mediaStmt), SQLITE_DONE)
+        sqlite3_finalize(mediaStmt)
+
+        // Generate ZHIGHLIGHT_PIC binary plist with selLst
+        let selLst: [[String: Any]] = [
+            ["pageNo": 1, "rect": "{{10, 20}, {100, 30}}"],
+            ["pageNo": 2, "rect": "{{50, 60}, {200, 40}}"]
+        ]
+        let picDict: [String: Any] = [
+            "paint": mediaCropMD5,
+            "selLst": selLst
+        ]
+        let picPlistData = try PropertyListSerialization.data(fromPropertyList: picDict, format: .binary, options: 0)
+
+        // Insert ZTOPIC
+        try exec(db, "INSERT INTO ZTOPIC VALUES(1, '\(topicID.uuidString)', 'ML Course Notebook', '[\"\(videoMD5)\"]');")
+
+        // Insert ZBOOK (video document)
+        try exec(db, "INSERT INTO ZBOOK VALUES(1, '\(UUID().uuidString)', 'Lecture 1', '\(videoFilePath)', '\(videoMD5)', 0);")
+
+        // Insert Card 1 (Video Note linking to Card 2)
+        try exec(db, """
+        INSERT INTO ZBOOKNOTE VALUES(
+            1, '\(videoCardID.uuidString)', '\(topicID.uuidString)', '\(videoMD5)',
+            'Decision Trees Intro', '', 'Key conceptual definition', NULL, '{100, 200}', '["\(picCardID.uuidString)"]',
+            'mbooks-annotation0', 'MN3VIDEO|4747.46|0.1646599238', 'MN3VIDEO|4747.46|0.1772821037', NULL
+        );
+        """)
+
+        // Insert Card 2 (Image excerpt with ZHIGHLIGHT_PIC)
+        var card2Stmt: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(db, """
+        INSERT INTO ZBOOKNOTE (Z_PK, ZNOTEID, ZTOPICID, ZBOOKMD5, ZNOTETITLE, ZHIGHLIGHT_TEXT, ZNOTES_TEXT, ZGROUPNOTEID, ZMINDPOS, ZMINDLINKS, ZHIGHLIGHT_STYLE, ZSTARTPOS, ZENDPOS, ZHIGHLIGHT_PIC)
+        VALUES (2, ?, ?, ?, 'Algorithm Diagram', '', '', NULL, '{300, 400}', '[]', 'mbooks-annotation1', NULL, NULL, ?)
+        """, -1, &card2Stmt, nil), SQLITE_OK)
+        sqlite3_bind_text(card2Stmt, 1, picCardID.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_text(card2Stmt, 2, topicID.uuidString, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_text(card2Stmt, 3, videoMD5, -1, unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        _ = picPlistData.withUnsafeBytes { raw in
+            sqlite3_bind_blob(card2Stmt, 4, raw.baseAddress, Int32(raw.count), unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        }
+        XCTAssertEqual(sqlite3_step(card2Stmt), SQLITE_DONE)
+        sqlite3_finalize(card2Stmt)
+
+        // Insert ZACTIVITY row (Spaced Repetition review item)
+        try exec(db, """
+        INSERT INTO ZACTIVITY VALUES(1, 'SpacedRepetition', '\(videoCardID.uuidString)', '{"ivl": 6, "factor": 2.6, "reps": 2}', 1700000000.0);
+        """)
+
+        let mediaStorage = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))
+        let destination = try Database(inMemory: true)
+        let importer = MarginNoteImporter(url: dbURL, mediaStorage: mediaStorage)
+        let result = try importer.importInto(destination)
+
+        // Verify document
+        XCTAssertEqual(result.documents.count, 1)
+        let doc = result.documents[0]
+        XCTAssertEqual(doc.documentType, "video")
+        XCTAssertEqual(doc.md5, videoMD5)
+
+        // Verify cards
+        XCTAssertEqual(result.cards.count, 2)
+        let videoCard: NoteCard = try XCTUnwrap(result.cards.first(where: { $0.id == videoCardID }))
+        XCTAssertEqual(videoCard.mediaType, "video")
+        let startTime: Double = try XCTUnwrap(videoCard.videoStartTime)
+        let endTime: Double = try XCTUnwrap(videoCard.videoEndTime)
+        XCTAssertEqual(startTime, 4747.46 * 0.1646599238, accuracy: 0.01)
+        XCTAssertEqual(endTime, 4747.46 * 0.1772821037, accuracy: 0.01)
+
+        let picCard: NoteCard = try XCTUnwrap(result.cards.first(where: { $0.id == picCardID }))
+        XCTAssertNotNil(picCard.highlightPicHash)
+        // Verify crop was re-encoded and saved to mediaStorage
+        if let hash = picCard.highlightPicHash {
+            let loadedImage = mediaStorage.loadImage(hash: hash)
+            XCTAssertNotNil(loadedImage, "Re-encoded HEIC crop should be loadable from mediaStorage")
+        }
+        // Verify selLst multi-segment rects were extracted
+        XCTAssertEqual(picCard.highlightRects.count, 2)
+        XCTAssertEqual(picCard.highlightRects[0].page, 0)
+        XCTAssertEqual(picCard.highlightRects[0].x, 10)
+        XCTAssertEqual(picCard.highlightRects[0].y, 20)
+        XCTAssertEqual(picCard.highlightRects[1].page, 1)
+
+        // Verify card-to-card graph links imported
+        let links = try destination.linksForTopic(id: topicID)
+        XCTAssertEqual(links.count, 1)
+        XCTAssertEqual(links[0].sourceCardId, videoCardID)
+        XCTAssertEqual(links[0].targetCardId, picCardID)
+
+        // Verify Spaced Repetition (SRS) review items imported
+        let dueItems = try destination.dueReviewItems(asOf: Date(timeIntervalSince1970: 1800000000))
+        XCTAssertEqual(dueItems.count, 1)
+        XCTAssertEqual(dueItems[0].cardId, videoCardID)
+        XCTAssertEqual(dueItems[0].intervalDays, 6)
+        XCTAssertEqual(dueItems[0].easeFactor, 2.6, accuracy: 0.001)
+        XCTAssertEqual(dueItems[0].repetitions, 2)
+    }
 }

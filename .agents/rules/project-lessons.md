@@ -402,4 +402,48 @@ Structure each entry concisely with actionable rules:
     1. In `CardNodeView`, apply `.fixedSize(horizontal: false, vertical: true)` *before* `.frame(maxWidth: .infinity, alignment: .topLeading)` on multi-line text, and apply `.frame(maxWidth: .infinity, alignment: .topLeading)` to the outer `VStack` so all card sections (accent header, excerpt body, and docked action bar) always expand to 100% of the parent card frame without any background bleed.
     2. When `isSelected == true`, hide the underlying card border: `.stroke(isSelected ? Color.clear : cardColors.border, lineWidth: 1)`. When selected, the card perimeter is cleanly defined exclusively by `selectionOverlay`, eliminating any underlying border bleed through dash gaps or outer perimeter halos.
 
+## MarginNote Database Forensics, Media Storage & Space Optimization
+- **CoreData External Storage Duplication & Video Slicing Trap**:
+  - **Diagnostic Discovery**: In MarginNote's 83 GB backup, 94.7% of the total size (73.5 GB) is video. MarginNote stores full source lecture videos (45.4 GB) and, when a user excerpts a video note, physically trims and re-encodes a standalone MP4 video clip (averaging 20–50 MB each, totaling 28.18 GB across 1,552 files) inside `MarginNotes.sqlite.files`.
+  - **Rule**: Never duplicate video media into database storage. Video note cards must store non-destructive time ranges: `{ bookMD5, start_time: Double, end_time: Double }`. Playback is handled dynamically via `AVPlayer.seek(to:)` with boundary observers. Store only a single lightweight HEIC/JPEG poster frame thumbnail (~30–50 KB) per video card, completely eliminating tens of gigabytes of duplicate media.
+- **SQLite Binary Blob Inlining vs Content-Addressable Storage (CAS)**:
+  - **Diagnostic Discovery**: MarginNote stores 12,470 uncompressed 32-bit RGBA PNG crops directly inside `ZMEDIA.ZDATA` in the SQLite database, bloating the `.sqlite` file from ~20 MB to 1,190 MB (91.6% blob payload). This invalidates SQLite B-Tree page caches, slows database lock acquisition, and consumes hundreds of megabytes of RAM during queries.
+  - **Rule**: Keep SQLite databases strictly relational and blob-free. Store image attachments in a dedicated Content-Addressable Storage directory (`MediaStorage`, keyed by SHA-256 hash). SQLite tables (`cards`) should only store the hash string. This maintains SQLite file size under 20 MB for tens of thousands of cards and yields sub-millisecond query latencies.
+- **Image Compression & Hardware Acceleration (HEIC/WebP)**:
+  - **Diagnostic Discovery**: Converting raw PNG excerpt crops to HEIC (quality 80–85) achieves 76% to 87% space savings using Apple Silicon's hardware image encoder.
+  - **Rule**: Compress all visual excerpt crops to HEIC or WebP. Furthermore, for vector PDF documents that already exist on disk, render text highlight excerpts on the fly directly from the PDF (`PDFPage.draw(with: .cropBox, to:)`) instead of persisting static image crops to disk.
+- **SQLite Connections Over Network Shares (SMB / NFS)**:
+  - **Trap**: Opening SQLite databases directly on network shares (e.g. `/Volumes/omv/...`) with standard file paths triggers `database is locked` or I/O errors due to SMB lock incompatibilities with SQLite WAL mode.
+  - **Rule**: Always open remote or backup SQLite databases in read-only immutable mode using URI filenames: `sqlite3_open_v2("file:/path/to/db.sqlite?immutable=1", &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil)` (or Python `sqlite3.connect("file:...?immutable=1", uri=True)`).
+- **CoreData `ZHIGHLIGHT_PIC` Multi-Segment Selection & Crop Extraction**:
+  - **Diagnostic Discovery**: MarginNote visual excerpt cards store their bounding geometry and crop image references inside `ZBOOKNOTE.ZHIGHLIGHT_PIC` as an `NSKeyedArchiver` serialized dictionary containing `paint` (MD5 of crop image in `ZMEDIA.ZDATA`) and `selLst` (array of `{pageNo, rect, imgRect, rotation}`).
+  - **Rule**: Deserialize `ZHIGHLIGHT_PIC` using `NSKeyedUnarchiver(forReadingFrom:)` with `requiresSecureCoding = false` (or `PropertyListSerialization`). Extract all selection bounding boxes across pages into multi-segment `HighlightRect` arrays. If `paint` is present, fetch the raw crop data on demand from `ZMEDIA` (avoiding bulk in-memory table loads) and re-encode to hardware-accelerated HEIC in `MediaStorage`, saving 85% disk space.
+- **Normalized Video Excerpt Timestamps (`MN3VIDEO`)**:
+  - **Diagnostic Discovery**: In MarginNote, video note coordinates are stored in `ZSTARTPOS` and `ZENDPOS` as `MN3VIDEO|<duration>|<fraction>`, where timestamp in seconds equals `duration * fraction`.
+  - **Rule**: Parse `ZSTARTPOS` and `ZENDPOS` using the formula `seconds = duration * fraction`. Persist `video_start_time` and `video_end_time` directly as standard `Double` seconds on the card, and generate an on-demand HEIC poster frame via `AVAssetImageGenerator` at `video_start_time` when no thumbnail exists.
+- **SQLite FTS5 Full-Text Search Virtual Tables with Content Sync Triggers**:
+  - **Rule**: For sub-millisecond full-text search across tens of thousands of cards without duplicating text storage in SQLite, create an external-content FTS5 table:
+    ```sql
+    CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+        title, highlight_text, notes_text, tags,
+        content='cards', content_rowid='rowid',
+        tokenize='unicode61 remove_diacritics 2'
+    );
+    ```
+    Synchronize automatically using SQLite triggers (`cards_ai`, `cards_ad`, `cards_au`) linked to `cards.rowid`, and call `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');` on migration to index pre-existing records.
 
+## Media & Document Handling (Video, Audio & Large Files)
+- **Streaming Hashing for Multi-Gigabyte Media**:
+  - **Trap**: Using `Data(contentsOf: url)` or `Insecure.MD5.hash(data:)` on video files (e.g. 5–40 GB course recordings) exhausts system RAM and triggers out-of-memory crashes.
+  - **Rule**: Always compute file hashes using chunked streaming via `FileHandle` (e.g. 1 MB buffers with `Insecure.MD5`). Cache the computed MD5 in a sidecar `.md5` file next to the media file (`<file>.md5`). When indexing or checking existence, read the sidecar first to achieve sub-millisecond document discovery without I/O thrashing.
+- **SwiftUI + AVPlayer Concurrency & State Isolation**:
+  - **Trap**: Directly attaching `addPeriodicTimeObserver(..., queue: .main)` inside a SwiftUI `View` struct triggers Swift 6 compiler errors (`main actor-isolated property can not be mutated from a Sendable closure`). Modifying `@State` variables from escaping closures creates race conditions and view tearing.
+  - **Rule**: Encapsulate `AVPlayer`, time observation, and playback status into a dedicated `@MainActor final class MediaPlaybackCoordinator: ObservableObject`. The view references the coordinator via `@StateObject`. Use `Task { @MainActor in ... }` or `DispatchQueue.main.async` in the time observer block to update `@Published` variables safely on `@MainActor`.
+- **Drag-and-Drop URL Collection with Concurrency Safety**:
+  - **Trap**: Mutating a captured `var collectedURLs: [URL]` inside `NSItemProvider.loadObject(ofClass: URL.self)` completion blocks fails Swift 6 strict concurrency checks (`mutation of captured var in concurrently-executing code`).
+  - **Rule**: Collect URLs using a thread-safe helper class (`final class URLCollector: @unchecked Sendable` with an `NSLock`) and dispatch the final notification to the main thread via `DispatchGroup.notify(queue: .main)`.
+- **Multi-Format Document Pipeline**:
+  - **Rule**: Broaden document pickers and drop handlers to accept common video (`mp4`, `mov`, `m4v`, `mkv`, `avi`, `webm`), audio (`mp3`, `m4a`, `wav`, `aac`, `flac`, `aiff`, `caf`), and documents (`pdf`, `epub`). For video and audio documents, `Document.totalPages` stores duration in rounded seconds. In `StudyWorkspaceView`, dynamically branch between `MarginNotePDFContainerView` (for PDFs) and `MediaPlaybackContainerView` (for Video and Audio).
+- **AVKit Linkage & Demangling Crash on macOS (`So12AVPlayerViewC`)**:
+  - **Trap**: Using SwiftUI's `VideoPlayer(player:)` or AppKit's `AVPlayerView` in a Swift Package Manager executable target without explicitly linking `AVKit.framework` crashes immediately at runtime with `failed to demangle superclass of VideoPlayerView from mangled name 'So12AVPlayerViewC': unknown error`. SPM does not automatically pass `-framework AVKit` unless declared in `linkerSettings`.
+  - **Rule**: Always declare `.linkedFramework("AVKit")` in `linkerSettings` for both library and executable targets in `Package.swift`. Additionally, prefer an `NSViewRepresentable` wrapping `AVPlayerView` with `controlsStyle = .none` so that video playback is clean, directly linked, and does not display conflicting built-in overlay controls over custom scrubbers and study toolbars.

@@ -73,7 +73,8 @@ public final class Database: @unchecked Sendable {
             last_page_offset_y REAL NOT NULL DEFAULT 0.0,
             mind_pan_x REAL,
             mind_pan_y REAL,
-            mind_zoom_scale REAL
+            mind_zoom_scale REAL,
+            document_type TEXT NOT NULL DEFAULT 'pdf'
         );
         CREATE TABLE IF NOT EXISTS topics(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, book_md5_list TEXT NOT NULL,
@@ -91,6 +92,12 @@ public final class Database: @unchecked Sendable {
             color_index INTEGER NOT NULL, tags TEXT NOT NULL, highlight_pic_hash TEXT,
             created_at REAL NOT NULL, updated_at REAL NOT NULL,
             highlight_rects TEXT NOT NULL DEFAULT '[]',
+            emphasis_list TEXT NOT NULL DEFAULT '[]',
+            excerpt_segments TEXT NOT NULL DEFAULT '[]',
+            emphasis_rects TEXT NOT NULL DEFAULT '[]',
+            media_type TEXT NOT NULL DEFAULT 'pdf',
+            video_start_time REAL,
+            video_end_time REAL,
             FOREIGN KEY(topic_id) REFERENCES topics(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_cards_topic ON cards(topic_id);
@@ -127,6 +134,25 @@ public final class Database: @unchecked Sendable {
             deck_id TEXT PRIMARY KEY,
             last_reviewed REAL NOT NULL
         );
+        CREATE VIRTUAL TABLE IF NOT EXISTS cards_fts USING fts5(
+            title, highlight_text, notes_text, tags,
+            content='cards', content_rowid='rowid',
+            tokenize='unicode61 remove_diacritics 2'
+        );
+        CREATE TRIGGER IF NOT EXISTS cards_ai AFTER INSERT ON cards BEGIN
+            INSERT INTO cards_fts(rowid, title, highlight_text, notes_text, tags)
+            VALUES (new.rowid, new.title, new.highlight_text, new.notes_text, new.tags);
+        END;
+        CREATE TRIGGER IF NOT EXISTS cards_ad AFTER DELETE ON cards BEGIN
+            INSERT INTO cards_fts(cards_fts, rowid, title, highlight_text, notes_text, tags)
+            VALUES ('delete', old.rowid, old.title, old.highlight_text, old.notes_text, old.tags);
+        END;
+        CREATE TRIGGER IF NOT EXISTS cards_au AFTER UPDATE ON cards BEGIN
+            INSERT INTO cards_fts(cards_fts, rowid, title, highlight_text, notes_text, tags)
+            VALUES ('delete', old.rowid, old.title, old.highlight_text, old.notes_text, old.tags);
+            INSERT INTO cards_fts(rowid, title, highlight_text, notes_text, tags)
+            VALUES (new.rowid, new.title, new.highlight_text, new.notes_text, new.tags);
+        END;
         """)
         if try !hasColumn("highlight_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN highlight_rects TEXT NOT NULL DEFAULT '[]';")
@@ -139,6 +165,18 @@ public final class Database: @unchecked Sendable {
         }
         if try !hasColumn("emphasis_rects", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN emphasis_rects TEXT NOT NULL DEFAULT '[]';")
+        }
+        if try !hasColumn("media_type", in: "cards") {
+            try execute("ALTER TABLE cards ADD COLUMN media_type TEXT NOT NULL DEFAULT 'pdf';")
+        }
+        if try !hasColumn("video_start_time", in: "cards") {
+            try execute("ALTER TABLE cards ADD COLUMN video_start_time REAL;")
+        }
+        if try !hasColumn("video_end_time", in: "cards") {
+            try execute("ALTER TABLE cards ADD COLUMN video_end_time REAL;")
+        }
+        if try !hasColumn("document_type", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN document_type TEXT NOT NULL DEFAULT 'pdf';")
         }
         if try !hasColumn("last_page_index", in: "documents") {
             try execute("ALTER TABLE documents ADD COLUMN last_page_index INTEGER NOT NULL DEFAULT 0;")
@@ -167,6 +205,7 @@ public final class Database: @unchecked Sendable {
         if try !hasColumn("last_document_md5", in: "topics") {
             try execute("ALTER TABLE topics ADD COLUMN last_document_md5 TEXT;")
         }
+        try? execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
         try repairDocumentIDs()
     }
 
@@ -306,7 +345,7 @@ public final class Database: @unchecked Sendable {
             }
         }
 
-        try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale) VALUES(?,?,?,?,?,?,?,?,?,?,?)") { statement in
+        try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)") { statement in
             bind(doc.id.uuidString, to: 1, in: statement)
             bind(doc.title, to: 2, in: statement)
             bind(doc.filePath, to: 3, in: statement)
@@ -318,6 +357,7 @@ public final class Database: @unchecked Sendable {
             bind(doc.mindPanX, to: 9, in: statement)
             bind(doc.mindPanY, to: 10, in: statement)
             bind(doc.mindZoomScale, to: 11, in: statement)
+            bind(doc.documentType, to: 12, in: statement)
             try requireDone(statement)
         }
     }
@@ -391,7 +431,7 @@ public final class Database: @unchecked Sendable {
     }
 
     private func document(where clause: String, value: String) throws -> Document? {
-        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale FROM documents WHERE \(clause) LIMIT 1") { statement in
+        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type FROM documents WHERE \(clause) LIMIT 1") { statement in
             bind(value, to: 1, in: statement)
             guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
             return decodeDocument(statement)
@@ -399,7 +439,7 @@ public final class Database: @unchecked Sendable {
     }
 
     public func allDocuments() throws -> [Document] {
-        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale FROM documents ORDER BY title") { statement in
+        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type FROM documents ORDER BY title") { statement in
             var result: [Document] = []
             while sqlite3_step(statement) == SQLITE_ROW {
                 if let row = decodeDocument(statement) { result.append(row) }
@@ -410,9 +450,9 @@ public final class Database: @unchecked Sendable {
 
     private func decodeDocument(_ statement: OpaquePointer) -> Document? {
         guard let id = text(statement, 0).flatMap(UUID.init(uuidString:)),
-              let title = text(statement, 1),
-              let path = text(statement, 2),
-              let md5 = text(statement, 3) else { return nil }
+            let title = text(statement, 1),
+            let path = text(statement, 2),
+            let md5 = text(statement, 3) else { return nil }
         return Document(
             id: id,
             title: title,
@@ -424,7 +464,8 @@ public final class Database: @unchecked Sendable {
             lastPageOffsetY: double(statement, 7) ?? 0.0,
             mindPanX: double(statement, 8),
             mindPanY: double(statement, 9),
-            mindZoomScale: double(statement, 10)
+            mindZoomScale: double(statement, 10),
+            documentType: text(statement, 11) ?? "pdf"
         )
     }
 
@@ -548,8 +589,8 @@ public final class Database: @unchecked Sendable {
         let emphasisRects = try jsonString(card.emphasisRects)
         let verb = replace ? "INSERT OR REPLACE" : "INSERT"
         let sql = """
-        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at,highlight_rects,emphasis_list,excerpt_segments,emphasis_rects)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at,highlight_rects,emphasis_list,excerpt_segments,emphasis_rects,media_type,video_start_time,video_end_time)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """
         try withStatement(sql) { statement in
             bind(card.id.uuidString, to: 1, in: statement)
@@ -578,6 +619,9 @@ public final class Database: @unchecked Sendable {
             bind(emphasisList, to: 24, in: statement)
             bind(excerptSegments, to: 25, in: statement)
             bind(emphasisRects, to: 26, in: statement)
+            bind(card.mediaType, to: 27, in: statement)
+            bind(card.videoStartTime, to: 28, in: statement)
+            bind(card.videoEndTime, to: 29, in: statement)
             try requireDone(statement)
         }
     }
@@ -637,7 +681,6 @@ public final class Database: @unchecked Sendable {
         try cards(sql: "SELECT * FROM cards WHERE topic_id=? ORDER BY created_at", values: [id.uuidString])
     }
 
-
     public func childCards(parentId: UUID?, topicId: UUID) throws -> [NoteCard] {
         if let parentId {
             return try cards(
@@ -649,6 +692,32 @@ public final class Database: @unchecked Sendable {
             sql: "SELECT * FROM cards WHERE topic_id=? AND group_note_id IS NULL ORDER BY created_at",
             values: [topicId.uuidString]
         )
+    }
+
+    public func searchCards(query: String, limit: Int = 100) throws -> [NoteCard] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let sanitized = trimmed.replacingOccurrences(of: "\"", with: "\"\"")
+        let ftsQuery = "\"\(sanitized)\"*"
+        let sql = """
+        SELECT c.*
+        FROM cards_fts
+        JOIN cards c ON c.rowid = cards_fts.rowid
+        WHERE cards_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?;
+        """
+        return try withStatement(sql) { statement in
+            bind(ftsQuery, to: 1, in: statement)
+            bind(limit, to: 2, in: statement)
+            var result: [NoteCard] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let card = try decodeCard(statement) {
+                    result.append(card)
+                }
+            }
+            return result
+        }
     }
 
     func cards(sql: String, values: [String]) throws -> [NoteCard] {
@@ -709,6 +778,9 @@ public final class Database: @unchecked Sendable {
             emphasisList: emphasisList,
             emphasisRects: emphasisRects,
             excerptSegments: excerptSegments,
+            mediaType: text(statement, 26) ?? "pdf",
+            videoStartTime: double(statement, 27),
+            videoEndTime: double(statement, 28),
             createdAt: Date(timeIntervalSince1970: double(statement, 20) ?? 0),
             updatedAt: Date(timeIntervalSince1970: double(statement, 21) ?? 0)
         )

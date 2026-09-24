@@ -418,5 +418,123 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(preserved?.lastPageOffsetY, 310.0, "Re-inserting default doc should preserve existing lastPageOffsetY")
         XCTAssertEqual(preserved?.mindPanX, 250.0, "Re-inserting default doc should preserve existing mindPanX")
     }
+
+    func testFTS5SearchAndTriggers() throws {
+        let db = try Database(inMemory: true)
+        let topic = Topic(title: "CS AI Topic")
+        try db.insertTopic(topic)
+
+        let card1 = NoteCard(
+            topicId: topic.id,
+            title: "Decision Trees",
+            highlightText: "Decision trees choose the attribute that minimizes Shannon entropy.",
+            notesText: "Chapter 3 Machine Learning review.",
+            tags: ["ml", "cmu"]
+        )
+        let card2 = NoteCard(
+            topicId: topic.id,
+            title: "Convolutional Neural Networks",
+            highlightText: "CNNs exploit spatial locality through shared weight convolution filters.",
+            notesText: "Deep learning lecture 4.",
+            tags: ["dl", "cv"]
+        )
+        try db.insertCard(card1)
+        try db.insertCard(card2)
+
+        // 1. Search for "entropy"
+        let entropyMatches = try db.searchCards(query: "entropy")
+        XCTAssertEqual(entropyMatches.count, 1)
+        XCTAssertEqual(entropyMatches.first?.title, "Decision Trees")
+
+        // 2. Search for "spatial"
+        let spatialMatches = try db.searchCards(query: "spatial")
+        XCTAssertEqual(spatialMatches.count, 1)
+        XCTAssertEqual(spatialMatches.first?.title, "Convolutional Neural Networks")
+
+        // 3. Search for prefix "convolut*"
+        let prefixMatches = try db.searchCards(query: "convolut")
+        XCTAssertEqual(prefixMatches.count, 1)
+        XCTAssertEqual(prefixMatches.first?.title, "Convolutional Neural Networks")
+
+        // 4. Update card and verify FTS trigger updates index
+        var updated = card1
+        updated.highlightText = "Information gain measures relative entropy reduction."
+        try db.updateCard(updated)
+
+        let infoGainMatches = try db.searchCards(query: "Information")
+        XCTAssertEqual(infoGainMatches.count, 1)
+        XCTAssertEqual(infoGainMatches.first?.id, card1.id)
+
+        // 5. Delete card and verify removal from FTS index
+        try db.deleteCard(id: card2.id)
+        let deletedMatches = try db.searchCards(query: "spatial")
+        XCTAssertEqual(deletedMatches.count, 0)
+    }
+
+    func testVideoNotesAndDocuments() throws {
+        let db = try Database(inMemory: true)
+        let videoDoc = Document(
+            title: "Lecture 1: Intro to ML",
+            filePath: "/Volumes/Media/lecture1.mp4",
+            md5: "video_lecture_1_md5",
+            totalPages: 4747,
+            documentType: "video"
+        )
+        try db.insertDocument(videoDoc)
+
+        let fetchedDoc = try db.getDocumentByMD5(md5: "video_lecture_1_md5")
+        XCTAssertEqual(fetchedDoc?.documentType, "video")
+        XCTAssertEqual(fetchedDoc?.totalPages, 4747)
+
+        let topic = Topic(title: "ML Course", bookMD5List: ["video_lecture_1_md5"])
+        try db.insertTopic(topic)
+
+        let videoCard = NoteCard(
+            topicId: topic.id,
+            bookMD5: "video_lecture_1_md5",
+            title: "Decision Trees Definition",
+            highlightText: "Video segment explaining decision trees",
+            mediaType: "video",
+            videoStartTime: 781.5,
+            videoEndTime: 841.8
+        )
+        try db.insertCard(videoCard)
+
+        let fetchedCard = try db.getCard(id: videoCard.id)
+        XCTAssertNotNil(fetchedCard)
+        XCTAssertEqual(fetchedCard?.mediaType, "video")
+        XCTAssertEqual(fetchedCard?.videoStartTime, 781.5)
+        XCTAssertEqual(fetchedCard?.videoEndTime, 841.8)
+    }
+
+    func testMediaStorageHEICCompression() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let storage = try MediaStorage(directoryURL: tempDir)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        // Create a test 400x300 image
+        let width = 400
+        let height = 300
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        ctx.setFillColor(red: 0.2, green: 0.6, blue: 0.9, alpha: 1.0)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        let img = ctx.makeImage()!
+
+        let savedFilename = try storage.saveCGImage(img, format: "heic", quality: 0.82)
+        XCTAssertTrue(savedFilename.hasSuffix(".heic"))
+
+        // Test loading by filename and by raw hash
+        let loadedData = storage.loadImage(hash: savedFilename)
+        XCTAssertNotNil(loadedData)
+        XCTAssertGreaterThan(loadedData?.count ?? 0, 100)
+
+        let hashWithoutExt = String(savedFilename.dropLast(5))
+        let loadedWithoutExt = storage.loadImage(hash: hashWithoutExt)
+        XCTAssertNotNil(loadedWithoutExt)
+        XCTAssertEqual(loadedData?.count, loadedWithoutExt?.count)
+    }
 }
+
+
 

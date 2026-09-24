@@ -452,10 +452,19 @@ final class AppModel: ObservableObject {
 
     func openDocumentPicker(attachToTopic: Bool = false) {
         let panel = NSOpenPanel()
-        let marginpkgType = UTType(filenameExtension: "marginpkg")
-        let marginnotesType = UTType(filenameExtension: "marginnotes")
-        let sqliteType = UTType(filenameExtension: "sqlite")
-        panel.allowedContentTypes = [UTType.pdf, marginpkgType, marginnotesType, sqliteType].compactMap { $0 }
+        let extensions = [
+            "mp4", "mov", "m4v", "mkv", "avi", "webm",
+            "mp3", "m4a", "wav", "aac", "flac", "aiff", "caf",
+            "pdf", "epub",
+            "marginpkg", "marginnotes", "sqlite"
+        ]
+        var types: [UTType] = [.pdf, .movie, .video, .audio, .mpeg4Movie, .quickTimeMovie, .mp3, .wav, .aiff, .epub]
+        for ext in extensions {
+            if let t = UTType(filenameExtension: ext), !types.contains(t) {
+                types.append(t)
+            }
+        }
+        panel.allowedContentTypes = types
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
@@ -470,7 +479,7 @@ final class AppModel: ObservableObject {
         if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
             importMarginNoteOrPackage(url: url)
         } else {
-            openPDF(url: url, attachToTopic: attachToTopic)
+            openDocument(url: url, attachToTopic: attachToTopic)
         }
     }
 
@@ -505,17 +514,39 @@ final class AppModel: ObservableObject {
         openDocumentPicker(attachToTopic: attachToTopic)
     }
 
-    func openPDF(url: URL, attachToTopic: Bool = true) {
-        guard let manager = try? PDFDocumentManager(url: url) else { return }
-        let existing = try? database.getDocumentByMD5(md5: manager.md5)
-        let document = existing ?? Document(
-            id: Document.stableUUID(manager.md5),
-            title: manager.title,
-            filePath: url.path,
-            md5: manager.md5,
-            totalPages: manager.pageCount,
-            lastVisited: Date()
-        )
+    func openDocument(url: URL, attachToTopic: Bool = true) {
+        let docType = MediaDocumentHelper.documentType(for: url)
+
+        let document: Document
+        if docType == "video" || docType == "audio" {
+            let md5 = MediaDocumentHelper.computeFileMD5(url: url)
+            let existing = try? database.getDocumentByMD5(md5: md5)
+            let duration = MediaDocumentHelper.mediaDuration(url: url)
+            let title = url.deletingPathExtension().lastPathComponent
+            document = existing ?? Document(
+                id: Document.stableUUID(md5),
+                title: title,
+                filePath: url.path,
+                md5: md5,
+                totalPages: Int(duration.rounded()),
+                lastVisited: Date(),
+                documentType: docType
+            )
+        } else if let manager = try? PDFDocumentManager(url: url) {
+            let existing = try? database.getDocumentByMD5(md5: manager.md5)
+            document = existing ?? Document(
+                id: Document.stableUUID(manager.md5),
+                title: manager.title,
+                filePath: url.path,
+                md5: manager.md5,
+                totalPages: manager.pageCount,
+                lastVisited: Date(),
+                documentType: docType
+            )
+        } else {
+            return
+        }
+
         try? database.insertDocument(document)
 
         if attachToTopic, let topicID = selectedTopicID {
@@ -527,8 +558,27 @@ final class AppModel: ObservableObject {
         switchToDocument(document)
     }
 
+    func openPDF(url: URL, attachToTopic: Bool = true) {
+        openDocument(url: url, attachToTopic: attachToTopic)
+    }
+
     func switchToDocument(_ document: Document) {
         flushPendingPositions()
+        let docType = document.documentType.isEmpty ? MediaDocumentHelper.documentType(for: URL(fileURLWithPath: document.filePath)) : document.documentType
+        if docType == "video" || docType == "audio" {
+            activeDocument = document
+            manager = nil
+            let now = Date()
+            try? database.updateDocumentLastVisited(id: document.id, date: now)
+            if let topicID = selectedTopicID {
+                try? database.updateTopicUpdatedAt(id: topicID, date: now)
+                try? database.updateTopicLastDocument(id: topicID, md5: document.md5)
+            }
+            reloadLibrary()
+            loadBookmarks()
+            reloadDocumentCards()
+            return
+        }
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
         activeDocument = document
         manager = loaded
@@ -541,6 +591,48 @@ final class AppModel: ObservableObject {
         reloadLibrary()
         loadBookmarks()
         reloadDocumentCards()
+    }
+
+    func createVideoExcerptCard(startTime: Double, endTime: Double, title: String) {
+        guard let activeDocument, let topicID = selectedTopicID else { return }
+        let cardID = UUID()
+
+        // Generate poster frame
+        var posterHash: String? = nil
+        let videoURL = URL(fileURLWithPath: activeDocument.filePath)
+        if let hash = try? mediaStorage.generateVideoPosterFrame(url: videoURL, timestampSeconds: startTime) {
+            posterHash = hash
+        }
+
+        // Layout position adjacent to existing cards
+        let lastPos = mindMapCards.last?.mindPos ?? CGPoint(x: 100, y: 100)
+        let mindPos = CGPoint(x: lastPos.x, y: lastPos.y + 120)
+
+        let card = NoteCard(
+            id: cardID,
+            topicId: topicID,
+            bookMD5: activeDocument.md5,
+            title: title.isEmpty ? "Video Excerpt (\(MediaDocumentHelper.formatDuration(startTime)))" : title,
+            highlightText: "",
+            notesText: "",
+            mindPos: mindPos,
+            startPage: 0,
+            endPage: 0,
+            startPos: nil,
+            endPos: nil,
+            colorIndex: 0,
+            highlightPicHash: posterHash,
+            mediaType: activeDocument.documentType == "audio" ? "audio" : "video",
+            videoStartTime: startTime,
+            videoEndTime: endTime,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+
+        try? database.insertCard(card)
+        reloadStudySet()
+        selectedCardID = cardID
+        objectWillChange.send()
     }
 
     func loadBookmarks() {
@@ -1708,8 +1800,8 @@ struct WorkspaceDocumentTabs: View {
                         }
                     }
                 }
-                Button("Open New PDF…") {
-                    model.openPDFPicker(attachToTopic: true)
+                Button("Open New Document…") {
+                    model.openDocumentPicker(attachToTopic: true)
                 }
             } label: {
                 HStack(spacing: 2) {
@@ -1941,7 +2033,7 @@ struct StudyWorkspaceView: View {
                     model.detachDocument(doc)
                 },
                 onAddDocument: {
-                    model.openPDFPicker(attachToTopic: true)
+                    model.openDocumentPicker(attachToTopic: true)
                 },
                 onDismiss: {
                     model.isManagingDocuments = false
@@ -2354,16 +2446,36 @@ struct StudyWorkspaceView: View {
                     model.deleteEmphasisInCard(cardID: cardID, text: text, rects: rects)
                 }
             )
+        } else if let doc = model.activeDocument, doc.documentType == "video" || doc.documentType == "audio" {
+            MediaPlaybackContainerView(
+                document: doc,
+                cards: model.mindMapCards,
+                selectedCardID: model.selectedCardID,
+                studyDocuments: model.studyDocuments,
+                mediaStorage: model.mediaStorage,
+                onSwitchDocument: { doc in
+                    model.switchToDocument(doc)
+                },
+                onManageDocuments: {
+                    model.isManagingDocuments = true
+                },
+                onCreateVideoCard: { startTime, endTime, title in
+                    model.createVideoExcerptCard(startTime: startTime, endTime: endTime, title: title)
+                },
+                onSelectCard: { cardID in
+                    model.select(cardID: cardID)
+                }
+            )
         } else {
             VStack(spacing: 12) {
                 Image(systemName: "doc.richtext")
                     .font(.system(size: 40))
                     .foregroundStyle(.secondary)
-                Text("No PDF Document Attached")
+                Text("No Document Attached")
                     .font(.headline)
                     .foregroundStyle(.secondary)
-                Button("Attach PDF…") {
-                    model.openPDFPicker(attachToTopic: true)
+                Button("Attach Document…") {
+                    model.openDocumentPicker(attachToTopic: true)
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -2413,6 +2525,11 @@ struct MarginGraphApp: App {
                                 },
                                 onImportDocument: {
                                     model.openDocumentPicker(attachToTopic: false)
+                                },
+                                onImportURLs: { urls in
+                                    for u in urls {
+                                        model.openOrImportFile(url: u, attachToTopic: false)
+                                    }
                                 },
                                 onDeleteDocument: { doc in
                                     model.deleteDocument(doc)
@@ -2467,12 +2584,7 @@ struct MarginGraphApp: App {
             }
             .onOpenURL { url in
                 if url.isFileURL {
-                    let ext = url.pathExtension.lowercased()
-                    if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
-                        model.importMarginNoteOrPackage(url: url)
-                    } else if ext == "pdf" {
-                        model.openPDF(url: url, attachToTopic: false)
-                    }
+                    model.openOrImportFile(url: url, attachToTopic: false)
                 } else {
                     model.handleDeepLink(url)
                 }

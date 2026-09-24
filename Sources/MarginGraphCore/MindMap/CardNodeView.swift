@@ -147,11 +147,26 @@ public struct CardNodeView: View {
             }
 
                 // 2. Cream Body Section (Excerpt & Notes)
+                let isVideo = card.mediaType == "video" || card.videoStartTime != nil
                 let hasImage = thumbnail != nil
                 let hasTags = !card.tags.isEmpty
 
-                if hasExcerpt || hasNotes || hasImage || hasTags {
+                if hasExcerpt || hasNotes || hasImage || hasTags || isVideo {
                     VStack(alignment: .leading, spacing: 6) {
+                        // Video badge with timestamp
+                        if isVideo, let badgeText = videoBadgeText {
+                            HStack(spacing: 4) {
+                                Image(systemName: "video.fill")
+                                    .font(.system(size: 9))
+                                Text(badgeText)
+                                    .font(.system(size: 9.5, weight: .medium))
+                            }
+                            .padding(.horizontal, 5.5)
+                            .padding(.vertical, 2.5)
+                            .background(Color.black.opacity(0.07), in: RoundedRectangle(cornerRadius: 3))
+                            .foregroundStyle(Color(white: 0.25))
+                        }
+
                         // Highlight / Excerpt text
                         if hasExcerpt {
                             Text(styledExcerptText)
@@ -170,13 +185,25 @@ public struct CardNodeView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
 
-                        // Image thumbnail
+                        // Image thumbnail / Video poster frame
                         if let image = thumbnail {
-                            Image(nsImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .frame(maxHeight: 82)
-                                .clipShape(RoundedRectangle(cornerRadius: 3))
+                            ZStack {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(maxHeight: 82)
+                                    .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                                if isVideo {
+                                    Circle()
+                                        .fill(.black.opacity(0.45))
+                                        .frame(width: 28, height: 28)
+                                    Image(systemName: "play.fill")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.white)
+                                        .offset(x: 1)
+                                }
+                            }
                         }
 
                         // Tags
@@ -350,6 +377,13 @@ public struct CardNodeView: View {
                 NSPasteboard.general.setString(content, forType: .string)
             }
             Divider()
+            if card.mediaType == "video" || card.videoStartTime != nil, let startTime = card.videoStartTime {
+                Button("Copy Video Timestamp") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(formatVideoTimestamp(startTime), forType: .string)
+                }
+                Divider()
+            }
             Button("Copy Deep Link") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(card.deepLinkURL.absoluteString, forType: .string)
@@ -373,6 +407,28 @@ public struct CardNodeView: View {
                 Label("Delete Note", systemImage: "trash")
             }
         }
+    }
+
+    private func formatVideoTimestamp(_ seconds: Double) -> String {
+        let totalSec = max(0, Int(seconds.rounded()))
+        let h = totalSec / 3600
+        let m = (totalSec % 3600) / 60
+        let s = totalSec % 60
+        if h > 0 {
+            return String(format: "%d:%02d:%02d", h, m, s)
+        } else {
+            return String(format: "%02d:%02d", m, s)
+        }
+    }
+
+    private var videoBadgeText: String? {
+        guard let start = card.videoStartTime else {
+            return card.mediaType == "video" ? "Video Note" : nil
+        }
+        if let end = card.videoEndTime, end > start {
+            return "\(formatVideoTimestamp(start)) - \(formatVideoTimestamp(end))"
+        }
+        return formatVideoTimestamp(start)
     }
 
     private var styledExcerptText: AttributedString {

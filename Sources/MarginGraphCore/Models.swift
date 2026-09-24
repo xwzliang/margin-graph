@@ -13,6 +13,7 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
     public var mindPanX: Double?
     public var mindPanY: Double?
     public var mindZoomScale: Double?
+    public var documentType: String
 
     public init(
         id: UUID = UUID(),
@@ -25,7 +26,8 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
         lastPageOffsetY: Double = 0.0,
         mindPanX: Double? = nil,
         mindPanY: Double? = nil,
-        mindZoomScale: Double? = nil
+        mindZoomScale: Double? = nil,
+        documentType: String = "pdf"
     ) {
         self.id = id
         self.title = title
@@ -38,6 +40,7 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
         self.mindPanX = mindPanX
         self.mindPanY = mindPanY
         self.mindZoomScale = mindZoomScale
+        self.documentType = documentType
     }
 
     public static func stableUUID(_ raw: String) -> UUID {
@@ -162,6 +165,9 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var emphasisList: [String]
     public var emphasisRects: [HighlightRect]
     public var excerptSegments: [ExcerptSegment]
+    public var mediaType: String
+    public var videoStartTime: Double?
+    public var videoEndTime: Double?
     public var createdAt: Date
     public var updatedAt: Date
 
@@ -187,6 +193,9 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         emphasisList: [String] = [],
         emphasisRects: [HighlightRect] = [],
         excerptSegments: [ExcerptSegment] = [],
+        mediaType: String = "pdf",
+        videoStartTime: Double? = nil,
+        videoEndTime: Double? = nil,
         createdAt: Date = Date(),
         updatedAt: Date = Date()
     ) {
@@ -211,6 +220,9 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         self.emphasisList = emphasisList
         self.emphasisRects = emphasisRects
         self.excerptSegments = excerptSegments
+        self.mediaType = mediaType
+        self.videoStartTime = videoStartTime
+        self.videoEndTime = videoEndTime
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }

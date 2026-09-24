@@ -3,17 +3,28 @@ import CoreGraphics
 import SQLite3
 import PDFKit
 import zlib
+import AVFoundation
 
 
 public struct MarginNoteImportResult: Sendable {
     public var topics: [Topic]
     public var documents: [Document]
     public var cards: [NoteCard]
+    public var links: [CardLink]
+    public var reviewItems: [ReviewItem]
 
-    public init(topics: [Topic], documents: [Document], cards: [NoteCard]) {
+    public init(
+        topics: [Topic],
+        documents: [Document],
+        cards: [NoteCard],
+        links: [CardLink] = [],
+        reviewItems: [ReviewItem] = []
+    ) {
         self.topics = topics
         self.documents = documents
         self.cards = cards
+        self.links = links
+        self.reviewItems = reviewItems
     }
 }
 
@@ -26,9 +37,11 @@ public enum NotebookConflictResolution: Sendable {
 public final class MarginNoteImporter {
     private let url: URL
     public let documentsDestinationDirectory: URL
+    public let mediaStorage: MediaStorage?
 
-    public init(url: URL, documentsDestinationDirectory: URL? = nil) {
+    public init(url: URL, documentsDestinationDirectory: URL? = nil, mediaStorage: MediaStorage? = nil) {
         self.url = url
+        self.mediaStorage = mediaStorage
         if let dir = documentsDestinationDirectory {
             self.documentsDestinationDirectory = dir
         } else {
@@ -85,7 +98,7 @@ public final class MarginNoteImporter {
                 if noteURL == nil {
                     noteURL = itemURL
                 }
-            } else if ext == "pdf" || ext == "epub" {
+            } else if ext == "pdf" || ext == "epub" || ext == "mp4" || ext == "mov" || ext == "m4v" {
                 let fileName = itemURL.lastPathComponent
                 var destinationURL = documentsDestinationDirectory.appendingPathComponent(fileName)
                 if fileManager.fileExists(atPath: destinationURL.path) {
@@ -213,13 +226,24 @@ public final class MarginNoteImporter {
                 try? md5.write(to: sidecar, atomically: true, encoding: .utf8)
             }
 
+            let lowerExt = (filePath as NSString).pathExtension.lowercased()
+            let docType: String
+            if ["mp4", "mov", "m4v", "mkv", "avi", "webm"].contains(lowerExt) {
+                docType = "video"
+            } else if lowerExt == "epub" {
+                docType = "epub"
+            } else {
+                docType = "pdf"
+            }
+
             documents.append(Document(
                 id: Document.stableUUID(md5),
                 title: cleanTitle,
                 filePath: filePath,
                 md5: md5,
                 totalPages: totalPages,
-                lastVisited: parseDate(first(row, ["ZLASTVISITED", "ZLASTOPENDATE"]))
+                lastVisited: parseDate(first(row, ["ZLASTVISITED", "ZLASTOPENDATE"])),
+                documentType: docType
             ))
         }
 
@@ -232,13 +256,23 @@ public final class MarginNoteImporter {
                 if !FileManager.default.fileExists(atPath: sidecar.path) {
                     try? md5.write(to: sidecar, atomically: true, encoding: .utf8)
                 }
+                let lowerExt = docURL.pathExtension.lowercased()
+                let docType: String
+                if ["mp4", "mov", "m4v", "mkv", "avi", "webm"].contains(lowerExt) {
+                    docType = "video"
+                } else if lowerExt == "epub" {
+                    docType = "epub"
+                } else {
+                    docType = "pdf"
+                }
                 documents.append(Document(
                     id: Document.stableUUID(md5),
                     title: cleanTitle,
                     filePath: docURL.path,
                     md5: md5,
                     totalPages: totalPages,
-                    lastVisited: Date()
+                    lastVisited: Date(),
+                    documentType: docType
                 ))
             }
         }
@@ -281,9 +315,35 @@ public final class MarginNoteImporter {
         }
         let fallbackTopic = topics[0].id
 
+        let mediaSearchDirs: [URL] = [
+            dbURL.deletingPathExtension().appendingPathExtension("sqlite.files"),
+            dbURL.deletingPathExtension().appendingPathExtension("files"),
+            dbURL.deletingLastPathComponent().appendingPathComponent("files"),
+            documentsDestinationDirectory
+        ]
+
+        var mediaHashCache: [String: String] = [:]
+        func convertMediaToHEIC(_ md5: String) -> String? {
+            if let cached = mediaHashCache[md5] {
+                return cached
+            }
+            if let storage = self.mediaStorage {
+                if let data = self.fetchMediaBlob(from: source, md5: md5) ?? self.findMediaInFiles(md5: md5, candidateDirs: mediaSearchDirs) {
+                    if let newHash = try? storage.saveImage(data, format: "heic", quality: 0.85) {
+                        mediaHashCache[md5] = newHash
+                        return newHash
+                    }
+                }
+            }
+            return md5
+        }
+
         var cards: [NoteCard] = []
+        var links: [CardLink] = []
+
         for row in noteRows {
             let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
+            let cardId = noteKeyMap[key] ?? stableUUID(key)
             let topicKey = first(row, ["ZTOPICID", "ZTOPIC", "ZTOPIC_PK"])
             let topicId = topicKey.flatMap { topicKeyMap[$0] } ?? fallbackTopic
             let parentKey = first(row, ["ZGROUPNOTEID", "ZGROUPNOTE", "ZPARENTNOTEID"])
@@ -291,6 +351,17 @@ public final class MarginNoteImporter {
             let mindLinks = parseStringList(first(row, ["ZMINDLINKS"])).map { noteKeyMap[$0] ?? stableUUID($0) }
             let created = parseDate(first(row, ["ZCREATEDAT", "ZCREATEDATE", "ZCREATED"])) ?? Date()
             let updated = parseDate(first(row, ["ZUPDATEDAT", "ZMODIFIEDDATE", "ZUPDATED"])) ?? created
+
+            for target in mindLinks {
+                links.append(CardLink(
+                    id: UUID(),
+                    topicId: topicId,
+                    sourceCardId: cardId,
+                    targetCardId: target,
+                    label: nil,
+                    isBidirectional: false
+                ))
+            }
 
             var colorIndex = Int(first(row, ["ZCOLORINDEX", "ZCOLOR"]) ?? "") ?? -1
             if colorIndex < 0 || colorIndex == 0 {
@@ -302,8 +373,59 @@ public final class MarginNoteImporter {
             }
             if colorIndex < 0 { colorIndex = 0 }
 
+            let highlightPicRaw = first(row, ["ZHIGHLIGHT_PIC", "ZHIGHLIGHTPIC", "ZHIGHLIGHT_PHOTO", "ZPIC"])
+            let picInfo = parseHighlightPic(highlightPicRaw)
+
+            var picHash = first(row, ["ZHIGHLIGHTPICHASH"])
+            if picHash == nil, let paintMD5 = picInfo.paintMD5 {
+                picHash = convertMediaToHEIC(paintMD5)
+            }
+
+            var highlightRects = parseHighlightRects(first(row, ["ZHIGHLIGHTS"]))
+            if highlightRects.isEmpty && !picInfo.rects.isEmpty {
+                highlightRects = picInfo.rects
+            } else if !picInfo.rects.isEmpty {
+                for r in picInfo.rects {
+                    if !highlightRects.contains(r) {
+                        highlightRects.append(r)
+                    }
+                }
+            }
+
+            var mediaType = "pdf"
+            var videoStartTime: Double?
+            var videoEndTime: Double?
+
+            let startPosRaw = first(row, ["ZSTARTPOS"])
+            let endPosRaw = first(row, ["ZENDPOS"])
+
+            if let startTime = parseVideoTimestamp(startPosRaw) {
+                mediaType = "video"
+                videoStartTime = startTime
+                if let endTime = parseVideoTimestamp(endPosRaw) {
+                    videoEndTime = endTime
+                }
+            } else if let bookMD5 = first(row, ["ZBOOKMD5", "ZMD5"]),
+                      let doc = documents.first(where: { $0.md5 == bookMD5 }),
+                      doc.documentType == "video" {
+                mediaType = "video"
+            }
+
+            if (mediaType == "video" || videoStartTime != nil),
+               picHash == nil,
+               let startTime = videoStartTime,
+               let bookMD5 = first(row, ["ZBOOKMD5", "ZMD5"]),
+               let doc = documents.first(where: { $0.md5 == bookMD5 }),
+               FileManager.default.fileExists(atPath: doc.filePath),
+               let storage = self.mediaStorage {
+                let videoURL = URL(fileURLWithPath: doc.filePath)
+                if let posterHash = try? storage.generateVideoPosterFrame(url: videoURL, timestampSeconds: startTime) {
+                    picHash = posterHash
+                }
+            }
+
             cards.append(NoteCard(
-                id: noteKeyMap[key] ?? stableUUID(key),
+                id: cardId,
                 topicId: topicId,
                 bookMD5: first(row, ["ZBOOKMD5", "ZMD5"]),
                 title: first(row, ["ZNOTETITLE", "ZTITLE"]) ?? "",
@@ -315,18 +437,65 @@ public final class MarginNoteImporter {
                 isFolded: (Int(first(row, ["ZISFOLDED", "ZFOLDED"]) ?? "0") ?? 0) != 0,
                 startPage: zeroBasedPage(first(row, ["ZSTARTPAGE"])),
                 endPage: zeroBasedPage(first(row, ["ZENDPAGE"])),
-                startPos: parsePoint(first(row, ["ZSTARTPOS"])),
-                endPos: parsePoint(first(row, ["ZENDPOS"])),
+                startPos: parsePoint(startPosRaw),
+                endPos: parsePoint(endPosRaw),
                 colorIndex: colorIndex,
                 tags: parseStringList(first(row, ["ZTAGS"])),
-                highlightPicHash: first(row, ["ZHIGHLIGHTPICHASH"]),
-                highlightRects: parseHighlightRects(first(row, ["ZHIGHLIGHTS"])),
+                highlightPicHash: picHash,
+                highlightRects: highlightRects,
+                mediaType: mediaType,
+                videoStartTime: videoStartTime,
+                videoEndTime: videoEndTime,
                 createdAt: created,
                 updatedAt: updated
             ))
         }
 
-        return MarginNoteImportResult(topics: topics, documents: documents, cards: cards)
+        var reviewItems: [ReviewItem] = []
+        if let activityRows = try? rows(in: source, table: "ZACTIVITY") {
+            for row in activityRows {
+                let action = first(row, ["ZACTION", "ZTYPE", "ZNAME"])
+                guard action == "SpacedRepetition" || action == "Review",
+                      let rawNoteId = first(row, ["ZNOTEID", "ZBOOKNOTEID", "ZIDENTIFIER"]),
+                      let cardId = noteKeyMap[rawNoteId] ?? UUID(uuidString: rawNoteId) else {
+                    continue
+                }
+                let infoStr = first(row, ["ZINFO", "ZDATA", "ZEXTRA"]) ?? ""
+                var easeFactor: Double = 2.5
+                var intervalDays: Int = 0
+                var reps: Int = 0
+                if let data = infoStr.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                    if let factor = (json["factor"] as? NSNumber)?.doubleValue ?? json["factor"] as? Double {
+                        easeFactor = factor
+                    }
+                    if let ivl = (json["ivl"] as? NSNumber)?.intValue ?? json["ivl"] as? Int {
+                        intervalDays = ivl
+                    }
+                    if let r = (json["reps"] as? NSNumber)?.intValue ?? json["reps"] as? Int {
+                        reps = r
+                    }
+                }
+                let lastReviewed = parseDate(first(row, ["ZTIME", "ZDATE", "ZTIMESTAMP"]))
+                let dueDate = (lastReviewed ?? Date()).addingTimeInterval(Double(max(1, intervalDays)) * 86400)
+                reviewItems.append(ReviewItem(
+                    cardId: cardId,
+                    easeFactor: easeFactor,
+                    intervalDays: intervalDays,
+                    repetitions: reps,
+                    dueDate: dueDate,
+                    lastReviewed: lastReviewed
+                ))
+            }
+        }
+
+        return MarginNoteImportResult(
+            topics: topics,
+            documents: documents,
+            cards: cards,
+            links: links,
+            reviewItems: reviewItems
+        )
     }
 
     @discardableResult
@@ -403,6 +572,16 @@ public final class MarginNoteImporter {
                 cardToInsert.topicId = targetTopicId
             }
             try database.insertCard(cardToInsert)
+        }
+        for link in result.links {
+            var linkToInsert = link
+            if let targetTopicId = topicIdMapping[link.topicId] {
+                linkToInsert.topicId = targetTopicId
+            }
+            try? database.insertLink(linkToInsert)
+        }
+        for item in result.reviewItems {
+            try? database.upsertReviewItem(item)
         }
 
         return result
@@ -657,5 +836,122 @@ public final class MarginNoteImporter {
             bytes[8], bytes[9], bytes[10], bytes[11],
             bytes[12], bytes[13], bytes[14], bytes[15]
         ))
+    }
+
+    private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    private func fetchMediaBlob(from db: OpaquePointer, md5: String) -> Data? {
+        var stmt: OpaquePointer?
+        let query = "SELECT ZDATA FROM ZMEDIA WHERE ZMD5=? LIMIT 1"
+        guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK, let stmt else { return nil }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, md5, -1, transient)
+        if sqlite3_step(stmt) == SQLITE_ROW {
+            if let bytes = sqlite3_column_blob(stmt, 0) {
+                let count = Int(sqlite3_column_bytes(stmt, 0))
+                if count > 0 {
+                    return Data(bytes: bytes, count: count)
+                }
+            }
+        }
+        return nil
+    }
+
+    private func findMediaInFiles(md5: String, candidateDirs: [URL]) -> Data? {
+        let fileManager = FileManager.default
+        for dir in candidateDirs {
+            let direct = dir.appendingPathComponent(md5)
+            if fileManager.fileExists(atPath: direct.path), let data = try? Data(contentsOf: direct), !data.isEmpty {
+                return data
+            }
+            for ext in ["png", "jpg", "jpeg", "heic"] {
+                let withExt = dir.appendingPathComponent("\(md5).\(ext)")
+                if fileManager.fileExists(atPath: withExt.path), let data = try? Data(contentsOf: withExt), !data.isEmpty {
+                    return data
+                }
+            }
+        }
+        return nil
+    }
+
+    private func parseVideoTimestamp(_ raw: String?) -> Double? {
+        guard let raw, raw.contains("MN3VIDEO") else { return nil }
+        let parts = raw.components(separatedBy: "|")
+        if parts.count >= 3 {
+            if let duration = Double(parts[1]), let fraction = Double(parts[2]) {
+                return duration * fraction
+            }
+        } else if parts.count == 2 {
+            if let sec = Double(parts[1]) {
+                return sec
+            }
+        }
+        return nil
+    }
+
+    private struct HighlightPicInfo {
+        var paintMD5: String?
+        var rects: [HighlightRect]
+    }
+
+    private func parseHighlightPic(_ raw: String?) -> HighlightPicInfo {
+        guard let raw, raw.hasPrefix("base64:"),
+              let data = Data(base64Encoded: String(raw.dropFirst("base64:".count)))
+        else { return HighlightPicInfo(paintMD5: nil, rects: []) }
+
+        var paintMD5: String?
+        var rects: [HighlightRect] = []
+
+        func inspect(_ root: Any) {
+            if let dict = root as? [String: Any] {
+                if let paint = dict["paint"] as? String, !paint.isEmpty {
+                    paintMD5 = paint
+                }
+                if let selLst = dict["selLst"] as? [Any] {
+                    for item in selLst {
+                        if let selDict = item as? [String: Any] {
+                            let pageVal = selDict["pageNo"]
+                            let page: Int?
+                            if let num = pageVal as? NSNumber {
+                                page = num.intValue
+                            } else if let str = pageVal as? String {
+                                page = Int(str)
+                            } else {
+                                page = nil
+                            }
+                            if let page, let rObj = selDict["rect"], let r = parseRect(rObj) {
+                                rects.append(HighlightRect(
+                                    page: max(0, page - 1),
+                                    x: r.origin.x,
+                                    y: r.origin.y,
+                                    width: r.size.width,
+                                    height: r.size.height
+                                ))
+                            }
+                        }
+                    }
+                }
+                for v in dict.values {
+                    if !(v is String) && !(v is NSNumber) {
+                        inspect(v)
+                    }
+                }
+            } else if let arr = root as? [Any] {
+                for v in arr {
+                    inspect(v)
+                }
+            }
+        }
+
+        if let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data) {
+            unarchiver.requiresSecureCoding = false
+            if let root = unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey) {
+                inspect(root)
+            }
+        } else if let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil) {
+            inspect(plist)
+        }
+
+        return HighlightPicInfo(paintMD5: paintMD5, rects: rects)
     }
 }
