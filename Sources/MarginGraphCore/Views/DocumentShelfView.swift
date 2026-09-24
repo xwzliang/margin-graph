@@ -44,6 +44,7 @@ public struct DocumentShelfView: View {
     @State private var folderToDelete: DocumentFolder? = nil
     @State private var documentToRename: Document? = nil
     @State private var renameDocumentTitle: String = ""
+    @FocusState private var isSearchFieldFocused: Bool
 
     public init(
         documents: [Document],
@@ -279,6 +280,7 @@ public struct DocumentShelfView: View {
             TextField("Search documents…", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
+                .focused($isSearchFieldFocused)
 
             if !searchQuery.isEmpty {
                 Button {
@@ -295,6 +297,7 @@ public struct DocumentShelfView: View {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     searchQuery = ""
                     isSearchPresented = false
+                    isSearchFieldFocused = false
                 }
             }
             .buttonStyle(.plain)
@@ -306,6 +309,27 @@ public struct DocumentShelfView: View {
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 24)
         .padding(.bottom, 8)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isSearchFieldFocused = true
+            }
+        }
+        .onChange(of: isSearchPresented) { presented in
+            if presented {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    isSearchFieldFocused = true
+                }
+            } else {
+                isSearchFieldFocused = false
+            }
+        }
+        .onExitCommand {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                searchQuery = ""
+                isSearchPresented = false
+                isSearchFieldFocused = false
+            }
+        }
     }
 
     public var body: some View {

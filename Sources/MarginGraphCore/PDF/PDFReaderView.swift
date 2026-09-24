@@ -79,6 +79,7 @@ public final class DottedLineAnnotation: PDFAnnotation {
 }
 
 public final class KnobAnnotation: PDFAnnotation {
+    public var isStart: Bool = true
     public var fillColor: NSColor = MarginNoteTheme.nsCursorColor {
         didSet {
             self.color = fillColor
@@ -87,7 +88,7 @@ public final class KnobAnnotation: PDFAnnotation {
     }
 
     public override init(bounds: CGRect, forType type: PDFAnnotationSubtype, withProperties properties: [AnyHashable : Any]?) {
-        super.init(bounds: bounds, forType: .circle, withProperties: properties)
+        super.init(bounds: bounds, forType: .square, withProperties: properties)
         self.color = fillColor
         self.interiorColor = fillColor
         let border = PDFBorder()
@@ -102,6 +103,45 @@ public final class KnobAnnotation: PDFAnnotation {
         let border = PDFBorder()
         border.lineWidth = 0
         self.border = border
+    }
+
+    public override func draw(with box: PDFDisplayBox, in context: CGContext) {
+        context.saveGState()
+        context.setFillColor(fillColor.cgColor)
+        context.setStrokeColor(fillColor.cgColor)
+
+        let clip = context.boundingBoxOfClipPath
+        let isLocalSpace = clip.origin.x < 1.0 && clip.origin.y < 1.0 && (bounds.origin.x > clip.maxX || bounds.origin.y > clip.maxY)
+        let rect = isLocalSpace ? CGRect(origin: .zero, size: bounds.size) : bounds
+
+        let path = CGMutablePath()
+        let w = rect.width
+        let h = rect.height
+        let minX = rect.minX
+        let maxX = rect.maxX
+        let minY = rect.minY
+        let maxY = rect.maxY
+
+        if isStart {
+            // MarginNote top selection tab: flat left edge, smooth curved top and right (teardrop / note flag)
+            path.move(to: CGPoint(x: minX, y: minY))
+            path.addLine(to: CGPoint(x: minX, y: maxY - w * 0.4))
+            path.addQuadCurve(to: CGPoint(x: minX + w * 0.5, y: maxY), control: CGPoint(x: minX, y: maxY))
+            path.addQuadCurve(to: CGPoint(x: maxX, y: maxY - h * 0.4), control: CGPoint(x: maxX, y: maxY))
+            path.addQuadCurve(to: CGPoint(x: minX, y: minY), control: CGPoint(x: maxX, y: minY))
+        } else {
+            // MarginNote bottom selection tab: flat left edge, smooth curved bottom and right
+            path.move(to: CGPoint(x: minX, y: maxY))
+            path.addLine(to: CGPoint(x: minX, y: minY + w * 0.4))
+            path.addQuadCurve(to: CGPoint(x: minX + w * 0.5, y: minY), control: CGPoint(x: minX, y: minY))
+            path.addQuadCurve(to: CGPoint(x: maxX, y: minY + h * 0.4), control: CGPoint(x: maxX, y: minY))
+            path.addQuadCurve(to: CGPoint(x: minX, y: maxY), control: CGPoint(x: maxX, y: maxY))
+        }
+        path.closeSubpath()
+
+        context.addPath(path)
+        context.fillPath()
+        context.restoreGState()
     }
 }
 
@@ -903,10 +943,7 @@ public struct PDFReaderView: NSViewRepresentable {
             guard let page = document.page(at: index) else { continue }
             for annotation in page.annotations
             where annotation.contents == "MarginGraph-active-highlight"
-                || annotation.contents == "MarginGraph-handle-start"
-                || annotation.contents == "MarginGraph-handle-end"
-                || annotation.contents == "MarginGraph-handle-knob-start"
-                || annotation.contents == "MarginGraph-handle-knob-end"
+                || annotation.contents?.contains("handle") == true
                 || annotation.contents == "MarginGraph-drag-highlight"
                 || annotation.contents == "MarginGraph-target-bracket"
                 || annotation.contents == "MarginGraph-jump" {
@@ -2849,12 +2886,12 @@ public final class InteractivePDFView: PDFView {
     }
 
     public static func handleDimensions(for lineHeight: CGFloat, scale: CGFloat = 1.0) -> (stemWidth: CGFloat, stemHeight: CGFloat, knobSize: CGFloat) {
-        let baseHeight = max(10.0, min(32.0, lineHeight))
+        let baseHeight = max(11.0, min(24.0, lineHeight))
         let sanitizedScale = (scale > 0.05 && !scale.isNaN && !scale.isInfinite) ? scale : 1.0
         let effectiveScale = max(0.8, min(5.0, sanitizedScale))
-        let stemWidth: CGFloat = max(1.0, 2.0 / effectiveScale)
-        let stemHeight: CGFloat = baseHeight + (3.0 / effectiveScale)
-        let knobSize: CGFloat = max(4.0, min(12.0, 10.0 / effectiveScale))
+        let stemWidth: CGFloat = max(1.5, min(2.5, 2.0 / effectiveScale))
+        let stemHeight: CGFloat = baseHeight
+        let knobSize: CGFloat = max(4.0, min(7.0, 6.0 / effectiveScale))
         return (stemWidth, stemHeight, knobSize)
     }
 
@@ -2863,46 +2900,22 @@ public final class InteractivePDFView: PDFView {
         let dims = Self.handleDimensions(for: lineHeight, scale: self.scaleFactor)
         let stemWidth = dims.stemWidth
         let stemHeight = dims.stemHeight
-        let knobSize = dims.knobSize
+        let tabWidth = dims.knobSize
+        let tabHeight = max(5.0, min(10.0, tabWidth * 1.3))
 
         let pageBounds = page.bounds(for: .cropBox)
         let pad: CGFloat = 1.0
-        let halfKnob = knobSize / 2
 
-        // Clamp horizontal center so BOTH stem and knob share the exact same X center
-        // and stay strictly inside page bounds
-        let clampedX = max(pageBounds.minX + halfKnob + pad, min(point.x, pageBounds.maxX - halfKnob - pad))
+        // Stem horizontal position: left edge clamped within cropBox
+        let clampedX = max(pageBounds.minX + stemWidth / 2 + pad, min(point.x, pageBounds.maxX - tabWidth - pad))
+        let stemLeft = clampedX - stemWidth / 2
 
-        // Position bar and knob in Y
-        let barHalfHeight = stemHeight / 2
-        let overlap: CGFloat = 1.0
-
-        let barY: CGFloat
-        let knobY: CGFloat
-
-        if isStart {
-            // Knob sits on top of the bar.
-            // Raw bar is centered at point.y. Top of knob is barY + barHalfHeight + knobSize - overlap.
-            let rawBarY = point.y
-            let rawKnobTop = rawBarY + barHalfHeight + knobSize - overlap
-            let topOverflow = max(0, rawKnobTop - (pageBounds.maxY - pad))
-            let bottomUnderflow = max(0, (pageBounds.minY + pad) - (rawBarY - barHalfHeight))
-            barY = rawBarY - topOverflow + bottomUnderflow
-            knobY = (barY + barHalfHeight) + halfKnob - overlap
-        } else {
-            // Knob sits at the bottom of the bar.
-            // Raw bar is centered at point.y. Bottom of knob is barY - barHalfHeight - knobSize + overlap.
-            let rawBarY = point.y
-            let rawKnobBottom = rawBarY - barHalfHeight - knobSize + overlap
-            let bottomUnderflow = max(0, (pageBounds.minY + pad) - rawKnobBottom)
-            let topOverflow = max(0, (rawBarY + barHalfHeight) - (pageBounds.maxY - pad))
-            barY = rawBarY + bottomUnderflow - topOverflow
-            knobY = (barY - barHalfHeight) - halfKnob + overlap
-        }
+        // Stem vertical position: centered at point.y, clamped within page bounds
+        let clampedY = max(pageBounds.minY + stemHeight / 2 + pad, min(point.y, pageBounds.maxY - stemHeight / 2 - pad))
 
         let barBounds = CGRect(
-            x: clampedX - stemWidth / 2,
-            y: barY - barHalfHeight,
+            x: stemLeft,
+            y: clampedY - stemHeight / 2,
             width: stemWidth,
             height: stemHeight
         )
@@ -2916,19 +2929,22 @@ public final class InteractivePDFView: PDFView {
                                  : (isStart ? "MarginGraph-handle-start" : "MarginGraph-handle-end")
         page.addAnnotation(bar)
 
+        // MarginNote tab: sits at top (start) or bottom (end), with left edge flush with stem
+        let overlap: CGFloat = 1.5
+        let rawTabY = isStart
+            ? (barBounds.maxY - overlap)
+            : (barBounds.minY - tabHeight + overlap)
+        let clampedTabY = max(pageBounds.minY + pad, min(rawTabY, pageBounds.maxY - tabHeight - pad))
+
         let knobBounds = CGRect(
-            x: clampedX - halfKnob,
-            y: knobY - halfKnob,
-            width: knobSize,
-            height: knobSize
+            x: stemLeft,
+            y: clampedTabY,
+            width: tabWidth,
+            height: tabHeight
         )
-        let knob = KnobAnnotation(bounds: knobBounds, forType: .circle, withProperties: nil)
+        let knob = KnobAnnotation(bounds: knobBounds, forType: .square, withProperties: nil)
+        knob.isStart = isStart
         knob.fillColor = cursorColor
-        knob.color = cursorColor
-        knob.interiorColor = cursorColor
-        let knobBorder = PDFBorder()
-        knobBorder.lineWidth = 0
-        knob.border = knobBorder
         knob.contents = isPending ? (isStart ? "MarginGraph-pending-handle-knob-start" : "MarginGraph-pending-handle-knob-end")
                                   : (isStart ? "MarginGraph-handle-knob-start" : "MarginGraph-handle-knob-end")
         page.addAnnotation(knob)

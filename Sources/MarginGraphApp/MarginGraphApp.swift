@@ -51,6 +51,7 @@ final class AppModel: ObservableObject {
     @Published var editingCardTitleID: UUID? = nil
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
+    @Published var studyDocumentSheetMode: StudyDocumentSheetMode = .manage
     var documentCurrentPage: [String: Int] = [:]
     var documentPageOffsets: [String: Double] = [:]
     var documentMindPan: [String: CGPoint] = [:]
@@ -2151,15 +2152,23 @@ struct StudyWorkspaceView: View {
         .sheet(isPresented: $model.isManagingDocuments) {
             StudyDocumentManagementSheet(
                 documents: model.studyDocuments,
+                allDocuments: model.documents,
                 activeDocument: model.activeDocument,
+                initialMode: model.studyDocumentSheetMode,
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
                 },
                 onDetachDocument: { doc in
                     model.detachDocument(doc)
                 },
-                onAddDocument: {
-                    model.openDocumentPicker(attachToTopic: true)
+                onAddExistingDocument: { doc in
+                    model.attachExistingDocument(doc)
+                },
+                onImportDocument: {
+                    model.isManagingDocuments = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        model.openDocumentPicker(attachToTopic: true)
+                    }
                 },
                 onDismiss: {
                     model.isManagingDocuments = false
@@ -2523,9 +2532,11 @@ struct StudyWorkspaceView: View {
                     }
                 },
                 onAddDocument: {
-                    model.openDocumentPicker(attachToTopic: true)
+                    model.studyDocumentSheetMode = .addExisting
+                    model.isManagingDocuments = true
                 },
                 onManageDocuments: {
+                    model.studyDocumentSheetMode = .manage
                     model.isManagingDocuments = true
                 },
                 onToggleBookmark: { page, isBookmarked in
@@ -2598,9 +2609,11 @@ struct StudyWorkspaceView: View {
                     }
                 },
                 onAddDocument: {
-                    model.openDocumentPicker(attachToTopic: true)
+                    model.studyDocumentSheetMode = .addExisting
+                    model.isManagingDocuments = true
                 },
                 onManageDocuments: {
+                    model.studyDocumentSheetMode = .manage
                     model.isManagingDocuments = true
                 },
                 onCreateVideoCard: { startTime, endTime, title in
@@ -2619,7 +2632,8 @@ struct StudyWorkspaceView: View {
                     .font(.headline)
                     .foregroundStyle(.secondary)
                 Button("Attach Document…") {
-                    model.openDocumentPicker(attachToTopic: true)
+                    model.studyDocumentSheetMode = .addExisting
+                    model.isManagingDocuments = true
                 }
                 .buttonStyle(.borderedProminent)
             }

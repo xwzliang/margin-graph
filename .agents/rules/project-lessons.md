@@ -522,7 +522,15 @@ Structure each entry concisely with actionable rules:
 - **Cascading Relational Deletion of Study Topics**:
   - **Trap**: Deleting from non-existent tables (such as `topic_documents` or `links`) causes SQLite errors that abort topic deletion or cause silent failures inside `try? deleteTopic(id:)`.
   - **Rule**: Ensure `Database.deleteTopic(id:)` queries strictly target valid tables in schema: delete from `deck_cards WHERE card_id IN (SELECT id FROM cards WHERE topic_id = ?)`, `review_items WHERE card_id IN (SELECT id FROM cards WHERE topic_id = ?)`, `card_links WHERE topic_id = ?`, `cards WHERE topic_id = ?`, and finally `topics WHERE id = ?`.
-
-
-
-
+- **Search Bar Auto-Focus Lifecycle via SwiftUI `@FocusState`**:
+  - **Trap**: When revealing a search bar or search overlay via button click, users expect to immediately type their search query. Without automatic first-responder focus, the user must click the search icon and then make an unnecessary second click inside the text field to begin typing.
+  - **Rule**: Bind `@FocusState private var isSearchFieldFocused: Bool` to the `TextField` with `.focused($isSearchFieldFocused)`. In `.onAppear` (and `.onChange(of: isSearchPresented)` if dynamically toggled), trigger `DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { isSearchFieldFocused = true }`. Wire `.onExitCommand` to clear text or dismiss search cleanly when pressing Escape.
+- **Add Existing Documents vs Import Document in Study Notebooks**:
+  - **Trap**: In study workspaces, having the `+` button in the document tab bar and the "+ Add Document…" button in the Manage sheet trigger `NSOpenPanel` (import from disk) causes duplicate imports and prevents users from assembling existing library documents into multi-document study sets.
+  - **Rule**: Decouple "Add Existing Document" from "Import Document". The `+` button on the tab bar and the primary "+ Add Document…" button in Manage should present an in-library document selector (`StudyDocumentManagementSheet` with mode `.addExisting`) listing documents in the user's database that are not yet attached to the notebook, equipped with an auto-focused search filter and type badges. Provide a distinct "Import Document…" button (`square.and.arrow.down`) for opening `NSOpenPanel` to import new files from disk.
+- **Multi-Document Tab Dynamic Width, Auto-Scrolling, and Dropdown Switcher**:
+  - **Trap**: Hardcoding a wide tab width (e.g. `maxWidth: 170`) in a horizontal `ScrollView` hides tabs when 4+ documents are added to a notebook. Standard mouse users cannot scroll horizontally, and off-screen tabs remain invisible and unclickable without an overflow mechanism.
+  - **Rule**: Dynamically compute `tabTitleMaxWidth` based on `documents.count` (scaling from 160pt down to 60pt for 8+ documents). Wrap the tabs in `ScrollViewReader` and scroll to `activeDocument.id` with `anchor: .center` on appear and active document change. Provide a compact dropdown menu button (`chevron.down`) next to the tabs listing all study documents with active checkmarks and type icons, ensuring 1-click access to every document regardless of tab count.
+- **Authentic MarginNote Flag/Teardrop Handle Geometry and Bounds**:
+  - **Trap**: Drawing text selection handles as large circular lollipops centered over the stem causes visual distortion, covers multiple lines of text, and diverges from MarginNote 3.
+  - **Rule**: Render handles using custom `CGPath` drawing in `KnobAnnotation` (`draw(with:in:)`). MarginNote handles feature a vertical stem strictly matching text line height (`lineHeight` clamped to `[11.0, 24.0]`), with a teardrop flag tab whose left edge is flush against the stem (`stemLeft = clampedX - stemWidth / 2`). The top start tab curves smoothly to the right at the top, and the bottom end tab curves smoothly to the right at the bottom.

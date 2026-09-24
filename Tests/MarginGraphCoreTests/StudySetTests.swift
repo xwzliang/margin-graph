@@ -1,4 +1,6 @@
 import XCTest
+import SwiftUI
+import AppKit
 @testable import MarginGraphCore
 
 final class StudySetTests: XCTestCase {
@@ -84,5 +86,76 @@ final class StudySetTests: XCTestCase {
         XCTAssertTrue(output.contains("<outline text=\"Child\" _note=\"Quoted text\"/>"))
         XCTAssertTrue(output.contains("</outline>"))
         XCTAssertTrue(output.contains("</opml>"))
+    }
+
+    @MainActor
+    func testStudyDocumentManagementSheetAndTabBarScaling() {
+        let doc1 = Document(title: "Doc 1", filePath: "/tmp/1.pdf", md5: "md5-1", totalPages: 10)
+        let doc2 = Document(title: "Doc 2", filePath: "/tmp/2.pdf", md5: "md5-2", totalPages: 20)
+        let doc3 = Document(title: "Doc 3", filePath: "/tmp/3.pdf", md5: "md5-3", totalPages: 30)
+
+        var addedDoc: Document?
+        var imported = false
+        var dismissed = false
+
+        let sheet = StudyDocumentManagementSheet(
+            documents: [doc1],
+            allDocuments: [doc1, doc2, doc3],
+            activeDocument: doc1,
+            initialMode: .addExisting,
+            onSwitchDocument: { _ in },
+            onDetachDocument: { _ in },
+            onAddExistingDocument: { doc in
+                addedDoc = doc
+            },
+            onImportDocument: {
+                imported = true
+            },
+            onDismiss: {
+                dismissed = true
+            }
+        )
+
+        let hosting = NSHostingView(rootView: sheet)
+        hosting.frame = NSRect(x: 0, y: 0, width: 500, height: 400)
+        hosting.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(hosting)
+
+        sheet.onAddExistingDocument(doc2)
+        XCTAssertEqual(addedDoc?.md5, doc2.md5)
+
+        sheet.onImportDocument?()
+        XCTAssertTrue(imported)
+
+        sheet.onDismiss()
+        XCTAssertTrue(dismissed)
+
+        // Test Tab Bar with many documents (10 documents)
+        var docs: [Document] = []
+        for i in 1...10 {
+            docs.append(Document(title: "Document Number \(i)", filePath: "/tmp/\(i).pdf", md5: "md5-\(i)", totalPages: i * 5))
+        }
+
+        var selected: Document?
+        var addTriggered = false
+        let tabBar = DocumentTabBarView(
+            documents: docs,
+            activeDocument: docs[4],
+            onSelectDocument: { d in selected = d },
+            onCloseDocument: { _ in },
+            onAddDocument: { addTriggered = true },
+            onManageDocuments: {}
+        )
+
+        let tabHosting = NSHostingView(rootView: tabBar)
+        tabHosting.frame = NSRect(x: 0, y: 0, width: 600, height: 34)
+        tabHosting.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(tabHosting)
+
+        tabBar.onSelectDocument(docs[8])
+        XCTAssertEqual(selected?.md5, docs[8].md5)
+
+        tabBar.onAddDocument?()
+        XCTAssertTrue(addTriggered)
     }
 }

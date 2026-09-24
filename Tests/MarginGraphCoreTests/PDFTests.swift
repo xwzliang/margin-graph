@@ -1121,9 +1121,9 @@ final class PDFTests: XCTestCase {
         guard let sBar = startBar, let sKnob = startKnob,
               let eBar = endBar, let eKnob = endKnob else { return }
 
-        // Exact horizontal center alignment
-        XCTAssertEqual(sBar.bounds.midX, sKnob.bounds.midX, accuracy: 0.001, "Start bar and knob must share exact midX")
-        XCTAssertEqual(eBar.bounds.midX, eKnob.bounds.midX, accuracy: 0.001, "End bar and knob must share exact midX")
+        // Exact flush left alignment between stem and teardrop tab
+        XCTAssertEqual(sBar.bounds.minX, sKnob.bounds.minX, accuracy: 0.001, "Start bar and knob must share flush minX")
+        XCTAssertEqual(eBar.bounds.minX, eKnob.bounds.minX, accuracy: 0.001, "End bar and knob must share flush minX")
 
         // Seamless attachment without any vertical gap
         XCTAssertLessThanOrEqual(sKnob.bounds.minY, sBar.bounds.maxY, "Start knob must overlap or touch top of start bar")
@@ -1142,13 +1142,13 @@ final class PDFTests: XCTestCase {
     func testHandleDimensionsBoundedAtExtremeScales() throws {
         // 1. Uninitialized or zero scale (e.g. before initial layout)
         let zeroScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 0.0)
-        XCTAssertEqual(zeroScaleDims.knobSize, 10.0, "Knob size should fall back to 10pt when scale is 0")
+        XCTAssertEqual(zeroScaleDims.knobSize, 6.0, "Knob size should fall back to 6pt when scale is 0")
         XCTAssertEqual(zeroScaleDims.stemWidth, 2.0)
-        XCTAssertEqual(zeroScaleDims.stemHeight, 19.0)
+        XCTAssertEqual(zeroScaleDims.stemHeight, 16.0)
 
         // 2. Extremely low scale (e.g. 0.1x zoom)
         let lowScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 0.1)
-        XCTAssertLessThanOrEqual(lowScaleDims.knobSize, 12.0, "Knob size should never exceed 12pt even at 0.1x scale")
+        XCTAssertLessThanOrEqual(lowScaleDims.knobSize, 7.0, "Knob size should never exceed 7pt even at 0.1x scale")
         XCTAssertLessThanOrEqual(lowScaleDims.stemWidth, 2.5)
 
         // 3. High scale (e.g. 3.0x zoom)
@@ -1158,7 +1158,8 @@ final class PDFTests: XCTestCase {
 
         // 4. Normal scale 1.0
         let normalDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 1.0)
-        XCTAssertEqual(normalDims.knobSize, 10.0)
+        XCTAssertEqual(normalDims.knobSize, 6.0)
         XCTAssertEqual(normalDims.stemWidth, 2.0)
+        XCTAssertEqual(normalDims.stemHeight, 16.0)
     }
 }

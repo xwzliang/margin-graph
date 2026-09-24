@@ -29,6 +29,7 @@ public struct ReviewDecksView: View {
 
     @State private var sortMode: Int = 0 // 0: Recent, 1: Name
     @State private var filter: String = "All"
+    @FocusState private var isSearchFieldFocused: Bool
 
     public init(
         decks: [ReviewDeckItem],
@@ -73,6 +74,7 @@ public struct ReviewDecksView: View {
             TextField("Search card decks…", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
+                .focused($isSearchFieldFocused)
 
             if !searchQuery.isEmpty {
                 Button {
@@ -89,6 +91,7 @@ public struct ReviewDecksView: View {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     searchQuery = ""
                     isSearchPresented = false
+                    isSearchFieldFocused = false
                 }
             }
             .buttonStyle(.plain)
@@ -100,6 +103,27 @@ public struct ReviewDecksView: View {
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 24)
         .padding(.bottom, 8)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isSearchFieldFocused = true
+            }
+        }
+        .onChange(of: isSearchPresented) { presented in
+            if presented {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    isSearchFieldFocused = true
+                }
+            } else {
+                isSearchFieldFocused = false
+            }
+        }
+        .onExitCommand {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                searchQuery = ""
+                isSearchPresented = false
+                isSearchFieldFocused = false
+            }
+        }
     }
 
     public var body: some View {

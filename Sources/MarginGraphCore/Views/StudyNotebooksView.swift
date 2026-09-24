@@ -17,6 +17,7 @@ public struct StudyNotebooksView: View {
     @State private var filter: String = "All"
     @State private var topicToRename: Topic? = nil
     @State private var renameTopicTitle: String = ""
+    @FocusState private var isSearchFieldFocused: Bool
 
     public init(
         topics: [Topic],
@@ -84,6 +85,7 @@ public struct StudyNotebooksView: View {
             TextField("Search notebooks…", text: $searchQuery)
                 .textFieldStyle(.plain)
                 .font(.system(size: 13))
+                .focused($isSearchFieldFocused)
 
             if !searchQuery.isEmpty {
                 Button {
@@ -100,6 +102,7 @@ public struct StudyNotebooksView: View {
                 withAnimation(.easeInOut(duration: 0.15)) {
                     searchQuery = ""
                     isSearchPresented = false
+                    isSearchFieldFocused = false
                 }
             }
             .buttonStyle(.plain)
@@ -111,6 +114,27 @@ public struct StudyNotebooksView: View {
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
         .padding(.horizontal, 24)
         .padding(.bottom, 8)
+        .onAppear {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                isSearchFieldFocused = true
+            }
+        }
+        .onChange(of: isSearchPresented) { presented in
+            if presented {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    isSearchFieldFocused = true
+                }
+            } else {
+                isSearchFieldFocused = false
+            }
+        }
+        .onExitCommand {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                searchQuery = ""
+                isSearchPresented = false
+                isSearchFieldFocused = false
+            }
+        }
     }
 
     private func renameTopicSheet(topic: Topic) -> some View {

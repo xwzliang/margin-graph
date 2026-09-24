@@ -27,32 +27,98 @@ public struct DocumentTabBarView: View {
         self.onManageDocuments = onManageDocuments
     }
 
+    private var tabTitleMaxWidth: CGFloat {
+        switch documents.count {
+        case 0...2:
+            return 160
+        case 3...4:
+            return 125
+        case 5...7:
+            return 95
+        case 8...10:
+            return 75
+        default:
+            return 60
+        }
+    }
+
+    private func scrollToActiveTab(proxy: ScrollViewProxy) {
+        let matchingDoc = documents.first(where: { $0.id == activeDocument?.id || $0.md5 == activeDocument?.md5 })
+        if let targetID = matchingDoc?.id {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                proxy.scrollTo(targetID, anchor: .center)
+            }
+        }
+    }
+
     public var body: some View {
         HStack(spacing: 0) {
-            // Horizontal scrollable tabs
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
-                    ForEach(documents, id: \.id) { doc in
-                        tabItem(for: doc)
-                    }
-
-                    // Add Document (+) button
-                    if let onAddDocument {
-                        Button(action: onAddDocument) {
-                            Image(systemName: "plus")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.secondary)
-                                .frame(width: 26, height: 26)
-                                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))
-                                .contentShape(Rectangle())
+            // Horizontal scrollable tabs with auto-scrolling
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        ForEach(documents, id: \.id) { doc in
+                            tabItem(for: doc)
+                                .id(doc.id)
                         }
-                        .buttonStyle(.plain)
-                        .padding(.leading, 4)
-                        .help("Add Document to Notebook…")
+
+                        // Add Document (+) button
+                        if let onAddDocument {
+                            Button(action: onAddDocument) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(Color.secondary)
+                                    .frame(width: 26, height: 26)
+                                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.leading, 4)
+                            .help("Add Document to Notebook…")
+                        }
+
+                        // Tab switcher dropdown menu for quick access to all documents
+                        if documents.count > 1 {
+                            Menu {
+                                Section("Study Documents (\(documents.count))") {
+                                    ForEach(documents, id: \.id) { doc in
+                                        Button {
+                                            onSelectDocument(doc)
+                                        } label: {
+                                            if activeDocument?.id == doc.id || activeDocument?.md5 == doc.md5 {
+                                                Label(doc.title, systemImage: "checkmark")
+                                            } else {
+                                                Label(doc.title, systemImage: docIconName(for: doc))
+                                            }
+                                        }
+                                    }
+                                }
+                            } label: {
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 9.5, weight: .semibold))
+                                    .foregroundStyle(Color.secondary)
+                                    .frame(width: 22, height: 26)
+                                    .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
+                                    .contentShape(Rectangle())
+                            }
+                            .menuStyle(.borderlessButton)
+                            .menuIndicator(.hidden)
+                            .padding(.leading, 2)
+                            .help("All Study Documents…")
+                        }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
                 }
-                .padding(.horizontal, 8)
-                .padding(.top, 4)
+                .onAppear {
+                    scrollToActiveTab(proxy: proxy)
+                }
+                .onChange(of: activeDocument?.id) { _ in
+                    scrollToActiveTab(proxy: proxy)
+                }
+                .onChange(of: activeDocument?.md5) { _ in
+                    scrollToActiveTab(proxy: proxy)
+                }
             }
 
             Spacer(minLength: 8)
@@ -84,6 +150,16 @@ public struct DocumentTabBarView: View {
                 .foregroundStyle(Color(white: 0.82)),
             alignment: .bottom
         )
+    }
+
+    private func docIconName(for doc: Document) -> String {
+        let docType = doc.documentType.isEmpty ? MediaDocumentHelper.documentType(for: URL(fileURLWithPath: doc.filePath)) : doc.documentType
+        switch docType {
+        case "video": return "video.fill"
+        case "audio": return "waveform"
+        case "epub": return "book.closed.fill"
+        default: return "doc.text.fill"
+        }
     }
 
     @ViewBuilder
@@ -120,7 +196,7 @@ public struct DocumentTabBarView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .foregroundStyle(isActive ? Color.primary : Color.secondary)
-                .frame(maxWidth: 170, alignment: .leading)
+                .frame(maxWidth: tabTitleMaxWidth, alignment: .leading)
 
             // Close (x) button
             if documents.count > 1, let onCloseDocument {
@@ -140,7 +216,7 @@ public struct DocumentTabBarView: View {
                 .help("Close Document Tab")
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 8)
         .frame(height: 28)
         .background(
             ZStack(alignment: .top) {
