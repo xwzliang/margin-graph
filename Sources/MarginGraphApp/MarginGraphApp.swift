@@ -188,7 +188,9 @@ final class AppModel: ObservableObject {
             // belong to the active topic. Notes from other notebooks are isolated.
             return mindMapCards.filter { card in
                 guard let bmd5 = card.bookMD5, let activeDoc = activeDocument else { return true }
-                return bmd5 == activeDoc.md5 || bmd5.hasPrefix(activeDoc.md5) || activeDoc.md5.hasPrefix(bmd5)
+                let b1 = bmd5.lowercased()
+                let b2 = activeDoc.md5.lowercased()
+                return b1 == b2 || b1.hasPrefix(b2) || b2.hasPrefix(b1)
             }
         }
         var cardMap = [UUID: NoteCard]()

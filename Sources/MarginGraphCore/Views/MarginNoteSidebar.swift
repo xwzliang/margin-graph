@@ -44,7 +44,7 @@ public struct MarginNoteSidebar: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 17, weight: .regular))
                     .foregroundStyle(isSearchActive ? MarginNoteTheme.sidebarActiveIndicator : MarginNoteTheme.sidebarTextInactive)
-                    .frame(width: 56, height: 44)
+                    .frame(width: MarginNoteTheme.sidebarWidth - 8, height: 44)
             }
             .buttonStyle(.plain)
             .padding(.top, 28)
@@ -66,7 +66,7 @@ public struct MarginNoteSidebar: View {
                     Image(systemName: "questionmark")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(MarginNoteTheme.sidebarTextInactive)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 36, height: 32)
                 }
                 .buttonStyle(.plain)
 
@@ -74,13 +74,13 @@ public struct MarginNoteSidebar: View {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 16, weight: .bold))
                         .foregroundStyle(MarginNoteTheme.sidebarTextInactive)
-                        .frame(width: 32, height: 32)
+                        .frame(width: 36, height: 32)
                 }
                 .buttonStyle(.plain)
             }
             .padding(.bottom, 16)
         }
-        .frame(width: 60)
+        .frame(width: MarginNoteTheme.sidebarWidth)
         .background(MarginNoteTheme.sidebarBackground)
     }
 

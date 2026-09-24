@@ -457,6 +457,37 @@ final class PDFTests: XCTestCase {
         context.closePDF()
     }
 
+    private func makeMultiLineSyntheticPDF(at url: URL) throws {
+        guard let consumer = CGDataConsumer(url: url as CFURL) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+
+        context.beginPDFPage(nil)
+        let font = CTFontCreateWithName("Helvetica" as CFString, 14, nil)
+        let attributes = [kCTFontAttributeName: font] as CFDictionary
+
+        let linesText = [
+            "First line of the text selection in reading order.",
+            "Second line of the text selection in reading order.",
+            "Third line of the text selection in reading order."
+        ]
+
+        for (i, t) in linesText.enumerated() {
+            let attr = CFAttributedStringCreate(nil, t as CFString, attributes)!
+            let line = CTLineCreateWithAttributedString(attr)
+            context.textPosition = CGPoint(x: 60, y: 160 - i * 30)
+            context.setFillColor(CGColor(gray: 0.05, alpha: 1))
+            CTLineDraw(line, context)
+        }
+
+        context.endPDFPage()
+        context.closePDF()
+    }
+
     func testEmphasisDottedLineResolution() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("MarginGraph-EmphasisTest-\(UUID().uuidString).pdf")
@@ -1161,5 +1192,72 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(normalDims.knobSize, 6.0)
         XCTAssertEqual(normalDims.stemWidth, 2.0)
         XCTAssertEqual(normalDims.stemHeight, 16.0)
+    }
+
+    func testReadingOrderSortingAndHandlePlacement() throws {
+        // 1. Reading order sort verification
+        let r1 = HighlightRect(page: 0, x: 200, y: 300, width: 100, height: 16) // line 1, right chunk
+        let r2 = HighlightRect(page: 0, x: 50, y: 300, width: 100, height: 16)  // line 1, left chunk
+        let r3 = HighlightRect(page: 0, x: 50, y: 280, width: 250, height: 16)  // line 2
+        let r4 = HighlightRect(page: 1, x: 50, y: 700, width: 250, height: 16)  // page 1 top line
+
+        let unsorted = [r4, r3, r1, r2]
+        let sorted = PDFHighlightResolver.sortInReadingOrder(unsorted)
+
+        XCTAssertEqual(sorted.count, 4)
+        XCTAssertEqual(sorted[0].page, 0)
+        XCTAssertEqual(sorted[0].x, 50)
+        XCTAssertEqual(sorted[0].y, 300) // r2 first
+
+        XCTAssertEqual(sorted[1].page, 0)
+        XCTAssertEqual(sorted[1].x, 200)
+        XCTAssertEqual(sorted[1].y, 300) // r1 second
+
+        XCTAssertEqual(sorted[2].page, 0)
+        XCTAssertEqual(sorted[2].y, 280) // r3 third
+
+        XCTAssertEqual(sorted[3].page, 1) // r4 fourth
+
+        // 2. Synthetic PDF with multi-line text block expansion
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-BlockTest-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeMultiLineSyntheticPDF(at: url)
+        guard let doc = PDFDocument(url: url), let page = doc.page(at: 0) else {
+            XCTFail("Could not create synthetic PDF")
+            return
+        }
+
+        // Bounding box covering multiple lines (lines drawn at y=160, 130, 100)
+        let blockRect = HighlightRect(page: 0, x: 50, y: 80, width: 400, height: 100)
+        let expanded = PDFHighlightResolver.expandBlockRectsIfNeeded([blockRect], in: doc)
+
+        XCTAssertGreaterThan(expanded.count, 1, "Multi-line block rect should expand into multiple line rects")
+        XCTAssertLessThanOrEqual(expanded.first?.height ?? 100, 24.0, "Individual expanded line height should be normalized")
+
+        // 3. Handle placement verification
+        let pdfView = InteractivePDFView()
+        pdfView.document = doc
+
+        pdfView.installHandleAnnotations(for: expanded, accent: .systemYellow)
+
+        let handles = page.annotations.filter { $0.contents?.hasPrefix("MarginGraph-handle") == true }
+        XCTAssertEqual(handles.count, 4, "Should create start bar, start knob, end bar, end knob")
+
+        guard let startBar = handles.first(where: { $0.contents == "MarginGraph-handle-start" }),
+              let endBar = handles.first(where: { $0.contents == "MarginGraph-handle-end" }) else {
+            XCTFail("Start and end bars must be present")
+            return
+        }
+
+        // Start bar must be at first line's start (left edge, top of block)
+        XCTAssertEqual(startBar.bounds.midX, CGFloat(expanded.first!.x), accuracy: 3.0)
+        XCTAssertEqual(startBar.bounds.midY, CGFloat(expanded.first!.y + expanded.first!.height / 2), accuracy: 3.0)
+
+        // End bar must be at last line's end (right edge, bottom of block)
+        XCTAssertEqual(startBar.bounds.midX, CGFloat(expanded.first!.x), accuracy: 3.0)
+        XCTAssertEqual(endBar.bounds.midX, CGFloat(expanded.last!.x + expanded.last!.width), accuracy: 3.0)
+        XCTAssertEqual(endBar.bounds.midY, CGFloat(expanded.last!.y + expanded.last!.height / 2), accuracy: 3.0)
     }
 }

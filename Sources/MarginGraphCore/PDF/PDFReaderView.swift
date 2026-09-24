@@ -146,6 +146,18 @@ public final class KnobAnnotation: PDFAnnotation {
 }
 
 public enum PDFHighlightResolver {
+    public static func sortInReadingOrder(_ rects: [HighlightRect]) -> [HighlightRect] {
+        rects.sorted { r1, r2 in
+            if r1.page != r2.page {
+                return r1.page < r2.page
+            }
+            if abs(r1.y - r2.y) > 4.0 {
+                return r1.y > r2.y
+            }
+            return r1.x < r2.x
+        }
+    }
+
     public static func deduplicate(_ rects: [HighlightRect]) -> [HighlightRect] {
         var seen = Set<String>()
         var result: [HighlightRect] = []
@@ -155,7 +167,130 @@ public enum PDFHighlightResolver {
                 result.append(r)
             }
         }
-        return result
+        return sortInReadingOrder(result)
+    }
+
+    public static func clampToLine(on page: PDFPage, point: CGPoint) -> CGPoint {
+        guard let full = page.selection(for: page.bounds(for: .cropBox)) else { return point }
+        let lines = full.selectionsByLine()
+        guard !lines.isEmpty else { return point }
+
+        var bestLine: PDFSelection?
+        var minDy = CGFloat.infinity
+        for line in lines {
+            let b = line.bounds(for: page)
+            if point.y >= b.minY - 4 && point.y <= b.maxY + 4 {
+                bestLine = line
+                break
+            }
+            let dy = abs(b.midY - point.y)
+            if dy < minDy {
+                minDy = dy
+                bestLine = line
+            }
+        }
+        if let bestLine {
+            let b = bestLine.bounds(for: page)
+            let clampedX = min(max(point.x, b.minX + 2), b.maxX - 2)
+            return CGPoint(x: clampedX, y: b.midY)
+        }
+        return point
+    }
+
+    public static func expandBlockRectsIfNeeded(_ rects: [HighlightRect], in document: PDFDocument) -> [HighlightRect] {
+        var result: [HighlightRect] = []
+        for r in rects {
+            guard r.page >= 0, r.page < document.pageCount,
+                  let page = document.page(at: r.page) else {
+                result.append(r)
+                continue
+            }
+            // If the rect is tall enough to contain multiple lines (height > 20), extract individual text lines
+            if r.height > 20.0 {
+                let box = CGRect(x: r.x, y: r.y, width: r.width, height: r.height).insetBy(dx: -2, dy: -2)
+                if let sel = page.selection(for: box) {
+                    let subLines = lineRects(from: sel, document: document)
+                    if subLines.count > 1 || (subLines.count == 1 && subLines[0].height < r.height * 0.7) {
+                        result.append(contentsOf: subLines)
+                        continue
+                    }
+                }
+            }
+            result.append(r)
+        }
+        return sortInReadingOrder(result)
+    }
+
+    public static func selection(
+        in document: PDFDocument,
+        startPage: Int,
+        startPoint: CGPoint,
+        endPage: Int,
+        endPoint: CGPoint
+    ) -> PDFSelection? {
+        guard startPage >= 0, startPage < document.pageCount,
+              endPage >= 0, endPage < document.pageCount,
+              let pStart = document.page(at: startPage),
+              let pEnd = document.page(at: endPage) else { return nil }
+
+        if startPage == endPage {
+            let clampedStart = clampToLine(on: pStart, point: startPoint)
+            let clampedEnd = clampToLine(on: pStart, point: endPoint)
+            let isForward: Bool
+            if abs(clampedStart.y - clampedEnd.y) > 6 {
+                isForward = clampedStart.y > clampedEnd.y
+            } else {
+                isForward = clampedStart.x <= clampedEnd.x
+            }
+            let pA = isForward ? clampedStart : clampedEnd
+            let pB = isForward ? clampedEnd : clampedStart
+            return pStart.selection(from: pA, to: pB)
+        }
+
+        let forward = startPage < endPage
+        let firstPage = forward ? pStart : pEnd
+        let firstPoint = forward ? startPoint : endPoint
+        let lastPage = forward ? pEnd : pStart
+        let lastPoint = forward ? endPoint : startPoint
+        let idxFirst = forward ? startPage : endPage
+        let idxLast = forward ? endPage : startPage
+
+        let clampedStart = clampToLine(on: firstPage, point: firstPoint)
+        let clampedEnd = clampToLine(on: lastPage, point: lastPoint)
+
+        var endOfFirstPage = CGPoint(x: firstPage.bounds(for: .cropBox).maxX - 5, y: firstPage.bounds(for: .cropBox).minY + 5)
+        if let fullFirst = firstPage.selection(for: firstPage.bounds(for: .cropBox)),
+           let lastLine = fullFirst.selectionsByLine().last {
+            let lb = lastLine.bounds(for: firstPage)
+            endOfFirstPage = CGPoint(x: lb.maxX - 2, y: lb.midY)
+        }
+
+        guard let selFirst = firstPage.selection(from: clampedStart, to: endOfFirstPage),
+              let combined = selFirst.copy() as? PDFSelection else {
+            return nil
+        }
+
+        if idxLast > idxFirst + 1 {
+            for midIdx in (idxFirst + 1)..<idxLast {
+                guard let midPage = document.page(at: midIdx) else { continue }
+                if let fullSel = midPage.selection(for: midPage.bounds(for: .cropBox)) {
+                    combined.add(fullSel)
+                }
+            }
+        }
+
+        var startOfLastPage = CGPoint(x: lastPage.bounds(for: .cropBox).minX + 5, y: lastPage.bounds(for: .cropBox).maxY - 5)
+        if let fullLast = lastPage.selection(for: lastPage.bounds(for: .cropBox)),
+           let firstLine = fullLast.selectionsByLine().first {
+            let fb = firstLine.bounds(for: lastPage)
+            startOfLastPage = CGPoint(x: fb.minX + 2, y: fb.midY)
+        }
+
+        if let selLast = lastPage.selection(from: startOfLastPage, to: clampedEnd) {
+            combined.add(selLast)
+        }
+
+        return combined
     }
 
     public struct PhysicalLine {
@@ -347,47 +482,36 @@ public enum PDFHighlightResolver {
         let segRects = card.effectiveSegments.flatMap(\.rects).filter {
             $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
         }
-        if !segRects.isEmpty { return deduplicate(segRects) }
+        if !segRects.isEmpty {
+            return expandBlockRectsIfNeeded(deduplicate(segRects), in: document)
+        }
 
         let stored = card.highlightRects.filter {
             $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
         }
-        if !stored.isEmpty { return deduplicate(stored) }
+        if !stored.isEmpty {
+            return expandBlockRectsIfNeeded(deduplicate(stored), in: document)
+        }
 
         if let cached = resolvedLineRectsCache[card.id], !cached.isEmpty {
             return cached
         }
 
-        if let pageIndex = card.startPage,
-           pageIndex >= 0,
-           pageIndex < document.pageCount,
-           let page = document.page(at: pageIndex),
+        if let startPageIdx = card.startPage,
            let start = card.startPos,
-           let end = card.endPos {
-            let bounds = CGRect(
-                x: min(start.x, end.x),
-                y: min(start.y, end.y),
-                width: abs(end.x - start.x),
-                height: abs(end.y - start.y)
-            )
-            if bounds.width > 0, bounds.height > 0 {
-                if let selection = page.selection(for: bounds) {
+           let end = card.endPos,
+           startPageIdx >= 0,
+           startPageIdx < document.pageCount {
+            let endPageIdx = card.endPage ?? startPageIdx
+            if endPageIdx >= 0, endPageIdx < document.pageCount {
+                if let selection = selection(in: document, startPage: startPageIdx, startPoint: start, endPage: endPageIdx, endPoint: end) {
                     let resolved = lineRects(from: selection, document: document)
                     if !resolved.isEmpty {
-                        let result = deduplicate(resolved)
+                        let result = sortInReadingOrder(deduplicate(resolved))
                         resolvedLineRectsCache[card.id] = result
                         return result
                     }
                 }
-                let fallback = [HighlightRect(
-                    page: pageIndex,
-                    x: bounds.minX,
-                    y: bounds.minY,
-                    width: bounds.width,
-                    height: bounds.height
-                )]
-                resolvedLineRectsCache[card.id] = fallback
-                return fallback
             }
         }
 
@@ -743,7 +867,8 @@ public struct PDFReaderView: NSViewRepresentable {
                ca.emphasisRects != cb.emphasisRects ||
                ca.emphasisList != cb.emphasisList ||
                ca.startPage != cb.startPage ||
-               ca.highlightText != cb.highlightText {
+               ca.highlightText != cb.highlightText ||
+               ca.excerptSegments != cb.excerptSegments {
                 return false
             }
         }
@@ -952,11 +1077,19 @@ public struct PDFReaderView: NSViewRepresentable {
         }
 
         if let selected = cards.first(where: { isActive(card: $0) }) {
-            let segment = selected.effectiveSegments.first(where: { $0.id == view.selectedSegmentID }) ?? selected.effectiveSegments.first
-            let lineRects = (segment?.rects.isEmpty == false) ? segment!.rects : PDFHighlightResolver.lineRects(for: selected, in: document)
+            let matchingSegments = selected.effectiveSegments.filter { seg in
+                seg.rects.contains { $0.page >= 0 && $0.page < document.pageCount }
+            }
+            let segment = matchingSegments.first(where: { $0.id == view.selectedSegmentID }) ?? matchingSegments.first
+            let lineRects: [HighlightRect]
+            if let segment, !segment.rects.isEmpty {
+                lineRects = PDFHighlightResolver.expandBlockRectsIfNeeded(segment.rects, in: document)
+            } else {
+                lineRects = PDFHighlightResolver.lineRects(for: selected, in: document)
+            }
             let accent = NSColor(MarginNoteTheme.cardColors(for: selected.colorIndex).accent)
             view.clearHandles()
-            view.installHandleAnnotations(for: lineRects, accent: accent)
+            view.installHandleAnnotations(for: selected, lineRects: lineRects, accent: accent)
             if activeToolbarOwner == .pdf {
                 view.updateToolbarPosition()
             } else {
@@ -975,9 +1108,9 @@ public struct PDFReaderView: NSViewRepresentable {
         guard let selectedCardID else { return false }
         guard card.id == selectedCardID else { return false }
         if let bookMD5 = card.bookMD5, !bookMD5.isEmpty {
-            let matches = bookMD5 == manager.md5 ||
-                bookMD5.hasPrefix(manager.md5) ||
-                manager.md5.hasPrefix(bookMD5)
+            let b1 = bookMD5.lowercased()
+            let b2 = manager.md5.lowercased()
+            let matches = b1 == b2 || b1.hasPrefix(b2) || b2.hasPrefix(b1)
             guard matches else { return false }
         }
         return true
@@ -2355,10 +2488,11 @@ public final class InteractivePDFView: PDFView {
                 activeToolbarOwner = .pdf
                 selectCardHandler?(card.id)
                 if let document {
-                    let rects = (segment.rects.isEmpty == false) ? segment.rects : PDFHighlightResolver.lineRects(for: card, in: document)
+                    let rawRects = (segment.rects.isEmpty == false) ? segment.rects : PDFHighlightResolver.lineRects(for: card, in: document)
+                    let rects = PDFHighlightResolver.expandBlockRectsIfNeeded(rawRects, in: document)
                     let accent = NSColor(MarginNoteTheme.cardColors(for: card.colorIndex).accent)
                     clearHandles()
-                    installHandleAnnotations(for: rects, accent: accent)
+                    installHandleAnnotations(for: card, lineRects: rects, accent: accent)
                 }
                 updateToolbarPosition()
             }
@@ -2754,30 +2888,7 @@ public final class InteractivePDFView: PDFView {
     }
 
     static func clampToLine(on page: PDFPage, point: CGPoint) -> CGPoint {
-        guard let full = page.selection(for: page.bounds(for: .cropBox)) else { return point }
-        let lines = full.selectionsByLine()
-        guard !lines.isEmpty else { return point }
-
-        var bestLine: PDFSelection?
-        var minDy = CGFloat.infinity
-        for line in lines {
-            let b = line.bounds(for: page)
-            if point.y >= b.minY - 4 && point.y <= b.maxY + 4 {
-                bestLine = line
-                break
-            }
-            let dy = abs(b.midY - point.y)
-            if dy < minDy {
-                minDy = dy
-                bestLine = line
-            }
-        }
-        if let bestLine {
-            let b = bestLine.bounds(for: page)
-            let clampedX = min(max(point.x, b.minX + 2), b.maxX - 2)
-            return CGPoint(x: clampedX, y: b.midY)
-        }
-        return point
+        PDFHighlightResolver.clampToLine(on: page, point: point)
     }
 
     func makeMultiPageSelection(
@@ -2789,100 +2900,50 @@ public final class InteractivePDFView: PDFView {
         let endIndex = document.index(for: endPage)
         guard startIndex != NSNotFound, endIndex != NSNotFound else { return nil }
 
-        if startIndex == endIndex {
-            let p = startPage
-            let clampedStart = Self.clampToLine(on: p, point: startPoint)
-            let clampedEnd = Self.clampToLine(on: p, point: endPoint)
-
-            let isForward: Bool
-            if abs(clampedStart.y - clampedEnd.y) > 6 {
-                isForward = clampedStart.y > clampedEnd.y
-            } else {
-                isForward = clampedStart.x <= clampedEnd.x
-            }
-
-            let pA = isForward ? clampedStart : clampedEnd
-            let pB = isForward ? clampedEnd : clampedStart
-            return p.selection(from: pA, to: pB)
-        }
-
-        let forward = startIndex < endIndex
-        let pStart = forward ? startPage : endPage
-        let ptStartRaw = forward ? startPoint : endPoint
-        let pEnd = forward ? endPage : startPage
-        let ptEndRaw = forward ? endPoint : startPoint
-        let idxStart = forward ? startIndex : endIndex
-        let idxEnd = forward ? endIndex : startIndex
-
-        let clampedStart = Self.clampToLine(on: pStart, point: ptStartRaw)
-        let clampedEnd = Self.clampToLine(on: pEnd, point: ptEndRaw)
-
-        var endOfFirstPage = CGPoint(x: pStart.bounds(for: .cropBox).maxX - 5, y: pStart.bounds(for: .cropBox).minY + 5)
-        if let fullFirst = pStart.selection(for: pStart.bounds(for: .cropBox)),
-           let lastLine = fullFirst.selectionsByLine().last {
-            let lb = lastLine.bounds(for: pStart)
-            endOfFirstPage = CGPoint(x: lb.maxX - 2, y: lb.midY)
-        }
-
-        var combined: PDFSelection?
-        if let selFirst = pStart.selection(from: clampedStart, to: endOfFirstPage) {
-            combined = (selFirst.copy() as? PDFSelection)
-        }
-
-        if idxEnd > idxStart + 1 {
-            for midIdx in (idxStart + 1)..<idxEnd {
-                guard let midPage = document.page(at: midIdx) else { continue }
-                if let fullSel = midPage.selection(for: midPage.bounds(for: .cropBox)) {
-                    if let c = combined {
-                        c.add(fullSel)
-                    } else {
-                        combined = (fullSel.copy() as? PDFSelection)
-                    }
-                }
-            }
-        }
-
-        var startOfLastPage = CGPoint(x: pEnd.bounds(for: .cropBox).minX + 5, y: pEnd.bounds(for: .cropBox).maxY - 5)
-        if let fullLast = pEnd.selection(for: pEnd.bounds(for: .cropBox)),
-           let firstLine = fullLast.selectionsByLine().first {
-            let fb = firstLine.bounds(for: pEnd)
-            startOfLastPage = CGPoint(x: fb.minX + 2, y: fb.midY)
-        }
-
-        if let selLast = pEnd.selection(from: startOfLastPage, to: clampedEnd) {
-            if let c = combined {
-                c.add(selLast)
-            } else {
-                combined = (selLast.copy() as? PDFSelection)
-            }
-        }
-
-        return combined
+        return PDFHighlightResolver.selection(
+            in: document,
+            startPage: startIndex,
+            startPoint: startPoint,
+            endPage: endIndex,
+            endPoint: endPoint
+        )
     }
 
     func installHandleAnnotations(for lineRects: [HighlightRect], accent: NSColor = .systemYellow) {
-        guard let document, let first = lineRects.first, let last = lineRects.last,
+        installHandleAnnotations(for: nil, lineRects: lineRects, accent: accent)
+    }
+
+    func installHandleAnnotations(for card: NoteCard?, lineRects: [HighlightRect], accent: NSColor = .systemYellow) {
+        guard let document else { return }
+
+        var targetRects = lineRects.filter {
+            $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
+        }
+        if targetRects.isEmpty, let card {
+            targetRects = PDFHighlightResolver.lineRects(for: card, in: document).filter {
+                $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0
+            }
+        }
+        targetRects = PDFHighlightResolver.expandBlockRectsIfNeeded(targetRects, in: document)
+        let sorted = PDFHighlightResolver.sortInReadingOrder(targetRects)
+        guard let first = sorted.first, let last = sorted.last,
               let firstPage = document.page(at: first.page),
               let lastPage = document.page(at: last.page) else { return }
 
         addHandle(
             to: firstPage,
             at: endpoint(for: first, start: true),
-            lineHeight: CGFloat(first.height),
+            lineHeight: min(CGFloat(first.height), 22.0),
             accent: accent,
             isStart: true
         )
         addHandle(
             to: lastPage,
             at: endpoint(for: last, start: false),
-            lineHeight: CGFloat(last.height),
+            lineHeight: min(CGFloat(last.height), 22.0),
             accent: accent,
             isStart: false
         )
-    }
-
-    func installHandleAnnotations(for card: NoteCard, lineRects: [HighlightRect], accent: NSColor = .systemYellow) {
-        installHandleAnnotations(for: lineRects, accent: accent)
     }
 
     public static func handleDimensions(for lineHeight: CGFloat, scale: CGFloat = 1.0) -> (stemWidth: CGFloat, stemHeight: CGFloat, knobSize: CGFloat) {
@@ -3024,16 +3085,24 @@ public final class InteractivePDFView: PDFView {
         guard let selectedCardID,
               let card = cards.first(where: { $0.id == selectedCardID }),
               let document else { return false }
+        if let bmd5 = card.bookMD5, !bmd5.isEmpty {
+            let b1 = bmd5.lowercased()
+            let b2 = bookMD5.lowercased()
+            let matchesBook = b1 == b2 || b1.hasPrefix(b2) || b2.hasPrefix(b1)
+            guard matchesBook else { return false }
+        }
         let segment = card.effectiveSegments.first(where: { $0.id == selectedSegmentID }) ?? card.effectiveSegments.first
-        let rects = (segment?.rects.isEmpty == false) ? segment!.rects : PDFHighlightResolver.lineRects(for: card, in: document)
-        guard let first = rects.first, let last = rects.last,
+        let rawRects = (segment?.rects.isEmpty == false) ? segment!.rects : PDFHighlightResolver.lineRects(for: card, in: document)
+        let expanded = PDFHighlightResolver.expandBlockRectsIfNeeded(rawRects.filter { $0.page >= 0 && $0.page < document.pageCount && $0.width > 0 && $0.height > 0 }, in: document)
+        let sortedRects = PDFHighlightResolver.sortInReadingOrder(expanded)
+        guard let first = sortedRects.first, let last = sortedRects.last,
               let firstPage = document.page(at: first.page),
               let lastPage = document.page(at: last.page) else { return false }
 
         let startPoint = endpoint(for: first, start: true)
         let endPoint = endpoint(for: last, start: false)
-        let startHeight = CGFloat(first.height)
-        let endHeight = CGFloat(last.height)
+        let startHeight = min(CGFloat(first.height), 22.0)
+        let endHeight = min(CGFloat(last.height), 22.0)
 
         let startTest = handleHitTest(
             point: point,
@@ -3079,6 +3148,12 @@ public final class InteractivePDFView: PDFView {
 
         var matches: [(card: NoteCard, segment: ExcerptSegment)] = []
         for card in cards {
+            if let bmd5 = card.bookMD5, !bmd5.isEmpty {
+                let b1 = bmd5.lowercased()
+                let b2 = bookMD5.lowercased()
+                let matchesBook = b1 == b2 || b1.hasPrefix(b2) || b2.hasPrefix(b1)
+                guard matchesBook else { continue }
+            }
             for segment in card.effectiveSegments {
                 let rects = (segment.rects.isEmpty == false) ? segment.rects : PDFHighlightResolver.lineRects(for: card, in: document)
                 let hit = rects.contains { line in
@@ -3208,9 +3283,19 @@ public final class InteractivePDFView: PDFView {
     }
 
     private func endpoint(for rect: HighlightRect, start: Bool) -> CGPoint {
-        CGPoint(
-            x: start ? rect.x : rect.x + rect.width,
-            y: rect.y + rect.height / 2
+        let effectiveHeight = min(rect.height, 22.0)
+        let y: CGFloat
+        if rect.height > 24.0 {
+            // For block/box rects that couldn't be broken into lines,
+            // start is at the top of the box, end is at the bottom
+            y = start ? CGFloat(rect.y + rect.height) - CGFloat(effectiveHeight / 2)
+                      : CGFloat(rect.y) + CGFloat(effectiveHeight / 2)
+        } else {
+            y = CGFloat(rect.y + rect.height / 2)
+        }
+        return CGPoint(
+            x: start ? CGFloat(rect.x) : CGFloat(rect.x + rect.width),
+            y: y
         )
     }
 

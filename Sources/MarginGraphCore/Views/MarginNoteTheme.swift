@@ -8,6 +8,7 @@ public struct MarginNoteTheme {
     public static let sidebarActiveBackground = Color(red: 0.22, green: 0.23, blue: 0.26)
     public static let sidebarTextInactive = Color(white: 0.65)
     public static let sidebarTextActive = Color.white
+    public static let sidebarWidth: CGFloat = 72.0
 
     // Shelf & Canvas
     public static let shelfBackground = Color(red: 0.98, green: 0.965, blue: 0.935) // #FAF6EE
