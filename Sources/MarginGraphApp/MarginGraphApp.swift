@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
 
     @Published var topics: [Topic] = []
     @Published var documents: [Document] = []
+    @Published var documentFolders: [DocumentFolder] = []
     @Published var selectedTopicID: UUID?
     @Published var studyDocuments: [Document] = []
     @Published var activeDocument: Document?
@@ -216,6 +217,7 @@ final class AppModel: ObservableObject {
     func reloadLibrary() {
         topics = (try? database.allTopics()) ?? []
         documents = (try? database.allDocuments()) ?? []
+        documentFolders = (try? database.allFolders()) ?? []
         customDecks = (try? database.allDecks()) ?? []
         deckCardCounts = (try? database.deckCardCounts()) ?? [:]
         dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
@@ -400,6 +402,31 @@ final class AppModel: ObservableObject {
 
     func deleteDocument(_ document: Document) {
         try? database.deleteDocument(id: document.id)
+        reloadLibrary()
+    }
+
+    func createFolder(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let folder = DocumentFolder(name: trimmed)
+        try? database.insertFolder(folder)
+        reloadLibrary()
+    }
+
+    func renameFolder(id: UUID, newName: String) {
+        let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? database.renameFolder(id: id, newName: trimmed)
+        reloadLibrary()
+    }
+
+    func deleteFolder(id: UUID) {
+        try? database.deleteFolder(id: id)
+        reloadLibrary()
+    }
+
+    func moveDocument(_ document: Document, to folderID: UUID?) {
+        try? database.updateDocumentFolder(documentID: document.id, folderID: folderID)
         reloadLibrary()
     }
 
@@ -2523,6 +2550,7 @@ struct MarginGraphApp: App {
                         case .document:
                             DocumentShelfView(
                                 documents: model.documents,
+                                folders: model.documentFolders,
                                 onOpenDocument: { doc in
                                     model.openDocumentInReader(document: doc)
                                 },
@@ -2536,6 +2564,18 @@ struct MarginGraphApp: App {
                                 },
                                 onDeleteDocument: { doc in
                                     model.deleteDocument(doc)
+                                },
+                                onCreateFolder: { name in
+                                    model.createFolder(name: name)
+                                },
+                                onRenameFolder: { id, name in
+                                    model.renameFolder(id: id, newName: name)
+                                },
+                                onDeleteFolder: { id in
+                                    model.deleteFolder(id: id)
+                                },
+                                onMoveDocument: { doc, folderID in
+                                    model.moveDocument(doc, to: folderID)
                                 }
                             )
                         case .study:

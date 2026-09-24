@@ -271,4 +271,79 @@ final class MediaDocumentTests: XCTestCase {
         XCTAssertEqual(thumb.time, 42.5)
         XCTAssertEqual(thumb.image.size, NSSize(width: 160, height: 90))
     }
+
+    func testDocumentFolderCRUDAndMoveDocuments() throws {
+        let database = try Database(inMemory: true)
+
+        // 1. Create folders
+        let folder1 = DocumentFolder(name: "Computer Science")
+        let folder2 = DocumentFolder(name: "Mathematics")
+        try database.insertFolder(folder1)
+        try database.insertFolder(folder2)
+
+        var folders = try database.allFolders()
+        XCTAssertEqual(folders.count, 2)
+        XCTAssertTrue(folders.contains { $0.name == "Computer Science" })
+        XCTAssertTrue(folders.contains { $0.name == "Mathematics" })
+
+        // 2. Insert documents
+        let doc1 = Document(
+            id: UUID(),
+            title: "Lecture 1: Intro to Neural Networks",
+            filePath: "/test/neural.mp4",
+            md5: "neural_md5_1",
+            totalPages: 3600,
+            documentType: "video",
+            folderId: folder1.id
+        )
+        let doc2 = Document(
+            id: UUID(),
+            title: "Linear Algebra Notes",
+            filePath: "/test/linalg.pdf",
+            md5: "linalg_md5_2",
+            totalPages: 120,
+            documentType: "pdf",
+            folderId: nil // Root
+        )
+        try database.insertDocument(doc1)
+        try database.insertDocument(doc2)
+
+        let allDocs = try database.allDocuments()
+        let fetchedDoc1 = allDocs.first { $0.id == doc1.id }
+        let fetchedDoc2 = allDocs.first { $0.id == doc2.id }
+        XCTAssertEqual(fetchedDoc1?.folderId, folder1.id)
+        XCTAssertNil(fetchedDoc2?.folderId)
+
+        // 3. Move document to another folder
+        try database.updateDocumentFolder(documentID: doc2.id, folderID: folder2.id)
+        let movedDoc2 = try database.getDocument(id: doc2.id)
+        XCTAssertEqual(movedDoc2?.folderId, folder2.id)
+
+        // 4. Rename folder
+        try database.renameFolder(id: folder1.id, newName: "Deep Learning")
+        folders = try database.allFolders()
+        XCTAssertTrue(folders.contains { $0.name == "Deep Learning" })
+        XCTAssertFalse(folders.contains { $0.name == "Computer Science" })
+
+        // 5. Delete folder - documents inside must NOT be deleted, but moved safely to root (folder_id = nil)
+        try database.deleteFolder(id: folder1.id)
+        folders = try database.allFolders()
+        XCTAssertEqual(folders.count, 1)
+        XCTAssertEqual(folders.first?.name, "Mathematics")
+
+        let doc1AfterFolderDelete = try database.getDocument(id: doc1.id)
+        XCTAssertNotNil(doc1AfterFolderDelete)
+        XCTAssertNil(doc1AfterFolderDelete?.folderId, "Doc 1 should now be at Root (folder_id == nil)")
+
+        let doc2StillInMath = try database.getDocument(id: doc2.id)
+        XCTAssertEqual(doc2StillInMath?.folderId, folder2.id)
+    }
+
+    @MainActor
+    func testCoordinatorInitialStateDoesNotAutoPlay() {
+        let coordinator = MediaPlaybackCoordinator()
+        XCTAssertFalse(coordinator.isPlaying)
+        XCTAssertNil(coordinator.stopAtTime)
+        XCTAssertEqual(coordinator.currentTime, 0.0)
+    }
 }

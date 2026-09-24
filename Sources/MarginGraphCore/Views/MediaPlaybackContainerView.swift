@@ -474,16 +474,6 @@ public struct MediaPlaybackContainerView: View {
                         let pct = min(1.0, max(0.0, value.location.x / totalW))
                         let seekTime = pct * duration
                         seek(to: seekTime)
-
-                        // If clicked/scrubbed inside a note range, select that card and play excerpt stopping at end
-                        if let card = cards.first(where: { c in
-                            guard let start = c.videoStartTime else { return false }
-                            let end = c.videoEndTime ?? (start + 5.0)
-                            return seekTime >= start && seekTime <= end
-                        }) {
-                            onSelectCard?(card.id)
-                            handleCardSelected(card.id)
-                        }
                     }
             )
         }
@@ -795,8 +785,10 @@ public final class MediaPlaybackCoordinator: ObservableObject {
         let playerItem = AVPlayerItem(url: url)
         let newPlayer = AVPlayer(playerItem: playerItem)
         newPlayer.actionAtItemEnd = .pause
-        newPlayer.rate = playbackRate
+        newPlayer.rate = 0.0
         self.player = newPlayer
+        self.isPlaying = false
+        self.stopAtTime = nil
         self.duration = MediaDocumentHelper.mediaDuration(url: url)
 
         // Observe end of media playback so pause button automatically becomes play button

@@ -74,7 +74,14 @@ public final class Database: @unchecked Sendable {
             mind_pan_x REAL,
             mind_pan_y REAL,
             mind_zoom_scale REAL,
-            document_type TEXT NOT NULL DEFAULT 'pdf'
+            document_type TEXT NOT NULL DEFAULT 'pdf',
+            folder_id TEXT
+        );
+        CREATE TABLE IF NOT EXISTS document_folders(
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
         );
         CREATE TABLE IF NOT EXISTS topics(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, book_md5_list TEXT NOT NULL,
@@ -205,6 +212,17 @@ public final class Database: @unchecked Sendable {
         if try !hasColumn("last_document_md5", in: "topics") {
             try execute("ALTER TABLE topics ADD COLUMN last_document_md5 TEXT;")
         }
+        if try !hasColumn("folder_id", in: "documents") {
+            try execute("ALTER TABLE documents ADD COLUMN folder_id TEXT;")
+        }
+        try execute("""
+        CREATE TABLE IF NOT EXISTS document_folders(
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL
+        );
+        """)
         try? execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
         try repairDocumentIDs()
     }
@@ -310,6 +328,9 @@ public final class Database: @unchecked Sendable {
                 doc.mindPanY = existing.mindPanY
                 doc.mindZoomScale = existing.mindZoomScale
             }
+            if doc.folderId == nil && existing.folderId != nil {
+                doc.folderId = existing.folderId
+            }
         } else if let collision = try getDocument(id: doc.id), collision.md5 != doc.md5 {
             doc.id = Document.stableUUID(doc.md5)
             if let stillCollision = try getDocument(id: doc.id), stillCollision.md5 != doc.md5 {
@@ -345,7 +366,7 @@ public final class Database: @unchecked Sendable {
             }
         }
 
-        try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)") { statement in
+        try withStatement("INSERT OR REPLACE INTO documents(id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type,folder_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)") { statement in
             bind(doc.id.uuidString, to: 1, in: statement)
             bind(doc.title, to: 2, in: statement)
             bind(doc.filePath, to: 3, in: statement)
@@ -358,6 +379,7 @@ public final class Database: @unchecked Sendable {
             bind(doc.mindPanY, to: 10, in: statement)
             bind(doc.mindZoomScale, to: 11, in: statement)
             bind(doc.documentType, to: 12, in: statement)
+            bind(doc.folderId?.uuidString, to: 13, in: statement)
             try requireDone(statement)
         }
     }
@@ -431,7 +453,7 @@ public final class Database: @unchecked Sendable {
     }
 
     private func document(where clause: String, value: String) throws -> Document? {
-        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type FROM documents WHERE \(clause) LIMIT 1") { statement in
+        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type,folder_id FROM documents WHERE \(clause) LIMIT 1") { statement in
             bind(value, to: 1, in: statement)
             guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
             return decodeDocument(statement)
@@ -439,7 +461,7 @@ public final class Database: @unchecked Sendable {
     }
 
     public func allDocuments() throws -> [Document] {
-        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type FROM documents ORDER BY title") { statement in
+        try withStatement("SELECT id,title,file_path,md5,total_pages,last_visited,last_page_index,last_page_offset_y,mind_pan_x,mind_pan_y,mind_zoom_scale,document_type,folder_id FROM documents ORDER BY title") { statement in
             var result: [Document] = []
             while sqlite3_step(statement) == SQLITE_ROW {
                 if let row = decodeDocument(statement) { result.append(row) }
@@ -465,8 +487,60 @@ public final class Database: @unchecked Sendable {
             mindPanX: double(statement, 8),
             mindPanY: double(statement, 9),
             mindZoomScale: double(statement, 10),
-            documentType: text(statement, 11) ?? "pdf"
+            documentType: text(statement, 11) ?? "pdf",
+            folderId: text(statement, 12).flatMap(UUID.init(uuidString:))
         )
+    }
+
+    // MARK: - Document Folders
+
+    public func allFolders() throws -> [DocumentFolder] {
+        try withStatement("SELECT id, name, created_at, updated_at FROM document_folders ORDER BY name COLLATE NOCASE ASC") { statement in
+            var result: [DocumentFolder] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                guard let id = text(statement, 0).flatMap(UUID.init(uuidString:)),
+                      let name = text(statement, 1),
+                      let created = double(statement, 2).map(Date.init(timeIntervalSince1970:)),
+                      let updated = double(statement, 3).map(Date.init(timeIntervalSince1970:)) else { continue }
+                result.append(DocumentFolder(id: id, name: name, createdAt: created, updatedAt: updated))
+            }
+            return result
+        }
+    }
+
+    public func insertFolder(_ folder: DocumentFolder) throws {
+        try withStatement("INSERT OR REPLACE INTO document_folders(id, name, created_at, updated_at) VALUES(?,?,?,?)") { statement in
+            bind(folder.id.uuidString, to: 1, in: statement)
+            bind(folder.name, to: 2, in: statement)
+            bind(folder.createdAt.timeIntervalSince1970, to: 3, in: statement)
+            bind(folder.updatedAt.timeIntervalSince1970, to: 4, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    public func renameFolder(id: UUID, newName: String) throws {
+        try withStatement("UPDATE document_folders SET name = ?, updated_at = ? WHERE id = ?") { statement in
+            bind(newName, to: 1, in: statement)
+            bind(Date().timeIntervalSince1970, to: 2, in: statement)
+            bind(id.uuidString, to: 3, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    public func deleteFolder(id: UUID) throws {
+        try withStatement("UPDATE documents SET folder_id = NULL WHERE folder_id = ?") { statement in
+            bind(id.uuidString, to: 1, in: statement)
+            try requireDone(statement)
+        }
+        try delete("DELETE FROM document_folders WHERE id = ?", id.uuidString)
+    }
+
+    public func updateDocumentFolder(documentID: UUID, folderID: UUID?) throws {
+        try withStatement("UPDATE documents SET folder_id = ? WHERE id = ?") { statement in
+            bind(folderID?.uuidString, to: 1, in: statement)
+            bind(documentID.uuidString, to: 2, in: statement)
+            try requireDone(statement)
+        }
     }
 
     public func updateDocumentPosition(md5: String, pageIndex: Int, pageOffsetY: Double) throws {

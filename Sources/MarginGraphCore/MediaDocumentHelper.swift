@@ -101,7 +101,7 @@ public enum MediaDocumentHelper {
     }
 
     #if canImport(AppKit)
-    public static func generatePosterFrame(url: URL, atSeconds seconds: Double = 1.0, size: CGSize = CGSize(width: 148, height: 180)) -> NSImage? {
+    public static func generatePosterFrame(url: URL, atSeconds seconds: Double = 1.0, size: CGSize = CGSize(width: 320, height: 320)) -> NSImage? {
         let asset = AVURLAsset(url: url)
         let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
@@ -110,7 +110,10 @@ public enum MediaDocumentHelper {
         guard let cgImg = try? generator.copyCGImage(at: time, actualTime: nil) else {
             return nil
         }
-        return NSImage(cgImage: cgImg, size: size)
+        let w = CGFloat(cgImg.width)
+        let h = CGFloat(cgImg.height)
+        let naturalSize = (w > 0 && h > 0) ? NSSize(width: w, height: h) : NSSize(width: size.width, height: size.height)
+        return NSImage(cgImage: cgImg, size: naturalSize)
     }
     #endif
 }

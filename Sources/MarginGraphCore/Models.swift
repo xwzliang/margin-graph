@@ -1,6 +1,20 @@
 import Foundation
 import CoreGraphics
 
+public struct DocumentFolder: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    public var name: String
+    public var createdAt: Date
+    public var updatedAt: Date
+
+    public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), updatedAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+    }
+}
+
 public struct Document: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var title: String
@@ -14,6 +28,7 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
     public var mindPanY: Double?
     public var mindZoomScale: Double?
     public var documentType: String
+    public var folderId: UUID?
 
     public init(
         id: UUID = UUID(),
@@ -27,7 +42,8 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
         mindPanX: Double? = nil,
         mindPanY: Double? = nil,
         mindZoomScale: Double? = nil,
-        documentType: String = "pdf"
+        documentType: String = "pdf",
+        folderId: UUID? = nil
     ) {
         self.id = id
         self.title = title
@@ -41,6 +57,7 @@ public struct Document: Codable, Hashable, Sendable, Identifiable {
         self.mindPanY = mindPanY
         self.mindZoomScale = mindZoomScale
         self.documentType = documentType
+        self.folderId = folderId
     }
 
     public static func stableUUID(_ raw: String) -> UUID {
