@@ -572,6 +572,14 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    public func renameDocument(id: UUID, newTitle: String) throws {
+        try withStatement("UPDATE documents SET title = ? WHERE id = ?") { statement in
+            bind(newTitle, to: 1, in: statement)
+            bind(id.uuidString, to: 2, in: statement)
+            try requireDone(statement)
+        }
+    }
+
     public func updateDocumentPosition(md5: String, pageIndex: Int, pageOffsetY: Double) throws {
         try withStatement("UPDATE documents SET last_page_index = ?, last_page_offset_y = ? WHERE md5 = ?") { statement in
             bind(pageIndex, to: 1, in: statement)
@@ -641,7 +649,20 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    public func renameTopic(id: UUID, newTitle: String) throws {
+        try withStatement("UPDATE topics SET title = ?, updated_at = ? WHERE id = ?") { statement in
+            bind(newTitle, to: 1, in: statement)
+            bind(Date().timeIntervalSince1970, to: 2, in: statement)
+            bind(id.uuidString, to: 3, in: statement)
+            try requireDone(statement)
+        }
+    }
+
     public func deleteTopic(id: UUID) throws {
+        try delete("DELETE FROM deck_cards WHERE card_id IN (SELECT id FROM cards WHERE topic_id = ?)", id.uuidString)
+        try delete("DELETE FROM review_items WHERE card_id IN (SELECT id FROM cards WHERE topic_id = ?)", id.uuidString)
+        try delete("DELETE FROM card_links WHERE topic_id = ?", id.uuidString)
+        try delete("DELETE FROM cards WHERE topic_id = ?", id.uuidString)
         try delete("DELETE FROM topics WHERE id = ?", id.uuidString)
     }
 

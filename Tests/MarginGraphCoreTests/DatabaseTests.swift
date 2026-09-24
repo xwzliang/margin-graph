@@ -534,6 +534,39 @@ final class DatabaseTests: XCTestCase {
         XCTAssertNotNil(loadedWithoutExt)
         XCTAssertEqual(loadedData?.count, loadedWithoutExt?.count)
     }
+
+    func testRenameDocumentAndRenameTopicAndCascadeDeleteTopic() throws {
+        let db = try Database(inMemory: true)
+        let doc = Document(title: "Old Doc Title", filePath: "/tmp/old.pdf", md5: "md5-rename-test", totalPages: 10)
+        try db.insertDocument(doc)
+
+        // Rename document
+        try db.renameDocument(id: doc.id, newTitle: "New Doc Title")
+        let renamedDoc = try db.getDocument(id: doc.id)
+        XCTAssertEqual(renamedDoc?.title, "New Doc Title")
+
+        // Topic creation & rename
+        let topic = Topic(title: "Old Topic Title", bookMD5List: [doc.md5])
+        try db.insertTopic(topic)
+        try db.renameTopic(id: topic.id, newTitle: "New Topic Title")
+        let renamedTopic = try db.getTopic(id: topic.id)
+        XCTAssertEqual(renamedTopic?.title, "New Topic Title")
+
+        // Add card, link, review item, deck card
+        let card = NoteCard(topicId: topic.id, title: "Topic Card")
+        try db.insertCard(card)
+        let link = CardLink(topicId: topic.id, sourceCardId: card.id, targetCardId: card.id, label: nil, isBidirectional: false)
+        try db.insertLink(link)
+        let deck = try db.createDeck(title: "Test Deck")
+        try db.addCardsToDeck(cardIds: [card.id], deckId: deck.id)
+
+        // Delete topic
+        try db.deleteTopic(id: topic.id)
+        XCTAssertNil(try db.getTopic(id: topic.id))
+        XCTAssertNil(try db.getCard(id: card.id))
+        XCTAssertTrue(try db.linksForTopic(id: topic.id).isEmpty)
+        XCTAssertTrue(try db.cardsForDeck(deckId: deck.id).isEmpty)
+    }
 }
 
 

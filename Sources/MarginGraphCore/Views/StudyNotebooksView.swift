@@ -9,36 +9,52 @@ public struct StudyNotebooksView: View {
     public var onOpenTopic: (Topic) -> Void
     public var onCreateTopic: () -> Void
     public var onDeleteTopic: (Topic) -> Void
+    public var onRenameTopic: ((Topic, String) -> Void)?
+    @Binding public var isSearchPresented: Bool
+    @Binding public var searchQuery: String
 
     @State private var sortMode: Int = 0 // 0: Recent, 1: Name
     @State private var filter: String = "All"
+    @State private var topicToRename: Topic? = nil
+    @State private var renameTopicTitle: String = ""
 
     public init(
         topics: [Topic],
         documents: [Document] = [],
         cardCounts: [UUID: Int] = [:],
+        isSearchPresented: Binding<Bool> = .constant(false),
+        searchQuery: Binding<String> = .constant(""),
         onOpenTopic: @escaping (Topic) -> Void,
         onCreateTopic: @escaping () -> Void,
-        onDeleteTopic: @escaping (Topic) -> Void
+        onDeleteTopic: @escaping (Topic) -> Void,
+        onRenameTopic: ((Topic, String) -> Void)? = nil
     ) {
         self.topics = topics
         self.documents = documents
         self.cardCounts = cardCounts
+        self._isSearchPresented = isSearchPresented
+        self._searchQuery = searchQuery
         self.onOpenTopic = onOpenTopic
         self.onCreateTopic = onCreateTopic
         self.onDeleteTopic = onDeleteTopic
+        self.onRenameTopic = onRenameTopic
     }
 
     private var sortedTopics: [Topic] {
+        var list = topics
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            list = list.filter { $0.title.localizedCaseInsensitiveContains(query) }
+        }
         if sortMode == 0 {
-            return topics.sorted {
+            return list.sorted {
                 if $0.updatedAt != $1.updatedAt {
                     return $0.updatedAt > $1.updatedAt
                 }
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
         } else {
-            return topics.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return list.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         }
     }
 
@@ -57,6 +73,77 @@ public struct StudyNotebooksView: View {
               || cleanTopicTitle.localizedCaseInsensitiveContains(dFileName)
               || dFileName.localizedCaseInsensitiveContains(cleanTopicTitle)
         }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            TextField("Search notebooks…", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button("Cancel") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    searchQuery = ""
+                    isSearchPresented = false
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(Color.accentColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 8)
+    }
+
+    private func renameTopicSheet(topic: Topic) -> some View {
+        VStack(spacing: 18) {
+            Text("Rename Notebook")
+                .font(.headline)
+
+            TextField("Notebook Title", text: $renameTopicTitle)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 300)
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    topicToRename = nil
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Rename") {
+                    let trimmed = renameTopicTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        onRenameTopic?(topic, trimmed)
+                    }
+                    topicToRename = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(renameTopicTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .frame(width: 300)
+        }
+        .padding(24)
     }
 
     public var body: some View {
@@ -101,6 +188,10 @@ public struct StudyNotebooksView: View {
             .padding(.top, 14)
             .padding(.bottom, 8)
 
+            if isSearchPresented {
+                searchBar
+            }
+
             // Subheader: Recent | Name
             Picker("", selection: $sortMode) {
                 Text("Recent").tag(0)
@@ -120,11 +211,13 @@ public struct StudyNotebooksView: View {
                         Image(systemName: "square.grid.2x2")
                             .font(.system(size: 48))
                             .foregroundStyle(.secondary)
-                        Text("No Study Notebooks")
+                        Text(searchQuery.isEmpty ? "No Study Notebooks" : "No Notebooks Found")
                             .font(.headline)
                             .foregroundStyle(.secondary)
-                        Button("New Notebook", action: onCreateTopic)
-                            .buttonStyle(.borderedProminent)
+                        if searchQuery.isEmpty {
+                            Button("New Notebook", action: onCreateTopic)
+                                .buttonStyle(.borderedProminent)
+                        }
                     }
                     .frame(maxWidth: .infinity, minHeight: 300)
                 } else {
@@ -134,10 +227,20 @@ public struct StudyNotebooksView: View {
                                 topic: topic,
                                 document: matchingDocument(for: topic),
                                 cardCount: cardCounts[topic.id] ?? 0,
-                                onOpen: { onOpenTopic(topic) }
+                                onOpen: { onOpenTopic(topic) },
+                                onRename: {
+                                    renameTopicTitle = topic.title
+                                    topicToRename = topic
+                                },
+                                onDelete: { onDeleteTopic(topic) }
                             )
                             .contextMenu {
                                 Button("Open Notebook") { onOpenTopic(topic) }
+                                Divider()
+                                Button("Rename…") {
+                                    renameTopicTitle = topic.title
+                                    topicToRename = topic
+                                }
                                 Divider()
                                 Button("Delete", role: .destructive) { onDeleteTopic(topic) }
                             }
@@ -148,6 +251,9 @@ public struct StudyNotebooksView: View {
             }
         }
         .background(MarginNoteTheme.shelfBackground)
+        .sheet(item: $topicToRename) { topic in
+            renameTopicSheet(topic: topic)
+        }
     }
 }
 
@@ -156,12 +262,25 @@ public struct NotebookCardView: View {
     public var document: Document?
     public var cardCount: Int
     public var onOpen: () -> Void
+    public var onRename: (() -> Void)?
+    public var onDelete: (() -> Void)?
 
-    public init(topic: Topic, document: Document? = nil, cardCount: Int, onOpen: @escaping () -> Void) {
+    @State private var isShowingActionCard: Bool = false
+
+    public init(
+        topic: Topic,
+        document: Document? = nil,
+        cardCount: Int,
+        onOpen: @escaping () -> Void,
+        onRename: (() -> Void)? = nil,
+        onDelete: (() -> Void)? = nil
+    ) {
         self.topic = topic
         self.document = document
         self.cardCount = cardCount
         self.onOpen = onOpen
+        self.onRename = onRename
+        self.onDelete = onDelete
     }
 
     public var body: some View {
@@ -257,9 +376,34 @@ public struct NotebookCardView: View {
                         .font(.system(size: 9))
                         .foregroundStyle(.secondary.opacity(0.6))
                     Spacer()
-                    Image(systemName: "ellipsis")
-                        .font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.secondary.opacity(0.7))
+                    Button {
+                        isShowingActionCard.toggle()
+                    } label: {
+                        Image(systemName: "ellipsis")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(.secondary.opacity(0.75))
+                            .frame(width: 22, height: 16)
+                            .background(isShowingActionCard ? Color.secondary.opacity(0.15) : Color.clear, in: RoundedRectangle(cornerRadius: 3))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $isShowingActionCard, arrowEdge: .trailing) {
+                        NotebookActionCardView(
+                            topic: topic,
+                            onOpen: {
+                                isShowingActionCard = false
+                                onOpen()
+                            },
+                            onRename: {
+                                isShowingActionCard = false
+                                onRename?()
+                            },
+                            onDelete: {
+                                isShowingActionCard = false
+                                onDelete?()
+                            }
+                        )
+                    }
                 }
                 .padding(.horizontal, 4)
             }
@@ -301,5 +445,98 @@ public struct NotebookCardView: View {
         }
         let thumbSize = NSSize(width: 44, height: 60)
         return page.thumbnail(of: thumbSize, for: .mediaBox)
+    }
+}
+
+public struct NotebookActionCardView: View {
+    public var topic: Topic
+    public var onOpen: () -> Void
+    public var onRename: () -> Void
+    public var onDelete: () -> Void
+
+    @State private var hoveredItem: String? = nil
+
+    public init(
+        topic: Topic,
+        onOpen: @escaping () -> Void,
+        onRename: @escaping () -> Void,
+        onDelete: @escaping () -> Void
+    ) {
+        self.topic = topic
+        self.onOpen = onOpen
+        self.onRename = onRename
+        self.onDelete = onDelete
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            // Open Notebook
+            Button(action: onOpen) {
+                HStack(spacing: 8) {
+                    Image(systemName: "book.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.accentColor)
+                        .frame(width: 16)
+                    Text("Open Notebook")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(hoveredItem == "open" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveredItem = $0 ? "open" : nil }
+
+            Divider()
+                .padding(.vertical, 2)
+
+            // Rename
+            Button(action: onRename) {
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.primary)
+                        .frame(width: 16)
+                    Text("Rename…")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.primary)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(hoveredItem == "rename" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveredItem = $0 ? "rename" : nil }
+
+            Divider()
+                .padding(.vertical, 2)
+
+            // Delete
+            Button(role: .destructive, action: onDelete) {
+                HStack(spacing: 8) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.red)
+                        .frame(width: 16)
+                    Text("Delete")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.red)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(hoveredItem == "delete" ? Color.red.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onHover { hoveredItem = $0 ? "delete" : nil }
+        }
+        .padding(6)
+        .frame(width: 170)
     }
 }

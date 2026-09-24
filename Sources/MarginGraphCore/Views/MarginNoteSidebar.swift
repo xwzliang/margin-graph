@@ -18,17 +18,20 @@ public enum MainNavigationTab: String, CaseIterable, Identifiable {
 
 public struct MarginNoteSidebar: View {
     @Binding public var selectedTab: MainNavigationTab
+    public var isSearchActive: Bool
     public var onSearch: () -> Void
     public var onHelp: () -> Void
     public var onSettings: () -> Void
 
     public init(
         selectedTab: Binding<MainNavigationTab>,
+        isSearchActive: Bool = false,
         onSearch: @escaping () -> Void = {},
         onHelp: @escaping () -> Void = {},
         onSettings: @escaping () -> Void = {}
     ) {
         self._selectedTab = selectedTab
+        self.isSearchActive = isSearchActive
         self.onSearch = onSearch
         self.onHelp = onHelp
         self.onSettings = onSettings
@@ -40,7 +43,7 @@ public struct MarginNoteSidebar: View {
             Button(action: onSearch) {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 17, weight: .regular))
-                    .foregroundStyle(MarginNoteTheme.sidebarTextInactive)
+                    .foregroundStyle(isSearchActive ? MarginNoteTheme.sidebarActiveIndicator : MarginNoteTheme.sidebarTextInactive)
                     .frame(width: 56, height: 44)
             }
             .buttonStyle(.plain)

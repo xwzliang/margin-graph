@@ -19,6 +19,8 @@ final class AppModel: ObservableObject {
     @Published var isInStudyWorkspace: Bool = false
     @Published var isOutlineVisible: Bool = false
     @Published var workspaceMode: WorkspaceViewMode = .splitView
+    @Published var isShelfSearchPresented: Bool = false
+    @Published var shelfSearchQuery: String = ""
 
     @Published var topics: [Topic] = []
     @Published var documents: [Document] = []
@@ -422,7 +424,24 @@ final class AppModel: ObservableObject {
     }
 
     func deleteTopic(_ topic: Topic) {
-        // Detach and clean up topic
+        try? database.deleteTopic(id: topic.id)
+        if selectedTopicID == topic.id {
+            selectedTopicID = nil
+        }
+        reloadLibrary()
+    }
+
+    func renameTopic(_ topic: Topic, newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? database.renameTopic(id: topic.id, newTitle: trimmed)
+        reloadLibrary()
+    }
+
+    func renameDocument(_ document: Document, newTitle: String) {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        try? database.renameDocument(id: document.id, newTitle: trimmed)
         reloadLibrary()
     }
 
@@ -651,9 +670,9 @@ final class AppModel: ObservableObject {
         openDocument(url: url, attachToTopic: attachToTopic)
     }
 
-    func switchToDocument(_ document: Document) {
+    func switchToDocument(_ document: Document, clearSelection: Bool = true) {
         flushPendingPositions()
-        if activeDocument?.id != document.id {
+        if clearSelection && activeDocument?.id != document.id {
             selectedCardID = nil
             jumpTarget = nil
         }
@@ -1175,7 +1194,7 @@ final class AppModel: ObservableObject {
                 ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) })
                 ?? (try? database.document(byMD5: md5))
             if let doc, activeDocument?.md5 != doc.md5 {
-                switchToDocument(doc)
+                switchToDocument(doc, clearSelection: false)
             }
         }
 
@@ -1203,12 +1222,13 @@ final class AppModel: ObservableObject {
                 reloadStudySet()
             }
             if activeDocument?.md5 != document.md5 {
-                switchToDocument(document)
+                switchToDocument(document, clearSelection: false)
             }
         }
 
+        selectedCardID = card.id
+
         if card.videoStartTime != nil {
-            selectedCardID = card.id
             return
         }
 
@@ -2622,7 +2642,12 @@ struct MarginGraphApp: App {
                 if !model.isInStudyWorkspace {
                     MarginNoteSidebar(
                         selectedTab: $model.selectedMainTab,
-                        onSearch: {},
+                        isSearchActive: model.isShelfSearchPresented,
+                        onSearch: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                model.isShelfSearchPresented.toggle()
+                            }
+                        },
                         onHelp: {},
                         onSettings: {
                             model.importMarginNote()
@@ -2631,6 +2656,7 @@ struct MarginGraphApp: App {
                     .onChange(of: model.selectedMainTab) { _, _ in
                         model.flushPendingPositions()
                         model.isInStudyWorkspace = false
+                        model.shelfSearchQuery = ""
                     }
                     .transition(.move(edge: .leading))
                 }
@@ -2647,6 +2673,8 @@ struct MarginGraphApp: App {
                                 folders: model.documentFolders,
                                 topics: model.topics,
                                 documentCardCounts: model.documentCardCounts,
+                                isSearchPresented: $model.isShelfSearchPresented,
+                                searchQuery: $model.shelfSearchQuery,
                                 onOpenDocument: { doc in
                                     model.openDocumentInReader(document: doc)
                                 },
@@ -2660,6 +2688,9 @@ struct MarginGraphApp: App {
                                 },
                                 onDeleteDocument: { doc in
                                     model.deleteDocument(doc)
+                                },
+                                onRenameDocument: { doc, newTitle in
+                                    model.renameDocument(doc, newTitle: newTitle)
                                 },
                                 onCreateFolder: { name, parentID in
                                     model.createFolder(name: name, parentId: parentID)
@@ -2685,6 +2716,8 @@ struct MarginGraphApp: App {
                                 topics: model.topics,
                                 documents: model.documents,
                                 cardCounts: model.cardCounts,
+                                isSearchPresented: $model.isShelfSearchPresented,
+                                searchQuery: $model.shelfSearchQuery,
                                 onOpenTopic: { topic in
                                     model.enterStudyWorkspace(topic: topic)
                                 },
@@ -2693,11 +2726,16 @@ struct MarginGraphApp: App {
                                 },
                                 onDeleteTopic: { topic in
                                     model.deleteTopic(topic)
+                                },
+                                onRenameTopic: { topic, newTitle in
+                                    model.renameTopic(topic, newTitle: newTitle)
                                 }
                             )
                         case .review:
                             ReviewDecksView(
                                 decks: model.reviewDecks,
+                                isSearchPresented: $model.isShelfSearchPresented,
+                                searchQuery: $model.shelfSearchQuery,
                                 onStartReview: { deck in
                                     model.startReviewForDeck(deck)
                                 },

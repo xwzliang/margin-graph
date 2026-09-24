@@ -1138,4 +1138,27 @@ final class PDFTests: XCTestCase {
             XCTAssertLessThanOrEqual(annot.bounds.maxY, crop.maxY)
         }
     }
+
+    func testHandleDimensionsBoundedAtExtremeScales() throws {
+        // 1. Uninitialized or zero scale (e.g. before initial layout)
+        let zeroScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 0.0)
+        XCTAssertEqual(zeroScaleDims.knobSize, 10.0, "Knob size should fall back to 10pt when scale is 0")
+        XCTAssertEqual(zeroScaleDims.stemWidth, 2.0)
+        XCTAssertEqual(zeroScaleDims.stemHeight, 19.0)
+
+        // 2. Extremely low scale (e.g. 0.1x zoom)
+        let lowScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 0.1)
+        XCTAssertLessThanOrEqual(lowScaleDims.knobSize, 12.0, "Knob size should never exceed 12pt even at 0.1x scale")
+        XCTAssertLessThanOrEqual(lowScaleDims.stemWidth, 2.5)
+
+        // 3. High scale (e.g. 3.0x zoom)
+        let highScaleDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 3.0)
+        XCTAssertGreaterThanOrEqual(highScaleDims.knobSize, 4.0, "Knob size should have a minimum of 4pt")
+        XCTAssertLessThanOrEqual(highScaleDims.knobSize, 5.0)
+
+        // 4. Normal scale 1.0
+        let normalDims = InteractivePDFView.handleDimensions(for: 16.0, scale: 1.0)
+        XCTAssertEqual(normalDims.knobSize, 10.0)
+        XCTAssertEqual(normalDims.stemWidth, 2.0)
+    }
 }

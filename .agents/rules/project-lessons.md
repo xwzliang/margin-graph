@@ -513,6 +513,16 @@ Structure each entry concisely with actionable rules:
 - **Bottom Floating Toolbar Menu Border Bleed & Hierarchical Move-To Popovers**:
   - **Trap**: Anchoring an AppKit `Menu` on a floating toolbar near the window's bottom edge causes the popup menu to expand downwards and bleed past the bottom window border. Furthermore, displaying destination folders without hierarchical sorting/indentation in individual card popovers prevents users from recognizing nested folder structures.
   - **Rule**: Use a button with `.popover(isPresented: ..., arrowEdge: .top)` on bottom-docked toolbars so menus pop upwards and remain safely inside window bounds. In action card popovers, sort folders hierarchically (`hierarchicallySortedFolders`) and prefix nested items with indentation and `↳ ` matching tree depth.
+- **PDF Handle Knob and Stem Sizing in Page Coordinates vs View Scale Factor**:
+  - **Trap**: Calculating PDF page annotation dimensions (stem width, stem height, knob radius) as `10.0 / scaleFactor` where `scaleFactor` can be 0.0 or uninitialized before the view's layout completes or during document tab switches. Clamping with `max(0.2, scaleFactor)` causes `10.0 / 0.2 = 50.0` points, resulting in massive, multi-line cursor knobs permanently attached to the PDF page annotations.
+  - **Rule**: In `InteractivePDFView.handleDimensions(for:scale:)`, sanitize `scale`: if `scale <= 0.05` or `isNaN` or `isInfinite`, fall back to 1.0. Clamp effective scale to `[0.8, 5.0]` so knobs never exceed 12.0 points and never drop below 4.0 points (`knobSize = max(4.0, min(12.0, 10.0 / effectiveScale))`). This guarantees that cursor knobs never blow up even before view layout finishes.
+- **Preserving Selection and Jump Target During Programmatic Card Jumps**:
+  - **Trap**: Unconditionally resetting `selectedCardID = nil` and `jumpTarget = nil` inside `switchToDocument(doc)` cancels card focus and jump navigation when a user clicks a note card belonging to a different document tab in multi-document study mode, requiring a second click to focus the card.
+  - **Rule**: Parameterize document switching with `switchToDocument(_ document: Document, clearSelection: Bool = true)`. Callers deliberately navigating to a note card pass `clearSelection: false` and explicitly restore `selectedCardID = card.id`, allowing the first click to switch tabs and immediately focus the selected note card.
+- **Cascading Relational Deletion of Study Topics**:
+  - **Trap**: Deleting from non-existent tables (such as `topic_documents` or `links`) causes SQLite errors that abort topic deletion or cause silent failures inside `try? deleteTopic(id:)`.
+  - **Rule**: Ensure `Database.deleteTopic(id:)` queries strictly target valid tables in schema: delete from `deck_cards WHERE card_id IN (SELECT id FROM cards WHERE topic_id = ?)`, `review_items WHERE card_id IN (SELECT id FROM cards WHERE topic_id = ?)`, `card_links WHERE topic_id = ?`, `cards WHERE topic_id = ?`, and finally `topics WHERE id = ?`.
+
 
 
 

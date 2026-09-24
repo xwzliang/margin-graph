@@ -24,23 +24,34 @@ public struct ReviewDecksView: View {
     public var decks: [ReviewDeckItem]
     public var onStartReview: (ReviewDeckItem) -> Void
     public var onDeleteDeck: ((ReviewDeckItem) -> Void)?
+    @Binding public var isSearchPresented: Bool
+    @Binding public var searchQuery: String
 
     @State private var sortMode: Int = 0 // 0: Recent, 1: Name
     @State private var filter: String = "All"
 
     public init(
         decks: [ReviewDeckItem],
+        isSearchPresented: Binding<Bool> = .constant(false),
+        searchQuery: Binding<String> = .constant(""),
         onStartReview: @escaping (ReviewDeckItem) -> Void,
         onDeleteDeck: ((ReviewDeckItem) -> Void)? = nil
     ) {
         self.decks = decks
+        self._isSearchPresented = isSearchPresented
+        self._searchQuery = searchQuery
         self.onStartReview = onStartReview
         self.onDeleteDeck = onDeleteDeck
     }
 
     private var sortedDecks: [ReviewDeckItem] {
+        var list = decks
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            list = list.filter { $0.title.localizedCaseInsensitiveContains(query) }
+        }
         if sortMode == 0 {
-            return decks.sorted {
+            return list.sorted {
                 let d0 = $0.lastReviewed ?? .distantPast
                 let d1 = $1.lastReviewed ?? .distantPast
                 if d0 != d1 {
@@ -49,8 +60,46 @@ public struct ReviewDecksView: View {
                 return $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
             }
         } else {
-            return decks.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
+            return list.sorted { $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending }
         }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            TextField("Search card decks…", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button("Cancel") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    searchQuery = ""
+                    isSearchPresented = false
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(Color.accentColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 8)
     }
 
     public var body: some View {
@@ -92,6 +141,10 @@ public struct ReviewDecksView: View {
             .padding(.top, 14)
             .padding(.bottom, 8)
 
+            if isSearchPresented {
+                searchBar
+            }
+
             // Subheader
             Picker("", selection: $sortMode) {
                 Text("Recent").tag(0)
@@ -111,7 +164,7 @@ public struct ReviewDecksView: View {
                         Image(systemName: "rectangle.stack.badge.play")
                             .font(.system(size: 48))
                             .foregroundStyle(.secondary)
-                        Text("No Flashcard Decks")
+                        Text(searchQuery.isEmpty ? "No Flashcard Decks" : "No Decks Found")
                             .font(.headline)
                             .foregroundStyle(.secondary)
                     }

@@ -13,12 +13,15 @@ public struct DocumentShelfView: View {
     public var onImportDocument: () -> Void
     public var onImportURLs: (([URL]) -> Void)?
     public var onDeleteDocument: (Document) -> Void
+    public var onRenameDocument: ((Document, String) -> Void)?
     public var onCreateFolder: ((String, UUID?) -> Void)?
     public var onRenameFolder: ((UUID, String) -> Void)?
     public var onDeleteFolder: ((UUID) -> Void)?
     public var onMoveDocument: ((Document, UUID?) -> Void)?
     public var onMoveFolder: ((DocumentFolder, UUID?) -> Void)?
     public var onAddToStudy: (([Document], UUID?, String?) -> Void)?
+    @Binding public var isSearchPresented: Bool
+    @Binding public var searchQuery: String
 
     @State private var currentFolderID: UUID? = nil
     @State private var sortMode: Int = 0 // 0: Recent, 1: Name
@@ -33,22 +36,27 @@ public struct DocumentShelfView: View {
     @State private var isShowingBatchMovePopover: Bool = false
     @State private var hoveredBatchMoveItem: String? = nil
 
-    // Folder Sheets & Dialogs
+    // Folder & Document Sheets & Dialogs
     @State private var isShowingCreateFolderSheet: Bool = false
     @State private var newFolderName: String = ""
     @State private var folderToRename: DocumentFolder? = nil
     @State private var renameFolderName: String = ""
     @State private var folderToDelete: DocumentFolder? = nil
+    @State private var documentToRename: Document? = nil
+    @State private var renameDocumentTitle: String = ""
 
     public init(
         documents: [Document],
         folders: [DocumentFolder] = [],
         topics: [Topic] = [],
         documentCardCounts: [UUID: Int] = [:],
+        isSearchPresented: Binding<Bool> = .constant(false),
+        searchQuery: Binding<String> = .constant(""),
         onOpenDocument: @escaping (Document) -> Void,
         onImportDocument: @escaping () -> Void,
         onImportURLs: (([URL]) -> Void)? = nil,
         onDeleteDocument: @escaping (Document) -> Void,
+        onRenameDocument: ((Document, String) -> Void)? = nil,
         onCreateFolder: ((String, UUID?) -> Void)? = nil,
         onRenameFolder: ((UUID, String) -> Void)? = nil,
         onDeleteFolder: ((UUID) -> Void)? = nil,
@@ -60,10 +68,13 @@ public struct DocumentShelfView: View {
         self.folders = folders
         self.topics = topics
         self.documentCardCounts = documentCardCounts
+        self._isSearchPresented = isSearchPresented
+        self._searchQuery = searchQuery
         self.onOpenDocument = onOpenDocument
         self.onImportDocument = onImportDocument
         self.onImportURLs = onImportURLs
         self.onDeleteDocument = onDeleteDocument
+        self.onRenameDocument = onRenameDocument
         self.onCreateFolder = onCreateFolder
         self.onRenameFolder = onRenameFolder
         self.onDeleteFolder = onDeleteFolder
@@ -77,10 +88,13 @@ public struct DocumentShelfView: View {
         folders: [DocumentFolder] = [],
         topics: [Topic] = [],
         documentCardCounts: [UUID: Int] = [:],
+        isSearchPresented: Binding<Bool> = .constant(false),
+        searchQuery: Binding<String> = .constant(""),
         onOpenDocument: @escaping (Document) -> Void,
         onImportDocument: @escaping () -> Void,
         onImportURLs: (([URL]) -> Void)? = nil,
         onDeleteDocument: @escaping (Document) -> Void,
+        onRenameDocument: ((Document, String) -> Void)? = nil,
         onCreateFolder: ((String) -> Void)?,
         onRenameFolder: ((UUID, String) -> Void)? = nil,
         onDeleteFolder: ((UUID) -> Void)? = nil,
@@ -93,10 +107,13 @@ public struct DocumentShelfView: View {
             folders: folders,
             topics: topics,
             documentCardCounts: documentCardCounts,
+            isSearchPresented: isSearchPresented,
+            searchQuery: searchQuery,
             onOpenDocument: onOpenDocument,
             onImportDocument: onImportDocument,
             onImportURLs: onImportURLs,
             onDeleteDocument: onDeleteDocument,
+            onRenameDocument: onRenameDocument,
             onCreateFolder: onCreateFolder.map { fn in { name, _ in fn(name) } },
             onRenameFolder: onRenameFolder,
             onDeleteFolder: onDeleteFolder,
@@ -112,6 +129,10 @@ public struct DocumentShelfView: View {
     }
 
     private var foldersInCurrentView: [DocumentFolder] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            return folders.filter { $0.name.localizedCaseInsensitiveContains(query) }
+        }
         if let currentFolderID {
             return folders.filter { $0.parentId == currentFolderID }
         } else {
@@ -124,6 +145,13 @@ public struct DocumentShelfView: View {
     }
 
     private var documentsInCurrentView: [Document] {
+        let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            return documents.filter {
+                $0.title.localizedCaseInsensitiveContains(query) ||
+                URL(fileURLWithPath: $0.filePath).lastPathComponent.localizedCaseInsensitiveContains(query)
+            }
+        }
         if let currentFolderID {
             return documents.filter { $0.folderId == currentFolderID }
         } else {
@@ -242,11 +270,53 @@ public struct DocumentShelfView: View {
         return result
     }
 
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+
+            TextField("Search documents…", text: $searchQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+
+            if !searchQuery.isEmpty {
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Button("Cancel") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    searchQuery = ""
+                    isSearchPresented = false
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 12.5, weight: .medium))
+            .foregroundStyle(Color.accentColor)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.horizontal, 24)
+        .padding(.bottom, 8)
+    }
+
     public var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 // Top Bar
                 headerBar
+
+                if isSearchPresented {
+                    searchBar
+                }
 
                 Divider()
                     .background(MarginNoteTheme.separatorColor)
@@ -254,7 +324,17 @@ public struct DocumentShelfView: View {
                 // Main Content Area
                 ScrollView {
                     if sortedFolders.isEmpty && sortedDocuments.isEmpty {
-                        if currentFolderID == nil {
+                        if !searchQuery.isEmpty {
+                            VStack(spacing: 16) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 48))
+                                    .foregroundStyle(.secondary)
+                                Text("No Documents Found")
+                                    .font(.headline)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, minHeight: 300)
+                        } else if currentFolderID == nil {
                             emptyShelfView
                         } else {
                             emptyFolderView
@@ -336,6 +416,10 @@ public struct DocumentShelfView: View {
                                         onMoveDocument?(doc, targetFolderID)
                                     },
                                     onDelete: { onDeleteDocument(doc) },
+                                    onRename: {
+                                        renameDocumentTitle = doc.title
+                                        documentToRename = doc
+                                    },
                                     onAddToStudy: {
                                         selectedDocumentIDs = [doc.id]
                                         selectedFolderIDs = []
@@ -387,6 +471,9 @@ public struct DocumentShelfView: View {
         }
         .sheet(item: $folderToRename) { folder in
             renameFolderSheet(folder: folder)
+        }
+        .sheet(item: $documentToRename) { doc in
+            renameDocumentSheet(document: doc)
         }
         .sheet(isPresented: $isShowingAddToStudySheet) {
             let selectedDocs = documentsForStudySelection
@@ -1018,6 +1105,39 @@ public struct DocumentShelfView: View {
         }
         .padding(24)
     }
+
+    private func renameDocumentSheet(document: Document) -> some View {
+        VStack(spacing: 18) {
+            Text("Rename Document")
+                .font(.headline)
+
+            TextField("Document Title", text: $renameDocumentTitle)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 320)
+
+            HStack(spacing: 12) {
+                Button("Cancel") {
+                    documentToRename = nil
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Rename") {
+                    let trimmed = renameDocumentTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !trimmed.isEmpty {
+                        onRenameDocument?(document, trimmed)
+                    }
+                    documentToRename = nil
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(renameDocumentTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .frame(width: 320)
+        }
+        .padding(24)
+    }
 }
 
 // MARK: - Add To Study Notebook Sheet
@@ -1216,6 +1336,7 @@ public struct DocumentActionCardView: View {
     public var folders: [DocumentFolder]
     public var onAddToStudy: () -> Void
     public var onMoveToFolder: (UUID?) -> Void
+    public var onRename: (() -> Void)?
     public var onDelete: () -> Void
 
     @State private var hoveredItem: String? = nil
@@ -1251,12 +1372,14 @@ public struct DocumentActionCardView: View {
         folders: [DocumentFolder],
         onAddToStudy: @escaping () -> Void,
         onMoveToFolder: @escaping (UUID?) -> Void,
+        onRename: (() -> Void)? = nil,
         onDelete: @escaping () -> Void
     ) {
         self.document = document
         self.folders = folders
         self.onAddToStudy = onAddToStudy
         self.onMoveToFolder = onMoveToFolder
+        self.onRename = onRename
         self.onDelete = onDelete
     }
 
@@ -1411,6 +1534,28 @@ public struct DocumentActionCardView: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { hoveredItem = $0 ? "move" : nil }
+
+                // Rename
+                Button {
+                    onRename?()
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "pencil")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.primary)
+                            .frame(width: 16)
+                        Text("Rename…")
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(hoveredItem == "rename" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveredItem = $0 ? "rename" : nil }
 
                 Divider()
                     .padding(.vertical, 2)
@@ -1922,6 +2067,7 @@ public struct DocumentCardView: View {
     public var onToggleSelect: (() -> Void)?
     public var onMoveToFolder: ((UUID?) -> Void)?
     public var onDelete: (() -> Void)?
+    public var onRename: (() -> Void)?
     public var onAddToStudy: (() -> Void)?
 
     @State private var isShowingActionPopover: Bool = false
@@ -1936,6 +2082,7 @@ public struct DocumentCardView: View {
         onToggleSelect: (() -> Void)? = nil,
         onMoveToFolder: ((UUID?) -> Void)? = nil,
         onDelete: (() -> Void)? = nil,
+        onRename: (() -> Void)? = nil,
         onAddToStudy: (() -> Void)? = nil
     ) {
         self.document = document
@@ -1947,6 +2094,7 @@ public struct DocumentCardView: View {
         self.onToggleSelect = onToggleSelect
         self.onMoveToFolder = onMoveToFolder
         self.onDelete = onDelete
+        self.onRename = onRename
         self.onAddToStudy = onAddToStudy
     }
 
@@ -2137,6 +2285,10 @@ public struct DocumentCardView: View {
                             isShowingActionPopover = false
                             onMoveToFolder?(targetFolderID)
                         },
+                        onRename: {
+                            isShowingActionPopover = false
+                            onRename?()
+                        },
                         onDelete: {
                             isShowingActionPopover = false
                             onDelete?()
@@ -2151,6 +2303,7 @@ public struct DocumentCardView: View {
             if !isSelectionMode {
                 Button("Open") { onOpen() }
                 Divider()
+                Button("Rename…") { onRename?() }
                 if let onAddToStudy {
                     Button("Add to Study…") { onAddToStudy() }
                 }

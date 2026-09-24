@@ -1505,8 +1505,6 @@ public final class InteractivePDFView: PDFView {
     ) {
         guard let targetPage else { hideToolbar(); return }
 
-        let currentScale = max(0.2, self.scaleFactor)
-
         let measuredSize = measuredToolbarSize(
             for: mode,
             hasTargetCard: hasTargetCard,
@@ -1515,8 +1513,9 @@ public final class InteractivePDFView: PDFView {
         let toolbarWidth = measuredSize.width
         let toolbarHeight = measuredSize.height
 
-        let stemHeight = endLineHeight + (4.0 / currentScale)
-        let knobSize = max(5.0, 10.0 / currentScale)
+        let endDims = Self.handleDimensions(for: endLineHeight, scale: self.scaleFactor)
+        let stemHeight = endDims.stemHeight
+        let knobSize = endDims.knobSize
 
         // Bottom of the upside-down knob head in page coordinates
         let knobBottomPage = CGPoint(x: endPoint.x, y: endPoint.y - stemHeight / 2 - knobSize)
@@ -1536,8 +1535,10 @@ public final class InteractivePDFView: PDFView {
 
         let sPage = startPage ?? targetPage
         let sPt = startPoint ?? endPoint
-        let sHeight = (startLineHeight ?? endLineHeight) + (4.0 / currentScale)
-        let knobTopPage = CGPoint(x: sPt.x, y: sPt.y + sHeight / 2 + knobSize)
+        let startDims = Self.handleDimensions(for: startLineHeight ?? endLineHeight, scale: self.scaleFactor)
+        let sHeight = startDims.stemHeight
+        let sKnobSize = startDims.knobSize
+        let knobTopPage = CGPoint(x: sPt.x, y: sPt.y + sHeight / 2 + sKnobSize)
         let knobTopView = convert(knobTopPage, from: sPage)
 
         let spaceAbove = bounds.height - (knobTopView.y + marginFromKnob + toolbarHeight)
@@ -2847,17 +2848,25 @@ public final class InteractivePDFView: PDFView {
         installHandleAnnotations(for: lineRects, accent: accent)
     }
 
+    public static func handleDimensions(for lineHeight: CGFloat, scale: CGFloat = 1.0) -> (stemWidth: CGFloat, stemHeight: CGFloat, knobSize: CGFloat) {
+        let baseHeight = max(10.0, min(32.0, lineHeight))
+        let sanitizedScale = (scale > 0.05 && !scale.isNaN && !scale.isInfinite) ? scale : 1.0
+        let effectiveScale = max(0.8, min(5.0, sanitizedScale))
+        let stemWidth: CGFloat = max(1.0, 2.0 / effectiveScale)
+        let stemHeight: CGFloat = baseHeight + (3.0 / effectiveScale)
+        let knobSize: CGFloat = max(4.0, min(12.0, 10.0 / effectiveScale))
+        return (stemWidth, stemHeight, knobSize)
+    }
+
     private func addHandle(to page: PDFPage, at point: CGPoint, lineHeight: CGFloat, accent: NSColor, isStart: Bool, isPending: Bool = false) {
         let cursorColor = MarginNoteTheme.nsCursorColor
-        let currentScale = max(0.2, self.scaleFactor)
-
-        // 1. Proportional cursor dimensions in PDF page points
-        let stemWidth = max(1.0, 2.0 / currentScale)
-        let stemHeight = lineHeight + (4.0 / currentScale)
-        let knobSize = max(5.0, 10.0 / currentScale)
+        let dims = Self.handleDimensions(for: lineHeight, scale: self.scaleFactor)
+        let stemWidth = dims.stemWidth
+        let stemHeight = dims.stemHeight
+        let knobSize = dims.knobSize
 
         let pageBounds = page.bounds(for: .cropBox)
-        let pad = 1.0 / currentScale
+        let pad: CGFloat = 1.0
         let halfKnob = knobSize / 2
 
         // Clamp horizontal center so BOTH stem and knob share the exact same X center
@@ -2866,7 +2875,7 @@ public final class InteractivePDFView: PDFView {
 
         // Position bar and knob in Y
         let barHalfHeight = stemHeight / 2
-        let overlap = 1.0 / currentScale
+        let overlap: CGFloat = 1.0
 
         let barY: CGFloat
         let knobY: CGFloat
@@ -2934,16 +2943,17 @@ public final class InteractivePDFView: PDFView {
         isStart: Bool
     ) -> (isHit: Bool, distance: CGFloat) {
         guard handlePage === currentPage else { return (false, .infinity) }
-        let currentScale = max(0.2, self.scaleFactor)
-        let stemHeight = lineHeight + (4.0 / currentScale)
-        let knobSize = max(5.0, 10.0 / currentScale)
+        let dims = Self.handleDimensions(for: lineHeight, scale: self.scaleFactor)
+        let stemHeight = dims.stemHeight
+        let knobSize = dims.knobSize
         let halfKnob = knobSize / 2
-        let overlap = 1.0 / currentScale
+        let overlap: CGFloat = 1.0
         let knobY = isStart
             ? (handlePoint.y + stemHeight / 2 + halfKnob - overlap)
             : (handlePoint.y - stemHeight / 2 - halfKnob + overlap)
         let knobCenter = CGPoint(x: handlePoint.x, y: knobY)
 
+        let currentScale = max(0.5, self.scaleFactor > 0.05 ? self.scaleFactor : 1.0)
         let distToKnob = hypot(point.x - knobCenter.x, point.y - knobCenter.y) * currentScale
         let dx = abs(point.x - handlePoint.x) * currentScale
         let dy = max(0, abs(point.y - handlePoint.y) - stemHeight / 2) * currentScale
