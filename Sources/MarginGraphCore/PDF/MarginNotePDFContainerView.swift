@@ -62,6 +62,7 @@ public struct MarginNotePDFContainerView: View {
     public var jumpTarget: PDFJumpTarget?
     public var studyDocuments: [Document]
     public var activeDocument: Document?
+    public var showsDocumentTabBar: Bool
     public var onSwitchDocument: ((Document) -> Void)?
     public var onManageDocuments: (() -> Void)?
     public var onExcerpt: (PDFExcerpt) -> Void
@@ -114,6 +115,7 @@ public struct MarginNotePDFContainerView: View {
         jumpTarget: PDFJumpTarget? = nil,
         studyDocuments: [Document] = [],
         activeDocument: Document? = nil,
+        showsDocumentTabBar: Bool = false,
         bookmarks: Set<Int> = [],
         initialPageIndex: Int = 0,
         initialPageOffsetY: CGFloat = 0,
@@ -143,6 +145,7 @@ public struct MarginNotePDFContainerView: View {
         self.jumpTarget = jumpTarget
         self.studyDocuments = studyDocuments
         self.activeDocument = activeDocument
+        self.showsDocumentTabBar = showsDocumentTabBar
         self.bookmarks = bookmarks
         self.initialPageIndex = initialPageIndex
         self.initialPageOffsetY = initialPageOffsetY
@@ -419,7 +422,7 @@ public struct MarginNotePDFContainerView: View {
             }
 
             // Row 2: Document Tab Bar (MarginNote 3 signature)
-            if activeDocument != nil || !studyDocuments.isEmpty {
+            if showsDocumentTabBar && (activeDocument != nil || !studyDocuments.isEmpty) {
                 HStack(spacing: 8) {
                     if let firstPage = manager.document.page(at: 0) {
                         let thumb = firstPage.thumbnail(of: CGSize(width: 14, height: 18), for: .cropBox)

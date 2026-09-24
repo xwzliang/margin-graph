@@ -731,6 +731,18 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    public func cardCountsByDocument() throws -> [String: Int] {
+        try withStatement("SELECT book_md5, count(*) FROM cards WHERE book_md5 IS NOT NULL AND book_md5 != '' GROUP BY book_md5") { statement in
+            var results: [String: Int] = [:]
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let md5 = text(statement, 0) {
+                    results[md5] = Int(sqlite3_column_int(statement, 1))
+                }
+            }
+            return results
+        }
+    }
+
     public func dueCardCountsByTopic(asOf date: Date = Date()) throws -> [UUID: Int] {
         let sql = """
         SELECT c.topic_id, count(*)

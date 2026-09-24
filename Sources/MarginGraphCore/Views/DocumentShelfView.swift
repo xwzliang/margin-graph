@@ -7,6 +7,8 @@ import PDFKit
 public struct DocumentShelfView: View {
     public var documents: [Document]
     public var folders: [DocumentFolder]
+    public var topics: [Topic]
+    public var documentCardCounts: [UUID: Int]
     public var onOpenDocument: (Document) -> Void
     public var onImportDocument: () -> Void
     public var onImportURLs: (([URL]) -> Void)?
@@ -15,12 +17,19 @@ public struct DocumentShelfView: View {
     public var onRenameFolder: ((UUID, String) -> Void)?
     public var onDeleteFolder: ((UUID) -> Void)?
     public var onMoveDocument: ((Document, UUID?) -> Void)?
+    public var onAddToStudy: (([Document], UUID?, String?) -> Void)?
 
     @State private var currentFolderID: UUID? = nil
     @State private var sortMode: Int = 0 // 0: Recent, 1: Name
     @State private var isDropTargeted: Bool = false
 
-    // Sheets & Dialogs
+    // Selection Mode
+    @State private var isSelectionMode: Bool = false
+    @State private var selectedDocumentIDs: Set<UUID> = []
+    @State private var isShowingAddToStudySheet: Bool = false
+    @State private var isShowingBatchDeleteAlert: Bool = false
+
+    // Folder Sheets & Dialogs
     @State private var isShowingCreateFolderSheet: Bool = false
     @State private var newFolderName: String = ""
     @State private var folderToRename: DocumentFolder? = nil
@@ -30,6 +39,8 @@ public struct DocumentShelfView: View {
     public init(
         documents: [Document],
         folders: [DocumentFolder] = [],
+        topics: [Topic] = [],
+        documentCardCounts: [UUID: Int] = [:],
         onOpenDocument: @escaping (Document) -> Void,
         onImportDocument: @escaping () -> Void,
         onImportURLs: (([URL]) -> Void)? = nil,
@@ -37,10 +48,13 @@ public struct DocumentShelfView: View {
         onCreateFolder: ((String) -> Void)? = nil,
         onRenameFolder: ((UUID, String) -> Void)? = nil,
         onDeleteFolder: ((UUID) -> Void)? = nil,
-        onMoveDocument: ((Document, UUID?) -> Void)? = nil
+        onMoveDocument: ((Document, UUID?) -> Void)? = nil,
+        onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil
     ) {
         self.documents = documents
         self.folders = folders
+        self.topics = topics
+        self.documentCardCounts = documentCardCounts
         self.onOpenDocument = onOpenDocument
         self.onImportDocument = onImportDocument
         self.onImportURLs = onImportURLs
@@ -49,6 +63,7 @@ public struct DocumentShelfView: View {
         self.onRenameFolder = onRenameFolder
         self.onDeleteFolder = onDeleteFolder
         self.onMoveDocument = onMoveDocument
+        self.onAddToStudy = onAddToStudy
     }
 
     private var currentFolder: DocumentFolder? {
@@ -89,56 +104,76 @@ public struct DocumentShelfView: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            // Top Bar
-            headerBar
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                // Top Bar
+                headerBar
 
-            Divider()
-                .background(MarginNoteTheme.separatorColor)
+                Divider()
+                    .background(MarginNoteTheme.separatorColor)
 
-            // Main Content Area
-            ScrollView {
-                if currentFolderID == nil && sortedFolders.isEmpty && sortedDocuments.isEmpty {
-                    emptyShelfView
-                } else if currentFolderID != nil && sortedDocuments.isEmpty {
-                    emptyFolderView
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 148, maximum: 170), spacing: 24)], spacing: 28) {
-                        // When at root, display folders first
-                        if currentFolderID == nil {
-                            ForEach(sortedFolders) { folder in
-                                FolderCardView(
-                                    folder: folder,
-                                    itemCount: documentCount(for: folder),
-                                    onOpen: {
-                                        currentFolderID = folder.id
+                // Main Content Area
+                ScrollView {
+                    if currentFolderID == nil && sortedFolders.isEmpty && sortedDocuments.isEmpty {
+                        emptyShelfView
+                    } else if currentFolderID != nil && sortedDocuments.isEmpty {
+                        emptyFolderView
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 148, maximum: 170), spacing: 24)], spacing: 28) {
+                            // When at root and not in selection mode, display folders first
+                            if currentFolderID == nil && !isSelectionMode {
+                                ForEach(sortedFolders) { folder in
+                                    FolderCardView(
+                                        folder: folder,
+                                        itemCount: documentCount(for: folder),
+                                        onOpen: {
+                                            currentFolderID = folder.id
+                                        },
+                                        onRename: {
+                                            renameFolderName = folder.name
+                                            folderToRename = folder
+                                        },
+                                        onDelete: {
+                                            folderToDelete = folder
+                                        }
+                                    )
+                                }
+                            }
+
+                            // Display documents in the current scope
+                            ForEach(sortedDocuments, id: \.id) { doc in
+                                let isSelected = selectedDocumentIDs.contains(doc.id)
+                                DocumentCardView(
+                                    document: doc,
+                                    folders: folders,
+                                    cardCount: documentCardCounts[doc.id] ?? 0,
+                                    isSelectionMode: isSelectionMode,
+                                    isSelected: isSelected,
+                                    onOpen: { onOpenDocument(doc) },
+                                    onToggleSelect: {
+                                        if isSelected {
+                                            selectedDocumentIDs.remove(doc.id)
+                                        } else {
+                                            selectedDocumentIDs.insert(doc.id)
+                                        }
                                     },
-                                    onRename: {
-                                        renameFolderName = folder.name
-                                        folderToRename = folder
+                                    onMoveToFolder: { targetFolderID in
+                                        onMoveDocument?(doc, targetFolderID)
                                     },
-                                    onDelete: {
-                                        folderToDelete = folder
-                                    }
+                                    onDelete: { onDeleteDocument(doc) }
                                 )
                             }
                         }
-
-                        // Display documents in the current scope
-                        ForEach(sortedDocuments, id: \.id) { doc in
-                            DocumentCardView(
-                                document: doc,
-                                folders: folders,
-                                onOpen: { onOpenDocument(doc) },
-                                onMoveToFolder: { targetFolderID in
-                                    onMoveDocument?(doc, targetFolderID)
-                                },
-                                onDelete: { onDeleteDocument(doc) }
-                            )
-                        }
+                        .padding(28)
+                        .padding(.bottom, (isSelectionMode && !selectedDocumentIDs.isEmpty) ? 60 : 0)
                     }
-                    .padding(28)
                 }
+            }
+
+            // Floating Selection Toolbar
+            if isSelectionMode && !selectedDocumentIDs.isEmpty {
+                selectionFloatingToolbar
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
         .background(MarginNoteTheme.shelfBackground)
@@ -173,6 +208,22 @@ public struct DocumentShelfView: View {
         .sheet(item: $folderToRename) { folder in
             renameFolderSheet(folder: folder)
         }
+        .sheet(isPresented: $isShowingAddToStudySheet) {
+            let selectedDocs = documents.filter { selectedDocumentIDs.contains($0.id) }
+            AddToStudyNotebookSheet(
+                topics: topics,
+                selectedDocuments: selectedDocs,
+                onConfirm: { targetTopicID, newTopicTitle in
+                    onAddToStudy?(selectedDocs, targetTopicID, newTopicTitle)
+                    selectedDocumentIDs.removeAll()
+                    isSelectionMode = false
+                    isShowingAddToStudySheet = false
+                },
+                onCancel: {
+                    isShowingAddToStudySheet = false
+                }
+            )
+        }
         .confirmationDialog(
             "Delete folder \"\(folderToDelete?.name ?? "")\"? Documents inside will be moved to Root.",
             isPresented: Binding(
@@ -193,6 +244,16 @@ public struct DocumentShelfView: View {
             Button("Cancel", role: .cancel) {
                 folderToDelete = nil
             }
+        }
+        .confirmationDialog(
+            "Delete \(selectedDocumentIDs.count) Document\(selectedDocumentIDs.count == 1 ? "" : "s")? This action cannot be undone.",
+            isPresented: $isShowingBatchDeleteAlert,
+            titleVisibility: .visible
+        ) {
+            Button("Delete \(selectedDocumentIDs.count) Document\(selectedDocumentIDs.count == 1 ? "" : "s")", role: .destructive) {
+                deleteSelectedDocuments()
+            }
+            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -337,11 +398,145 @@ public struct DocumentShelfView: View {
                 Text("Name").tag(1)
             }
             .pickerStyle(.segmented)
-            .frame(width: 150)
+            .frame(width: 130)
+
+            // Select Mode Toggle Button
+            Button(isSelectionMode ? "Done" : "Select") {
+                withAnimation(.easeInOut(duration: 0.15)) {
+                    isSelectionMode.toggle()
+                    if !isSelectionMode {
+                        selectedDocumentIDs.removeAll()
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 13, weight: isSelectionMode ? .semibold : .regular))
+            .foregroundStyle(isSelectionMode ? Color.accentColor : Color.secondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(isSelectionMode ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+
+            // Select All Button (in selection mode)
+            if isSelectionMode {
+                Button(selectedDocumentIDs.count == sortedDocuments.count && !sortedDocuments.isEmpty ? "Deselect All" : "Select All") {
+                    if selectedDocumentIDs.count == sortedDocuments.count {
+                        selectedDocumentIDs.removeAll()
+                    } else {
+                        selectedDocumentIDs = Set(sortedDocuments.map(\.id))
+                    }
+                }
+                .buttonStyle(.plain)
+                .font(.system(size: 12))
+                .foregroundStyle(Color.secondary)
+            }
         }
         .padding(.horizontal, 24)
         .padding(.top, 14)
         .padding(.bottom, 12)
+    }
+
+    // MARK: - Floating Selection Toolbar
+
+    private var selectionFloatingToolbar: some View {
+        HStack(spacing: 16) {
+            Text("\(selectedDocumentIDs.count) Selected")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(.primary)
+
+            Divider()
+                .frame(height: 18)
+
+            // 1. Add to Study Button
+            Button {
+                isShowingAddToStudySheet = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "book.fill")
+                        .font(.system(size: 12))
+                    Text("Add to Study…")
+                        .font(.system(size: 12.5, weight: .medium))
+                }
+                .foregroundStyle(Color.accentColor)
+            }
+            .buttonStyle(.plain)
+
+            Divider()
+                .frame(height: 18)
+
+            // 2. Move to Folder Menu
+            Menu {
+                Button("All Documents (Root)") {
+                    moveSelectedDocuments(to: nil)
+                }
+                if !folders.isEmpty {
+                    Divider()
+                    ForEach(folders) { f in
+                        Button(f.name) {
+                            moveSelectedDocuments(to: f.id)
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "folder")
+                        .font(.system(size: 12))
+                    Text("Move to…")
+                        .font(.system(size: 12.5, weight: .medium))
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8))
+                }
+                .foregroundStyle(.primary)
+            }
+            .menuStyle(.borderlessButton)
+
+            Divider()
+                .frame(height: 18)
+
+            // 3. Delete Selected Documents
+            Button(role: .destructive) {
+                isShowingBatchDeleteAlert = true
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 12))
+                    Text("Delete")
+                        .font(.system(size: 12.5, weight: .medium))
+                }
+                .foregroundStyle(Color.red)
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color(white: 0.98).opacity(0.96))
+                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 3)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.black.opacity(0.1), lineWidth: 0.75)
+                )
+        )
+        .padding(.bottom, 20)
+    }
+
+    private func moveSelectedDocuments(to targetFolderID: UUID?) {
+        let selectedDocs = documents.filter { selectedDocumentIDs.contains($0.id) }
+        for doc in selectedDocs {
+            onMoveDocument?(doc, targetFolderID)
+        }
+        selectedDocumentIDs.removeAll()
+        isSelectionMode = false
+    }
+
+    private func deleteSelectedDocuments() {
+        let selectedDocs = documents.filter { selectedDocumentIDs.contains($0.id) }
+        for doc in selectedDocs {
+            onDeleteDocument(doc)
+        }
+        selectedDocumentIDs.removeAll()
+        isSelectionMode = false
     }
 
     // MARK: - Empty Views
@@ -461,6 +656,182 @@ public struct DocumentShelfView: View {
     }
 }
 
+// MARK: - Add To Study Notebook Sheet
+
+public struct AddToStudyNotebookSheet: View {
+    public var topics: [Topic]
+    public var selectedDocuments: [Document]
+    public var onConfirm: (UUID?, String?) -> Void
+    public var onCancel: () -> Void
+
+    @State private var mode: Int = 0 // 0: Existing, 1: New
+    @State private var selectedTopicID: UUID? = nil
+    @State private var newTopicTitle: String = ""
+    @State private var searchText: String = ""
+
+    public init(
+        topics: [Topic],
+        selectedDocuments: [Document],
+        onConfirm: @escaping (UUID?, String?) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.topics = topics
+        self.selectedDocuments = selectedDocuments
+        self.onConfirm = onConfirm
+        self.onCancel = onCancel
+        let defaultTitle = selectedDocuments.count == 1 ? selectedDocuments[0].title : "Study Notebook"
+        _newTopicTitle = State(initialValue: defaultTitle)
+        _selectedTopicID = State(initialValue: topics.first?.id)
+        _mode = State(initialValue: topics.isEmpty ? 1 : 0)
+    }
+
+    private var filteredTopics: [Topic] {
+        if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return topics
+        }
+        return topics.filter { $0.title.localizedCaseInsensitiveContains(searchText) }
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Add to Study Notebook")
+                        .font(.headline)
+                    Text("\(selectedDocuments.count) document\(selectedDocuments.count == 1 ? "" : "s") selected")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            // Mode Picker
+            Picker("", selection: $mode) {
+                Text("Existing Notebook").tag(0)
+                Text("New Notebook").tag(1)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+            .disabled(topics.isEmpty)
+
+            if mode == 0 && !topics.isEmpty {
+                // Existing notebook selection
+                VStack(spacing: 8) {
+                    if topics.count > 5 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                            TextField("Search notebooks…", text: $searchText)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12))
+                        }
+                        .padding(6)
+                        .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                        .padding(.horizontal, 20)
+                    }
+
+                    ScrollView {
+                        VStack(spacing: 4) {
+                            ForEach(filteredTopics, id: \.id) { topic in
+                                let isSelected = (selectedTopicID == topic.id)
+                                Button {
+                                    selectedTopicID = topic.id
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: "book.closed.fill")
+                                            .font(.system(size: 14))
+                                            .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(topic.title)
+                                                .font(.system(size: 12.5, weight: isSelected ? .semibold : .regular))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+
+                                            Text("\(topic.bookMD5List.count) document\(topic.bookMD5List.count == 1 ? "" : "s")")
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        if isSelected {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.system(size: 15))
+                                                .foregroundStyle(Color.accentColor)
+                                        }
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 6)
+                                            .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.clear)
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                    }
+                    .frame(height: 170)
+                }
+            } else {
+                // New notebook creation
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Notebook Name")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    TextField("Enter notebook name", text: $newTopicTitle)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("Selected documents will be opened in tabs within this new study notebook.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .frame(height: 170)
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                Button("Cancel", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Open in Study") {
+                    if mode == 0 {
+                        onConfirm(selectedTopicID, nil)
+                    } else {
+                        onConfirm(nil, newTopicTitle)
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(mode == 1 && newTopicTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(mode == 0 && selectedTopicID == nil)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+        }
+        .frame(width: 380, height: 340)
+    }
+}
+
 // MARK: - URL Collector
 
 private final class URLCollector: @unchecked Sendable {
@@ -577,20 +948,32 @@ public struct FolderCardView: View {
 public struct DocumentCardView: View {
     public var document: Document
     public var folders: [DocumentFolder]
+    public var cardCount: Int
+    public var isSelectionMode: Bool
+    public var isSelected: Bool
     public var onOpen: () -> Void
+    public var onToggleSelect: (() -> Void)?
     public var onMoveToFolder: ((UUID?) -> Void)?
     public var onDelete: (() -> Void)?
 
     public init(
         document: Document,
         folders: [DocumentFolder] = [],
+        cardCount: Int = 0,
+        isSelectionMode: Bool = false,
+        isSelected: Bool = false,
         onOpen: @escaping () -> Void,
+        onToggleSelect: (() -> Void)? = nil,
         onMoveToFolder: ((UUID?) -> Void)? = nil,
         onDelete: (() -> Void)? = nil
     ) {
         self.document = document
         self.folders = folders
+        self.cardCount = cardCount
+        self.isSelectionMode = isSelectionMode
+        self.isSelected = isSelected
         self.onOpen = onOpen
+        self.onToggleSelect = onToggleSelect
         self.onMoveToFolder = onMoveToFolder
         self.onDelete = onDelete
     }
@@ -600,10 +983,6 @@ public struct DocumentCardView: View {
             return document.documentType
         }
         return MediaDocumentHelper.documentType(for: URL(fileURLWithPath: document.filePath))
-    }
-
-    private var isMedia: Bool {
-        docType == "video" || docType == "audio"
     }
 
     private var badgeColor: Color {
@@ -620,12 +999,19 @@ public struct DocumentCardView: View {
     }
 
     public var body: some View {
-        Button(action: onOpen) {
+        Button {
+            if isSelectionMode {
+                onToggleSelect?()
+            } else {
+                onOpen()
+            }
+        } label: {
             VStack(alignment: .leading, spacing: 6) {
                 // Book Cover Container
                 ZStack(alignment: .topLeading) {
+                    // Same natural paper fill color for both PDF and Video
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(isMedia ? Color(red: 0.13, green: 0.14, blue: 0.17) : Color(red: 0.93, green: 0.91, blue: 0.86))
+                        .fill(Color(red: 0.93, green: 0.91, blue: 0.86))
                         .frame(height: 180)
                         .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 2)
 
@@ -641,11 +1027,11 @@ public struct DocumentCardView: View {
                             if docType == "video" {
                                 Image(systemName: "film.fill")
                                     .font(.system(size: 38))
-                                    .foregroundStyle(.white.opacity(0.7))
+                                    .foregroundStyle(.secondary.opacity(0.6))
                             } else if docType == "audio" {
                                 Image(systemName: "waveform.circle.fill")
                                     .font(.system(size: 38))
-                                    .foregroundStyle(.white.opacity(0.7))
+                                    .foregroundStyle(.secondary.opacity(0.6))
                             } else {
                                 Image(systemName: "book.closed.fill")
                                     .font(.system(size: 38))
@@ -654,7 +1040,7 @@ public struct DocumentCardView: View {
 
                             Text(document.title)
                                 .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(isMedia ? .white.opacity(0.8) : .secondary)
+                                .foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                                 .lineLimit(3)
                                 .padding(.horizontal, 10)
@@ -688,11 +1074,11 @@ public struct DocumentCardView: View {
                     .background(badgeColor, in: RoundedRectangle(cornerRadius: 2))
                     .padding(5)
 
-                    // Top Right Page Count / Duration Badge
-                    if document.totalPages > 0 {
+                    // Top Right Note Card Count Badge: ONLY show if cardCount > 0
+                    if cardCount > 0 {
                         HStack {
                             Spacer()
-                            Text(isMedia ? MediaDocumentHelper.formatDuration(Double(document.totalPages)) : "\(document.totalPages)")
+                            Text("\(cardCount)")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.white)
                                 .padding(.horizontal, 5)
@@ -701,7 +1087,38 @@ public struct DocumentCardView: View {
                                 .padding(5)
                         }
                     }
+
+                    // Selection Mode Checkbox (bottom-right circle indicator)
+                    if isSelectionMode {
+                        HStack {
+                            Spacer()
+                            VStack {
+                                Spacer()
+                                ZStack {
+                                    Circle()
+                                        .fill(isSelected ? Color.accentColor : Color.white.opacity(0.85))
+                                        .frame(width: 22, height: 22)
+                                        .shadow(color: .black.opacity(0.25), radius: 2)
+
+                                    if isSelected {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(.white)
+                                    } else {
+                                        Circle()
+                                            .stroke(Color.gray.opacity(0.6), lineWidth: 1.5)
+                                            .frame(width: 20, height: 20)
+                                    }
+                                }
+                                .padding(6)
+                            }
+                        }
+                    }
                 }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 2.5)
+                )
 
                 // Title Below Card
                 Text(document.title)
@@ -728,37 +1145,39 @@ public struct DocumentCardView: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
-            Button("Open") { onOpen() }
-            Divider()
-            Button("Show in Finder") {
-                NSWorkspace.shared.selectFile(document.filePath, inFileViewerRootedAtPath: "")
-            }
-            Divider()
-            Menu("Move to…") {
-                if document.folderId != nil {
-                    Button("All Documents (Root)") {
-                        onMoveToFolder?(nil)
-                    }
-                    Divider()
+            if !isSelectionMode {
+                Button("Open") { onOpen() }
+                Divider()
+                Button("Show in Finder") {
+                    NSWorkspace.shared.selectFile(document.filePath, inFileViewerRootedAtPath: "")
                 }
-                ForEach(folders) { f in
-                    Button {
-                        onMoveToFolder?(f.id)
-                    } label: {
-                        HStack {
-                            if document.folderId == f.id {
-                                Image(systemName: "checkmark")
-                            }
-                            Text(f.name)
+                Divider()
+                Menu("Move to…") {
+                    if document.folderId != nil {
+                        Button("All Documents (Root)") {
+                            onMoveToFolder?(nil)
                         }
+                        Divider()
                     }
-                    .disabled(document.folderId == f.id)
+                    ForEach(folders) { f in
+                        Button {
+                            onMoveToFolder?(f.id)
+                        } label: {
+                            HStack {
+                                if document.folderId == f.id {
+                                    Image(systemName: "checkmark")
+                                }
+                                Text(f.name)
+                            }
+                        }
+                        .disabled(document.folderId == f.id)
+                    }
                 }
-            }
-            Divider()
-            if let onDelete {
-                Button("Delete", role: .destructive) {
-                    onDelete()
+                Divider()
+                if let onDelete {
+                    Button("Delete", role: .destructive) {
+                        onDelete()
+                    }
                 }
             }
         }

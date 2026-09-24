@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     @Published var topics: [Topic] = []
     @Published var documents: [Document] = []
     @Published var documentFolders: [DocumentFolder] = []
+    @Published var documentCardCounts: [UUID: Int] = [:]
     @Published var selectedTopicID: UUID?
     @Published var studyDocuments: [Document] = []
     @Published var activeDocument: Document?
@@ -226,6 +227,23 @@ final class AppModel: ObservableObject {
         let dueCounts = (try? database.dueCardCountsByTopic()) ?? [:]
         let deckReviews = (try? database.allDeckReviews()) ?? [:]
 
+        let rawDocCounts = (try? database.cardCountsByDocument()) ?? [:]
+        var docCounts: [UUID: Int] = [:]
+        for doc in documents {
+            if let direct = rawDocCounts[doc.md5] {
+                docCounts[doc.id] = direct
+            } else {
+                var found = 0
+                for (k, v) in rawDocCounts {
+                    if k.hasPrefix(doc.md5) || doc.md5.hasPrefix(k) {
+                        found += v
+                    }
+                }
+                docCounts[doc.id] = found
+            }
+        }
+        documentCardCounts = docCounts
+
         var decks: [ReviewDeckItem] = []
         decks.reserveCapacity(customDecks.count + topics.count)
 
@@ -428,6 +446,36 @@ final class AppModel: ObservableObject {
     func moveDocument(_ document: Document, to folderID: UUID?) {
         try? database.updateDocumentFolder(documentID: document.id, folderID: folderID)
         reloadLibrary()
+    }
+
+    func addDocumentsToStudy(documents selectedDocs: [Document], targetTopicID: UUID?, newTopicTitle: String?) {
+        guard !selectedDocs.isEmpty else { return }
+
+        let targetTopic: Topic
+        if let targetTopicID, let existing = topics.first(where: { $0.id == targetTopicID }) {
+            var updated = existing
+            for doc in selectedDocs {
+                if !updated.bookMD5List.contains(doc.md5) {
+                    updated.bookMD5List.append(doc.md5)
+                }
+            }
+            try? database.updateTopic(updated)
+            targetTopic = updated
+        } else {
+            let title = (newTopicTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                ? newTopicTitle!.trimmingCharacters(in: .whitespacesAndNewlines)
+                : (selectedDocs.count == 1 ? selectedDocs[0].title : "Study Notebook \(topics.count + 1)")
+            let newTopic = Topic(title: title, bookMD5List: selectedDocs.map(\.md5))
+            try? database.insertTopic(newTopic)
+            targetTopic = newTopic
+        }
+
+        reloadLibrary()
+        enterStudyWorkspace(topic: targetTopic)
+
+        if let firstDoc = selectedDocs.first {
+            switchToDocument(firstDoc)
+        }
     }
 
     func reloadStudySet() {
@@ -1131,9 +1179,19 @@ final class AppModel: ObservableObject {
 
     func navigateToCard(_ card: NoteCard) {
         if let md5 = card.bookMD5,
-           let document = studyDocuments.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }) ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }),
-           activeDocument?.md5 != document.md5 {
-            switchToDocument(document)
+           let document = studyDocuments.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }) ?? documents.first(where: { $0.md5 == md5 || md5.hasPrefix($0.md5) || $0.md5.hasPrefix(md5) }) {
+            if !studyDocuments.contains(where: { $0.id == document.id }), let topicID = selectedTopicID {
+                try? database.addDocument(to: topicID, md5: document.md5)
+                reloadStudySet()
+            }
+            if activeDocument?.md5 != document.md5 {
+                switchToDocument(document)
+            }
+        }
+
+        if card.videoStartTime != nil {
+            selectedCardID = card.id
+            return
         }
 
         let allRects = !card.effectiveSegments.flatMap(\.rects).isEmpty
@@ -1947,6 +2005,26 @@ struct StudyWorkspaceView: View {
                     if isReaderOnly {
                         readerOnlyHeader
                     }
+                    if !model.studyDocuments.isEmpty {
+                        DocumentTabBarView(
+                            documents: model.studyDocuments,
+                            activeDocument: model.activeDocument,
+                            onSelectDocument: { doc in
+                                model.switchToDocument(doc)
+                            },
+                            onCloseDocument: { doc in
+                                if model.studyDocuments.count > 1 {
+                                    model.detachDocument(doc)
+                                }
+                            },
+                            onAddDocument: {
+                                model.openDocumentPicker(attachToTopic: true)
+                            },
+                            onManageDocuments: {
+                                model.isManagingDocuments = true
+                            }
+                        )
+                    }
                     pdfPane
                 }
                 .frame(
@@ -2408,6 +2486,7 @@ struct StudyWorkspaceView: View {
                 jumpTarget: model.jumpTarget,
                 studyDocuments: model.studyDocuments,
                 activeDocument: model.activeDocument,
+                showsDocumentTabBar: false,
                 bookmarks: model.documentBookmarks,
                 initialPageIndex: model.documentCurrentPage[manager.md5] ?? model.activeDocument?.lastPageIndex ?? 0,
                 initialPageOffsetY: model.documentPageOffsets[manager.md5] ?? model.activeDocument?.lastPageOffsetY ?? 0.0,
@@ -2483,6 +2562,7 @@ struct StudyWorkspaceView: View {
                 selectedCardID: model.selectedCardID,
                 studyDocuments: model.studyDocuments,
                 mediaStorage: model.mediaStorage,
+                showsHeader: false,
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
                 },
@@ -2551,6 +2631,8 @@ struct MarginGraphApp: App {
                             DocumentShelfView(
                                 documents: model.documents,
                                 folders: model.documentFolders,
+                                topics: model.topics,
+                                documentCardCounts: model.documentCardCounts,
                                 onOpenDocument: { doc in
                                     model.openDocumentInReader(document: doc)
                                 },
@@ -2576,6 +2658,9 @@ struct MarginGraphApp: App {
                                 },
                                 onMoveDocument: { doc, folderID in
                                     model.moveDocument(doc, to: folderID)
+                                },
+                                onAddToStudy: { docs, topicID, newTitle in
+                                    model.addDocumentsToStudy(documents: docs, targetTopicID: topicID, newTopicTitle: newTitle)
                                 }
                             )
                         case .study:

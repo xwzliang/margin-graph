@@ -24,6 +24,7 @@ public struct MediaPlaybackContainerView: View {
     public var onManageDocuments: (() -> Void)?
     public var onCreateVideoCard: ((_ startTime: Double, _ endTime: Double, _ title: String) -> Void)?
     public var onSelectCard: ((UUID) -> Void)?
+    public var showsHeader: Bool
 
     @StateObject private var coordinator = MediaPlaybackCoordinator()
     @State private var markInTime: Double? = nil
@@ -50,6 +51,7 @@ public struct MediaPlaybackContainerView: View {
         selectedCardID: UUID? = nil,
         studyDocuments: [Document] = [],
         mediaStorage: MediaStorage? = nil,
+        showsHeader: Bool = true,
         onSwitchDocument: ((Document) -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
         onCreateVideoCard: ((_ startTime: Double, _ endTime: Double, _ title: String) -> Void)? = nil,
@@ -60,6 +62,7 @@ public struct MediaPlaybackContainerView: View {
         self.selectedCardID = selectedCardID
         self.studyDocuments = studyDocuments
         self.mediaStorage = mediaStorage
+        self.showsHeader = showsHeader
         self.onSwitchDocument = onSwitchDocument
         self.onManageDocuments = onManageDocuments
         self.onCreateVideoCard = onCreateVideoCard
@@ -72,8 +75,10 @@ public struct MediaPlaybackContainerView: View {
 
     public var body: some View {
         VStack(spacing: 0) {
-            // 1. Unified 44pt Header Bar
-            headerBar
+            // 1. Header Bar (optional when embedded under tab bar)
+            if showsHeader {
+                headerBar
+            }
 
             // 2. Playback Canvas
             ZStack {
@@ -107,6 +112,11 @@ public struct MediaPlaybackContainerView: View {
         .background(Color(white: 0.96))
         .onAppear {
             setupPlayer()
+            if let selectedCardID {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    handleCardSelected(selectedCardID)
+                }
+            }
         }
         .onDisappear {
             teardownPlayer()
@@ -116,6 +126,11 @@ public struct MediaPlaybackContainerView: View {
             markInTime = nil
             teardownPlayer()
             setupPlayer()
+            if let selectedCardID {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    handleCardSelected(selectedCardID)
+                }
+            }
         }
         .onChange(of: coordinator.duration) { _, newDuration in
             if filmstripThumbnails.isEmpty && newDuration > 0 {

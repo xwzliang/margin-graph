@@ -346,4 +346,77 @@ final class MediaDocumentTests: XCTestCase {
         XCTAssertNil(coordinator.stopAtTime)
         XCTAssertEqual(coordinator.currentTime, 0.0)
     }
+
+    func testCardCountsByDocument() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Multi-Document Study")
+        try database.insertTopic(topic)
+
+        let doc1 = Document(id: UUID(), title: "Book 1", filePath: "/path/doc1.pdf", md5: "md5_doc1", totalPages: 10, documentType: "pdf")
+        let doc2 = Document(id: UUID(), title: "Video 2", filePath: "/path/doc2.mp4", md5: "md5_doc2", totalPages: 120, documentType: "video")
+        let doc3 = Document(id: UUID(), title: "Doc Without Notes", filePath: "/path/doc3.pdf", md5: "md5_doc3", totalPages: 5, documentType: "pdf")
+        try database.insertDocument(doc1)
+        try database.insertDocument(doc2)
+        try database.insertDocument(doc3)
+
+        // Insert 2 cards for doc1
+        let card1 = NoteCard(topicId: topic.id, bookMD5: "md5_doc1", title: "Note 1", highlightText: "Text 1")
+        let card2 = NoteCard(topicId: topic.id, bookMD5: "md5_doc1", title: "Note 2", highlightText: "Text 2")
+        // Insert 1 card for doc2
+        let card3 = NoteCard(topicId: topic.id, bookMD5: "md5_doc2", title: "Video Note", highlightText: "")
+        try database.insertCard(card1)
+        try database.insertCard(card2)
+        try database.insertCard(card3)
+
+        let counts = try database.cardCountsByDocument()
+        XCTAssertEqual(counts["md5_doc1"], 2)
+        XCTAssertEqual(counts["md5_doc2"], 1)
+        // Document with 0 cards should not be in the dictionary (or have count nil)
+        XCTAssertNil(counts["md5_doc3"])
+    }
+
+    @MainActor
+    func testMultiDocumentTopicAttachmentAndTabs() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Cross-Disciplinary Study")
+        try database.insertTopic(topic)
+
+        let doc1 = Document(id: UUID(), title: "Research Paper", filePath: "/docs/paper.pdf", md5: "hash_paper", totalPages: 20, documentType: "pdf")
+        let doc2 = Document(id: UUID(), title: "Recorded Talk", filePath: "/docs/talk.mp4", md5: "hash_talk", totalPages: 3600, documentType: "video")
+        try database.insertDocument(doc1)
+        try database.insertDocument(doc2)
+
+        try database.addDocument(to: topic.id, md5: doc1.md5)
+        try database.addDocument(to: topic.id, md5: doc2.md5)
+
+        let attachedDocs = try database.documentsForTopic(id: topic.id)
+        XCTAssertEqual(attachedDocs.count, 2)
+        XCTAssertTrue(attachedDocs.contains { $0.id == doc1.id })
+        XCTAssertTrue(attachedDocs.contains { $0.id == doc2.id })
+
+        // Test DocumentTabBarView instantiation and interaction
+        var selectedDoc: Document? = nil
+        var closedDoc: Document? = nil
+        let tabBar = DocumentTabBarView(
+            documents: attachedDocs,
+            activeDocument: doc1,
+            onSelectDocument: { doc in
+                selectedDoc = doc
+            },
+            onCloseDocument: { doc in
+                closedDoc = doc
+            }
+        )
+
+        let hostingView = NSHostingView(rootView: tabBar)
+        hostingView.frame = NSRect(x: 0, y: 0, width: 600, height: 34)
+        hostingView.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(hostingView)
+
+        tabBar.onSelectDocument(doc2)
+        XCTAssertEqual(selectedDoc?.id, doc2.id)
+
+        tabBar.onCloseDocument?(doc1)
+        XCTAssertEqual(closedDoc?.id, doc1.id)
+    }
 }
