@@ -2952,11 +2952,11 @@ public final class InteractivePDFView: PDFView {
     }
 
     public static func handleDimensions(for lineHeight: CGFloat, scale: CGFloat = 1.0) -> (stemWidth: CGFloat, stemHeight: CGFloat, knobRadius: CGFloat, knobSize: CGFloat) {
-        let ratio: CGFloat = 1.15
+        let ratio: CGFloat = 1.4
         let rawHeight = lineHeight > 0 ? min(lineHeight, 28.0) : 14.0
-        let stemHeight = max(10.0, rawHeight * ratio)
+        let stemHeight = max(12.0, rawHeight * ratio)
         let stemWidth: CGFloat = 2.0
-        let knobRadius: CGFloat = max(3.5, min(5.5, stemHeight * 0.28))
+        let knobRadius: CGFloat = 3.2
         return (stemWidth, stemHeight, knobRadius, knobRadius)
     }
 
@@ -2992,15 +2992,33 @@ public final class InteractivePDFView: PDFView {
             )
         }
 
+        let prefix = isPending ? (isStart ? "MarginGraph-pending-handle-start" : "MarginGraph-pending-handle-end")
+                               : (isStart ? "MarginGraph-handle-start" : "MarginGraph-handle-end")
+
+        for old in page.annotations where old.contents == prefix {
+            page.removeAnnotation(old)
+        }
+
         let handle = CursorHandleAnnotation(bounds: handleBounds, forType: .square, withProperties: nil)
         handle.isStart = isStart
         handle.stemWidth = stemWidth
         handle.stemHeight = stemHeight
         handle.knobRadius = knobRadius
         handle.fillColor = cursorColor
-        handle.contents = isPending ? (isStart ? "MarginGraph-pending-handle-start" : "MarginGraph-pending-handle-end")
-                                   : (isStart ? "MarginGraph-handle-start" : "MarginGraph-handle-end")
+        handle.contents = prefix
+        // Adding at the end of page.annotations guarantees it is drawn on top of all page text and highlights
         page.addAnnotation(handle)
+    }
+
+    public func bringHandlesToFront(on page: PDFPage) {
+        let handles = page.annotations.filter {
+            $0.contents?.hasPrefix("MarginGraph-handle") == true ||
+            $0.contents?.hasPrefix("MarginGraph-pending-handle") == true
+        }
+        for handle in handles {
+            page.removeAnnotation(handle)
+            page.addAnnotation(handle)
+        }
     }
 
     private func handleHitTest(
@@ -3014,7 +3032,6 @@ public final class InteractivePDFView: PDFView {
         guard handlePage === currentPage else { return (false, .infinity) }
         let dims = Self.handleDimensions(for: lineHeight, scale: self.scaleFactor)
         let stemHeight = dims.stemHeight
-        let knobRadius = dims.knobRadius
         let knobY = isStart
             ? (handlePoint.y + stemHeight / 2)
             : (handlePoint.y - stemHeight / 2)

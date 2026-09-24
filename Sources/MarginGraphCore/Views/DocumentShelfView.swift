@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import PDFKit
 
-@MainActor private let coverThumbnailCache = NSCache<NSString, NSImage>()
+private nonisolated(unsafe) let coverThumbnailCache = NSCache<NSString, NSImage>()
 
 public struct DocumentShelfView: View {
     public var documents: [Document]
@@ -2122,6 +2122,8 @@ public struct DocumentCardView: View {
         self.onAddToStudy = onAddToStudy
     }
 
+    @State private var loadedThumbnail: NSImage? = nil
+
     private var docType: String {
         if !document.documentType.isEmpty {
             return document.documentType
@@ -2162,7 +2164,7 @@ public struct DocumentCardView: View {
                             .shadow(color: .black.opacity(0.12), radius: 4, x: 0, y: 2)
 
                         // Cover thumbnail or preview preserving original ratio
-                        if let image = loadCoverThumbnail(path: document.filePath, docType: docType) {
+                        if let image = loadedThumbnail ?? coverThumbnailCache.object(forKey: document.filePath as NSString) {
                             Image(nsImage: image)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -2364,22 +2366,54 @@ public struct DocumentCardView: View {
                 }
             }
         }
+        .onAppear {
+            loadThumbnailAsync()
+        }
+        .onChange(of: document.filePath) { _, _ in
+            loadThumbnailAsync()
+        }
     }
 
-    private func loadCoverThumbnail(path: String, docType: String) -> NSImage? {
+    private func loadThumbnailAsync() {
+        let path = document.filePath
+        let type = docType
+        guard !path.isEmpty, !path.contains("Library/Containers/QReader.MarginStudyMac") else { return }
+        if let cached = coverThumbnailCache.object(forKey: path as NSString) {
+            loadedThumbnail = cached
+            return
+        }
+        DispatchQueue.global(qos: .utility).async {
+            let img = Self.generateCoverThumbnail(path: path, docType: type)
+            if let img {
+                DispatchQueue.main.async {
+                    self.loadedThumbnail = img
+                }
+            }
+        }
+    }
+
+    private nonisolated static func generateCoverThumbnail(path: String, docType: String) -> NSImage? {
         let key = path as NSString
         if let cached = coverThumbnailCache.object(forKey: key) {
             return cached
         }
-        guard FileManager.default.fileExists(atPath: path) else { return nil }
+        guard !path.contains("Library/Containers/QReader.MarginStudyMac"),
+              FileManager.default.fileExists(atPath: path) else { return nil }
         let url = URL(fileURLWithPath: path)
         if docType == "video" {
             if let img = MediaDocumentHelper.generatePosterFrame(url: url) {
                 coverThumbnailCache.setObject(img, forKey: key)
                 return img
             }
-        } else if docType == "pdf" {
-            guard let pdfDoc = PDFDocument(url: url),
+        } else if docType == "pdf" || docType == "epub" {
+            let pdfURL: URL?
+            if docType == "epub" && path.lowercased().hasSuffix(".epub") {
+                pdfURL = try? EPUBConverter.ensureConvertedPDF(for: url).pdfURL
+            } else {
+                pdfURL = url
+            }
+            guard let validPDFURL = pdfURL,
+                  let pdfDoc = PDFDocument(url: validPDFURL),
                   let page = pdfDoc.page(at: 0) else {
                 return nil
             }
@@ -2391,3 +2425,4 @@ public struct DocumentCardView: View {
         return nil
     }
 }
+

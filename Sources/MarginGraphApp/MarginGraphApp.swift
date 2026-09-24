@@ -648,7 +648,7 @@ final class AppModel: ObservableObject {
             document = existing ?? Document(
                 id: Document.stableUUID(manager.md5),
                 title: manager.title,
-                filePath: url.path,
+                filePath: manager.url.path,
                 md5: manager.md5,
                 totalPages: manager.pageCount,
                 lastVisited: Date(),
@@ -2650,6 +2650,10 @@ struct StudyWorkspaceView: View {
 @main
 struct MarginGraphApp: App {
     @StateObject private var model = AppModel()
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
 
     var body: some Scene {
         WindowGroup {

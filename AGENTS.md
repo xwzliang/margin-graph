@@ -20,6 +20,8 @@ All agents working in this repository must strictly adhere to the guidelines and
 2. **Gesture & View Decoupling**: Never continuously update heavy `PDFView` or canvas layout inside high-frequency `DragGesture.onChanged`; decouple with transient indicators (`liveDividerX`) and debounce or commit on `onEnded`.
 3. **AppKit Cursor Reset**: Always restore `NSCursor.arrow.set()` and call `resetCursorRects()` in `DragGesture.onEnded` and view `.onDisappear`.
 4. **SQLite Linkage & Tests**: System `sqlite3` is linked directly via `.linkedLibrary("sqlite3")`. Database tests must use in-memory SQLite (`try Database(inMemory: true)`).
+5. **Mandatory Post-Implementation UI & App Testing**: Whenever you finish implementing changes, you MUST launch the app (`.build/arm64-apple-macosx/debug/MarginGraphApp`), interact with the application, click around, and test the functionality and UI yourself to verify everything is working properly before declaring completion. Never ask or rely on the user to test what you can verify yourself.
 
 ### Mandatory Lesson Maintenance
 Before completing any task where a bug was diagnosed, an unexpected framework behavior was solved, or an architectural pattern was introduced, **YOU MUST PROACTIVELY UPDATE [`.agents/rules/project-lessons.md`](.agents/rules/project-lessons.md)**.
+
