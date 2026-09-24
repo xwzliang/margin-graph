@@ -501,6 +501,18 @@ Structure each entry concisely with actionable rules:
 - **Nested Folder Relational Integrity & Cycle Prevention**:
   - **Trap**: Allowing arbitrary re-parenting of folders without ancestor traversal can create circular reference cycles (e.g. Folder A moved into Folder B, which is inside Folder A), making the folder tree unreachable or triggering infinite recursion during tree walks.
   - **Rule**: When offering destination targets in "Move to…" (or executing folder reparenting in the database), always validate candidate destinations with an ancestor walk: `candidate.id != folder.id && !isDescendant(candidateChildID: candidate.id, of: folder.id)`. When deleting a folder, safely re-parent all child documents and immediate child folders to the deleted folder's `parentId` (or `NULL` if at root), never cascade-deleting child content.
+- **Study Notebook Highlight Isolation vs Global Document Cards**:
+  - **Trap**: Merging library-wide document cards (`documentCards = database.cardsForDocument(md5:)`) into active reader cards unconditionally caused all previous highlights across the entire library to appear when studying in a newly created or empty notebook.
+  - **Rule**: When inside an active study workspace (`selectedTopicID != nil`), document highlights must be strictly scoped to `mindMapCards.filter { ... card.bookMD5 == activeDoc.md5 }`, ensuring newly chosen notebooks start completely clean and notes from other notebooks remain isolated.
+- **Cross-Tab Cursor and Handle Annotation Bleed**:
+  - **Trap**: Failing to clear selection state (`selectedCardID`, `jumpTarget`) and annotation handles upon switching document tabs caused PDF page annotations (cursor stems and knobs) from the previous document to render on the newly opened tab.
+  - **Rule**: On tab switch (`activeDocument?.id != document.id`), reset `selectedCardID = nil` and `jumpTarget = nil`. In `InteractivePDFView.updateNSView`, when `view.document !== manager.document`, immediately call `clearHandles()`, `clearPendingSelection()`, `selectedSegmentID = nil`, and `hideToolbar()`. In `applyActiveSelection`, guard card matching with `card.bookMD5 == manager.md5` and explicitly call `clearHandles()` in the else branch.
+- **Document Tab Bar Positioning Under Top Toolbar**:
+  - **Trap**: Placing `DocumentTabBarView` outside the PDF pane in the outer workspace `VStack` positioned tabs above the primary annotation toolbar (`topToolbarHeight`), breaking horizontal alignment with the MindMap header and violating MarginNote 3 layout.
+  - **Rule**: Render document tabs as Row 2 directly inside `MarginNotePDFContainerView` and `MediaPlaybackContainerView` beneath Row 1's top toolbar, ensuring top toolbars align horizontally across split panes while tabs sit directly above document canvas.
+- **Bottom Floating Toolbar Menu Border Bleed & Hierarchical Move-To Popovers**:
+  - **Trap**: Anchoring an AppKit `Menu` on a floating toolbar near the window's bottom edge causes the popup menu to expand downwards and bleed past the bottom window border. Furthermore, displaying destination folders without hierarchical sorting/indentation in individual card popovers prevents users from recognizing nested folder structures.
+  - **Rule**: Use a button with `.popover(isPresented: ..., arrowEdge: .top)` on bottom-docked toolbars so menus pop upwards and remain safely inside window bounds. In action card popovers, sort folders hierarchically (`hierarchicallySortedFolders`) and prefix nested items with indentation and `↳ ` matching tree depth.
 
 
 

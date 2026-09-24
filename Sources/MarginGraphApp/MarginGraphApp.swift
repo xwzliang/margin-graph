@@ -180,6 +180,14 @@ final class AppModel: ObservableObject {
     }
 
     var activePDFCards: [NoteCard] {
+        if selectedTopicID != nil {
+            // When inside a notebook / study workspace, cards shown on documents MUST strictly
+            // belong to the active topic. Notes from other notebooks are isolated.
+            return mindMapCards.filter { card in
+                guard let bmd5 = card.bookMD5, let activeDoc = activeDocument else { return true }
+                return bmd5 == activeDoc.md5 || bmd5.hasPrefix(activeDoc.md5) || activeDoc.md5.hasPrefix(bmd5)
+            }
+        }
         var cardMap = [UUID: NoteCard]()
         for card in mindMapCards {
             cardMap[card.id] = card
@@ -645,6 +653,10 @@ final class AppModel: ObservableObject {
 
     func switchToDocument(_ document: Document) {
         flushPendingPositions()
+        if activeDocument?.id != document.id {
+            selectedCardID = nil
+            jumpTarget = nil
+        }
         let docType = document.documentType.isEmpty ? MediaDocumentHelper.documentType(for: URL(fileURLWithPath: document.filePath)) : document.documentType
         if docType == "video" || docType == "audio" {
             activeDocument = document
@@ -2011,26 +2023,6 @@ struct StudyWorkspaceView: View {
                     if isReaderOnly {
                         readerOnlyHeader
                     }
-                    if !model.studyDocuments.isEmpty {
-                        DocumentTabBarView(
-                            documents: model.studyDocuments,
-                            activeDocument: model.activeDocument,
-                            onSelectDocument: { doc in
-                                model.switchToDocument(doc)
-                            },
-                            onCloseDocument: { doc in
-                                if model.studyDocuments.count > 1 {
-                                    model.detachDocument(doc)
-                                }
-                            },
-                            onAddDocument: {
-                                model.openDocumentPicker(attachToTopic: true)
-                            },
-                            onManageDocuments: {
-                                model.isManagingDocuments = true
-                            }
-                        )
-                    }
                     pdfPane
                 }
                 .frame(
@@ -2492,7 +2484,7 @@ struct StudyWorkspaceView: View {
                 jumpTarget: model.jumpTarget,
                 studyDocuments: model.studyDocuments,
                 activeDocument: model.activeDocument,
-                showsDocumentTabBar: false,
+                showsDocumentTabBar: !model.studyDocuments.isEmpty,
                 bookmarks: model.documentBookmarks,
                 initialPageIndex: model.documentCurrentPage[manager.md5] ?? model.activeDocument?.lastPageIndex ?? 0,
                 initialPageOffsetY: model.documentPageOffsets[manager.md5] ?? model.activeDocument?.lastPageOffsetY ?? 0.0,
@@ -2504,6 +2496,14 @@ struct StudyWorkspaceView: View {
                 },
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
+                },
+                onCloseDocument: { doc in
+                    if model.studyDocuments.count > 1 {
+                        model.detachDocument(doc)
+                    }
+                },
+                onAddDocument: {
+                    model.openDocumentPicker(attachToTopic: true)
                 },
                 onManageDocuments: {
                     model.isManagingDocuments = true
@@ -2568,9 +2568,17 @@ struct StudyWorkspaceView: View {
                 selectedCardID: model.selectedCardID,
                 studyDocuments: model.studyDocuments,
                 mediaStorage: model.mediaStorage,
-                showsHeader: false,
+                showsHeader: true,
                 onSwitchDocument: { doc in
                     model.switchToDocument(doc)
+                },
+                onCloseDocument: { doc in
+                    if model.studyDocuments.count > 1 {
+                        model.detachDocument(doc)
+                    }
+                },
+                onAddDocument: {
+                    model.openDocumentPicker(attachToTopic: true)
                 },
                 onManageDocuments: {
                     model.isManagingDocuments = true

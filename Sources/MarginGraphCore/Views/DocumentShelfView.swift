@@ -30,6 +30,8 @@ public struct DocumentShelfView: View {
     @State private var selectedFolderIDs: Set<UUID> = []
     @State private var isShowingAddToStudySheet: Bool = false
     @State private var isShowingBatchDeleteAlert: Bool = false
+    @State private var isShowingBatchMovePopover: Bool = false
+    @State private var hoveredBatchMoveItem: String? = nil
 
     // Folder Sheets & Dialogs
     @State private var isShowingCreateFolderSheet: Bool = false
@@ -703,41 +705,103 @@ public struct DocumentShelfView: View {
             Divider()
                 .frame(height: 18)
 
-            // 2. Move to Folder Menu (fixed size to prevent stretching)
-            Menu {
-                Button("All Documents (Root)") {
-                    moveSelectedItems(to: nil)
-                }
-                let availableFolders = hierarchicallySortedFolders.filter { f in
-                    !selectedFolderIDs.contains(f.id) &&
-                    !selectedFolderIDs.contains(where: { selID in isDescendant(candidateChildID: f.id, of: selID) })
-                }
-                if !availableFolders.isEmpty {
-                    Divider()
-                    ForEach(availableFolders) { f in
-                        let depth = folderDepth(f)
-                        let indent = String(repeating: "    ", count: depth)
-                        Button("\(indent)\(depth > 0 ? "↳ " : "")\(f.name)") {
-                            moveSelectedItems(to: f.id)
-                        }
-                    }
-                }
+            // 2. Move to Folder Popover (opens upward to stay within window bounds)
+            Button {
+                isShowingBatchMovePopover.toggle()
             } label: {
                 HStack(spacing: 5) {
                     Image(systemName: "folder")
                         .font(.system(size: 12))
                     Text("Move to…")
                         .font(.system(size: 12.5, weight: .medium))
-                    Image(systemName: "chevron.down")
+                    Image(systemName: "chevron.up")
                         .font(.system(size: 8, weight: .semibold))
                 }
                 .foregroundStyle(.primary)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
+                .background(isShowingBatchMovePopover ? Color.secondary.opacity(0.16) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
+            .buttonStyle(.plain)
+            .popover(isPresented: $isShowingBatchMovePopover, arrowEdge: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Move \(totalSelectedCount) item\(totalSelectedCount > 1 ? "s" : "") to:")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 6)
+                        .padding(.bottom, 4)
+
+                    Divider()
+
+                    ScrollView(.vertical, showsIndicators: false) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Button {
+                                moveSelectedItems(to: nil)
+                                isShowingBatchMovePopover = false
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "tray")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(Color.accentColor)
+                                        .frame(width: 16)
+                                    Text("All Documents (Root)")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(hoveredBatchMoveItem == "root" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .onHover { hoveredBatchMoveItem = $0 ? "root" : nil }
+
+                            let availableFolders = hierarchicallySortedFolders.filter { f in
+                                !selectedFolderIDs.contains(f.id) &&
+                                !selectedFolderIDs.contains(where: { selID in isDescendant(candidateChildID: f.id, of: selID) })
+                            }
+
+                            if !availableFolders.isEmpty {
+                                Divider()
+                                    .padding(.vertical, 2)
+
+                                ForEach(availableFolders) { f in
+                                    let depth = folderDepth(f)
+                                    let indent = String(repeating: "    ", count: depth)
+                                    Button {
+                                        moveSelectedItems(to: f.id)
+                                        isShowingBatchMovePopover = false
+                                    } label: {
+                                        HStack(spacing: 8) {
+                                            Image(systemName: "folder")
+                                                .font(.system(size: 12))
+                                                .foregroundStyle(Color.accentColor)
+                                                .frame(width: 16)
+                                            Text("\(indent)\(depth > 0 ? "↳ " : "")\(f.name)")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundStyle(.primary)
+                                                .lineLimit(1)
+                                                .truncationMode(.tail)
+                                            Spacer()
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 5)
+                                        .background(hoveredBatchMoveItem == f.id.uuidString ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                                        .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .onHover { hoveredBatchMoveItem = $0 ? f.id.uuidString : nil }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 220)
+                }
+                .padding(6)
+                .frame(width: 220)
+            }
 
             Divider()
                 .frame(height: 18)
@@ -762,6 +826,7 @@ public struct DocumentShelfView: View {
             // 4. Cancel Button
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) {
+                    isShowingBatchMovePopover = false
                     selectedDocumentIDs.removeAll()
                     selectedFolderIDs.removeAll()
                     isSelectionMode = false
@@ -1156,6 +1221,31 @@ public struct DocumentActionCardView: View {
     @State private var hoveredItem: String? = nil
     @State private var showingMoveDestinations: Bool = false
 
+    private var hierarchicallySortedFolders: [DocumentFolder] {
+        var result: [DocumentFolder] = []
+        func appendChildren(of parentID: UUID?) {
+            let direct = folders.filter { $0.parentId == parentID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            for f in direct {
+                result.append(f)
+                appendChildren(of: f.id)
+            }
+        }
+        appendChildren(of: nil)
+        return result
+    }
+
+    private func folderDepth(_ folder: DocumentFolder) -> Int {
+        var depth = 0
+        var cur = folder.parentId
+        var visited = Set<UUID>()
+        while let pid = cur, !visited.contains(pid) {
+            visited.insert(pid)
+            depth += 1
+            cur = folders.first(where: { $0.id == pid })?.parentId
+        }
+        return depth
+    }
+
     public init(
         document: Document,
         folders: [DocumentFolder],
@@ -1213,7 +1303,7 @@ public struct DocumentActionCardView: View {
                                     .font(.system(size: 12))
                                     .foregroundStyle(isAtRoot ? .secondary : Color.accentColor)
                                     .frame(width: 16)
-                                Text("All Documents")
+                                Text("All Documents (Root)")
                                     .font(.system(size: 12, weight: isAtRoot ? .regular : .medium))
                                     .foregroundStyle(isAtRoot ? .secondary : .primary)
                                 Spacer()
@@ -1233,8 +1323,10 @@ public struct DocumentActionCardView: View {
                         .onHover { hoveredItem = $0 ? "dest_root" : nil }
 
                         // Target Folders
-                        ForEach(folders) { f in
+                        ForEach(hierarchicallySortedFolders) { f in
                             let isCurrent = (f.id == document.folderId)
+                            let depth = folderDepth(f)
+                            let indent = String(repeating: "    ", count: depth)
                             Button {
                                 if !isCurrent {
                                     onMoveToFolder(f.id)
@@ -1245,7 +1337,7 @@ public struct DocumentActionCardView: View {
                                         .font(.system(size: 12))
                                         .foregroundStyle(isCurrent ? .secondary : Color.accentColor)
                                         .frame(width: 16)
-                                    Text(f.name)
+                                    Text("\(indent)\(depth > 0 ? "↳ " : "")\(f.name)")
                                         .font(.system(size: 12, weight: isCurrent ? .regular : .medium))
                                         .foregroundStyle(isCurrent ? .secondary : .primary)
                                         .lineLimit(1)
@@ -1345,7 +1437,7 @@ public struct DocumentActionCardView: View {
             }
         }
         .padding(6)
-        .frame(width: 180)
+        .frame(width: 210)
     }
 }
 
@@ -1388,6 +1480,31 @@ public struct FolderActionCardView: View {
             nextParentID = allFolders.first(where: { $0.id == pid })?.parentId
         }
         return false
+    }
+
+    private var hierarchicallySortedFolders: [DocumentFolder] {
+        var result: [DocumentFolder] = []
+        func appendChildren(of parentID: UUID?) {
+            let direct = allFolders.filter { $0.parentId == parentID }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            for f in direct {
+                result.append(f)
+                appendChildren(of: f.id)
+            }
+        }
+        appendChildren(of: nil)
+        return result
+    }
+
+    private func folderDepth(_ folder: DocumentFolder) -> Int {
+        var depth = 0
+        var cur = folder.parentId
+        var visited = Set<UUID>()
+        while let pid = cur, !visited.contains(pid) {
+            visited.insert(pid)
+            depth += 1
+            cur = allFolders.first(where: { $0.id == pid })?.parentId
+        }
+        return depth
     }
 
     public var body: some View {
@@ -1452,11 +1569,13 @@ public struct FolderActionCardView: View {
                         .disabled(isAtRoot)
                         .onHover { hoveredItem = $0 ? "dest_root" : nil }
 
-                        let validFolders = allFolders.filter { candidate in
+                        let validFolders = hierarchicallySortedFolders.filter { candidate in
                             candidate.id != folder.id && !isDescendant(candidateChildID: candidate.id, of: folder.id)
                         }
                         ForEach(validFolders) { f in
                             let isCurrentParent = (f.id == folder.parentId)
+                            let depth = folderDepth(f)
+                            let indent = String(repeating: "    ", count: depth)
                             Button {
                                 if !isCurrentParent {
                                     onMoveToFolder(f.id)
@@ -1467,7 +1586,7 @@ public struct FolderActionCardView: View {
                                         .font(.system(size: 12))
                                         .foregroundStyle(isCurrentParent ? .secondary : Color.accentColor)
                                         .frame(width: 16)
-                                    Text(f.name)
+                                    Text("\(indent)\(depth > 0 ? "↳ " : "")\(f.name)")
                                         .font(.system(size: 12, weight: isCurrentParent ? .regular : .medium))
                                         .foregroundStyle(isCurrentParent ? .secondary : .primary)
                                         .lineLimit(1)
@@ -1591,7 +1710,7 @@ public struct FolderActionCardView: View {
             }
         }
         .padding(6)
-        .frame(width: 180)
+        .frame(width: 210)
     }
 }
 

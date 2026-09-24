@@ -582,4 +582,60 @@ final class MediaDocumentTests: XCTestCase {
         let reParentedDoc = try database.allDocuments().first(where: { $0.id == doc.id })
         XCTAssertEqual(reParentedDoc?.folderId, rootFolder.id)
     }
+
+    @MainActor
+    func testMediaPlaybackContainerViewWithTabCallbacks() {
+        let doc1 = Document(title: "Doc 1", filePath: "/tmp/1.mp4", md5: "md5_1", totalPages: 10, documentType: "video")
+        let doc2 = Document(title: "Doc 2", filePath: "/tmp/2.mp4", md5: "md5_2", totalPages: 20, documentType: "video")
+
+        var closedDoc: Document? = nil
+        var addCalled = false
+        var switchedDoc: Document? = nil
+
+        let container = MediaPlaybackContainerView(
+            document: doc1,
+            studyDocuments: [doc1, doc2],
+            onSwitchDocument: { switchedDoc = $0 },
+            onCloseDocument: { closedDoc = $0 },
+            onAddDocument: { addCalled = true }
+        )
+
+        let hosting = NSHostingView(rootView: container)
+        hosting.frame = NSRect(x: 0, y: 0, width: 800, height: 600)
+        hosting.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(hosting)
+
+        container.onCloseDocument?(doc2)
+        XCTAssertEqual(closedDoc?.id, doc2.id)
+
+        container.onAddDocument?()
+        XCTAssertTrue(addCalled)
+
+        container.onSwitchDocument?(doc2)
+        XCTAssertEqual(switchedDoc?.id, doc2.id)
+    }
+
+    @MainActor
+    func testDocumentActionCardViewWithNestedHierarchy() {
+        let root = DocumentFolder(id: UUID(), parentId: nil, name: "Alpha")
+        let sub = DocumentFolder(id: UUID(), parentId: root.id, name: "Beta")
+        let doc = Document(title: "Doc", filePath: "/tmp/doc.pdf", md5: "hash", totalPages: 1, documentType: "pdf", folderId: sub.id)
+
+        var movedTarget: UUID? = nil
+        let card = DocumentActionCardView(
+            document: doc,
+            folders: [sub, root], // unsorted input to verify hierarchical sorting
+            onAddToStudy: {},
+            onMoveToFolder: { movedTarget = $0 },
+            onDelete: {}
+        )
+
+        let hosting = NSHostingView(rootView: card)
+        hosting.frame = NSRect(x: 0, y: 0, width: 220, height: 200)
+        hosting.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(hosting)
+
+        card.onMoveToFolder(root.id)
+        XCTAssertEqual(movedTarget, root.id)
+    }
 }

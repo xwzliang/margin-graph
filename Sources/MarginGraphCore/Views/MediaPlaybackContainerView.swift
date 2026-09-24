@@ -21,6 +21,8 @@ public struct MediaPlaybackContainerView: View {
     public var studyDocuments: [Document]
     public var mediaStorage: MediaStorage?
     public var onSwitchDocument: ((Document) -> Void)?
+    public var onCloseDocument: ((Document) -> Void)?
+    public var onAddDocument: (() -> Void)?
     public var onManageDocuments: (() -> Void)?
     public var onCreateVideoCard: ((_ startTime: Double, _ endTime: Double, _ title: String) -> Void)?
     public var onSelectCard: ((UUID) -> Void)?
@@ -53,6 +55,8 @@ public struct MediaPlaybackContainerView: View {
         mediaStorage: MediaStorage? = nil,
         showsHeader: Bool = true,
         onSwitchDocument: ((Document) -> Void)? = nil,
+        onCloseDocument: ((Document) -> Void)? = nil,
+        onAddDocument: (() -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
         onCreateVideoCard: ((_ startTime: Double, _ endTime: Double, _ title: String) -> Void)? = nil,
         onSelectCard: ((UUID) -> Void)? = nil
@@ -64,6 +68,8 @@ public struct MediaPlaybackContainerView: View {
         self.mediaStorage = mediaStorage
         self.showsHeader = showsHeader
         self.onSwitchDocument = onSwitchDocument
+        self.onCloseDocument = onCloseDocument
+        self.onAddDocument = onAddDocument
         self.onManageDocuments = onManageDocuments
         self.onCreateVideoCard = onCreateVideoCard
         self.onSelectCard = onSelectCard
@@ -80,7 +86,27 @@ public struct MediaPlaybackContainerView: View {
                 headerBar
             }
 
-            // 2. Playback Canvas
+            // 2. Document Tab Bar
+            if !studyDocuments.isEmpty {
+                DocumentTabBarView(
+                    documents: studyDocuments,
+                    activeDocument: document,
+                    onSelectDocument: { doc in
+                        onSwitchDocument?(doc)
+                    },
+                    onCloseDocument: { doc in
+                        onCloseDocument?(doc)
+                    },
+                    onAddDocument: {
+                        onAddDocument?()
+                    },
+                    onManageDocuments: {
+                        onManageDocuments?()
+                    }
+                )
+            }
+
+            // 3. Playback Canvas
             ZStack {
                 Color.black
 

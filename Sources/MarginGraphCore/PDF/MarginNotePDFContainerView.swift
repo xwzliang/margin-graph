@@ -64,6 +64,8 @@ public struct MarginNotePDFContainerView: View {
     public var activeDocument: Document?
     public var showsDocumentTabBar: Bool
     public var onSwitchDocument: ((Document) -> Void)?
+    public var onCloseDocument: ((Document) -> Void)?
+    public var onAddDocument: (() -> Void)?
     public var onManageDocuments: (() -> Void)?
     public var onExcerpt: (PDFExcerpt) -> Void
     public var onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)?
@@ -122,6 +124,8 @@ public struct MarginNotePDFContainerView: View {
         onPageChanged: ((Int) -> Void)? = nil,
         onPositionChanged: ((Int, CGFloat) -> Void)? = nil,
         onSwitchDocument: ((Document) -> Void)? = nil,
+        onCloseDocument: ((Document) -> Void)? = nil,
+        onAddDocument: (() -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
         onToggleBookmark: ((Int, Bool) -> Void)? = nil,
         onExcerpt: @escaping (PDFExcerpt) -> Void,
@@ -152,6 +156,8 @@ public struct MarginNotePDFContainerView: View {
         self.onPageChanged = onPageChanged
         self.onPositionChanged = onPositionChanged
         self.onSwitchDocument = onSwitchDocument
+        self.onCloseDocument = onCloseDocument
+        self.onAddDocument = onAddDocument
         self.onManageDocuments = onManageDocuments
         self.onToggleBookmark = onToggleBookmark
         self.onExcerpt = onExcerpt
@@ -422,62 +428,22 @@ public struct MarginNotePDFContainerView: View {
             }
 
             // Row 2: Document Tab Bar (MarginNote 3 signature)
-            if showsDocumentTabBar && (activeDocument != nil || !studyDocuments.isEmpty) {
-                HStack(spacing: 8) {
-                    if let firstPage = manager.document.page(at: 0) {
-                        let thumb = firstPage.thumbnail(of: CGSize(width: 14, height: 18), for: .cropBox)
-                        Image(nsImage: thumb)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(width: 14, height: 18)
-                            .clipShape(RoundedRectangle(cornerRadius: 2))
-                            .overlay(RoundedRectangle(cornerRadius: 2).stroke(Color.black.opacity(0.18), lineWidth: 0.5))
-                    } else {
-                        Image(systemName: "doc.text.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color(red: 0.85, green: 0.35, blue: 0.25))
-                    }
-
-                    Menu {
-                        ForEach(studyDocuments, id: \.id) { doc in
-                            Button(doc.title) {
-                                onSwitchDocument?(doc)
-                            }
-                        }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(activeDocument?.title ?? "Document")
-                                .font(.system(size: 12, weight: .medium))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundStyle(Color(white: 0.15))
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 8))
-                                .foregroundStyle(Color(white: 0.4))
-                        }
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-
-                    Spacer()
-
-                    Button {
+            if showsDocumentTabBar && !studyDocuments.isEmpty {
+                DocumentTabBarView(
+                    documents: studyDocuments,
+                    activeDocument: activeDocument,
+                    onSelectDocument: { doc in
+                        onSwitchDocument?(doc)
+                    },
+                    onCloseDocument: { doc in
+                        onCloseDocument?(doc)
+                    },
+                    onAddDocument: {
+                        onAddDocument?()
+                    },
+                    onManageDocuments: {
                         onManageDocuments?()
-                    } label: {
-                        Text("Manage")
-                            .font(.system(size: 11.5, weight: .regular))
-                            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
                     }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 5)
-                .background(Color(white: 0.95))
-                .overlay(
-                    Rectangle()
-                        .frame(height: 0.5)
-                        .foregroundStyle(Color(white: 0.88)),
-                    alignment: .bottom
                 )
             }
 

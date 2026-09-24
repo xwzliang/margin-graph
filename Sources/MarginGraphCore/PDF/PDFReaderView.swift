@@ -714,6 +714,10 @@ public struct PDFReaderView: NSViewRepresentable {
         context.coordinator.parent = self
         view.onPositionChanged = onPositionChanged
         if view.document !== manager.document {
+            view.clearHandles()
+            view.clearPendingSelection()
+            view.selectedSegmentID = nil
+            view.hideToolbar()
             view.document = manager.document
             context.coordinator.setupObserver(for: view)
             view.restorePosition(pageIndex: currentPageIndex, pageOffsetY: initialPageOffsetY)
@@ -924,6 +928,7 @@ public struct PDFReaderView: NSViewRepresentable {
         } else if view.hasPendingSelection {
             view.updateToolbarPosition()
         } else {
+            view.clearHandles()
             view.hideToolbar()
         }
         view.setNeedsDisplay(view.bounds)
@@ -931,7 +936,14 @@ public struct PDFReaderView: NSViewRepresentable {
 
     private func isActive(card: NoteCard) -> Bool {
         guard let selectedCardID else { return false }
-        return card.id == selectedCardID
+        guard card.id == selectedCardID else { return false }
+        if let bookMD5 = card.bookMD5, !bookMD5.isEmpty {
+            let matches = bookMD5 == manager.md5 ||
+                bookMD5.hasPrefix(manager.md5) ||
+                manager.md5.hasPrefix(bookMD5)
+            guard matches else { return false }
+        }
+        return true
     }
 
     private func jump(_ view: InteractivePDFView, to target: PDFJumpTarget) {
