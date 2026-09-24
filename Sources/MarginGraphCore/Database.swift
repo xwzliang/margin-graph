@@ -79,6 +79,7 @@ public final class Database: @unchecked Sendable {
         );
         CREATE TABLE IF NOT EXISTS document_folders(
             id TEXT PRIMARY KEY,
+            parent_id TEXT,
             name TEXT NOT NULL,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
@@ -218,11 +219,15 @@ public final class Database: @unchecked Sendable {
         try execute("""
         CREATE TABLE IF NOT EXISTS document_folders(
             id TEXT PRIMARY KEY,
+            parent_id TEXT,
             name TEXT NOT NULL,
             created_at REAL NOT NULL,
             updated_at REAL NOT NULL
         );
         """)
+        if try !hasColumn("parent_id", in: "document_folders") {
+            try execute("ALTER TABLE document_folders ADD COLUMN parent_id TEXT;")
+        }
         try? execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
         try repairDocumentIDs()
     }
@@ -495,25 +500,27 @@ public final class Database: @unchecked Sendable {
     // MARK: - Document Folders
 
     public func allFolders() throws -> [DocumentFolder] {
-        try withStatement("SELECT id, name, created_at, updated_at FROM document_folders ORDER BY name COLLATE NOCASE ASC") { statement in
+        try withStatement("SELECT id, parent_id, name, created_at, updated_at FROM document_folders ORDER BY name COLLATE NOCASE ASC") { statement in
             var result: [DocumentFolder] = []
             while sqlite3_step(statement) == SQLITE_ROW {
                 guard let id = text(statement, 0).flatMap(UUID.init(uuidString:)),
-                      let name = text(statement, 1),
-                      let created = double(statement, 2).map(Date.init(timeIntervalSince1970:)),
-                      let updated = double(statement, 3).map(Date.init(timeIntervalSince1970:)) else { continue }
-                result.append(DocumentFolder(id: id, name: name, createdAt: created, updatedAt: updated))
+                      let name = text(statement, 2),
+                      let created = double(statement, 3).map(Date.init(timeIntervalSince1970:)),
+                      let updated = double(statement, 4).map(Date.init(timeIntervalSince1970:)) else { continue }
+                let parentId = text(statement, 1).flatMap(UUID.init(uuidString:))
+                result.append(DocumentFolder(id: id, parentId: parentId, name: name, createdAt: created, updatedAt: updated))
             }
             return result
         }
     }
 
     public func insertFolder(_ folder: DocumentFolder) throws {
-        try withStatement("INSERT OR REPLACE INTO document_folders(id, name, created_at, updated_at) VALUES(?,?,?,?)") { statement in
+        try withStatement("INSERT OR REPLACE INTO document_folders(id, parent_id, name, created_at, updated_at) VALUES(?,?,?,?,?)") { statement in
             bind(folder.id.uuidString, to: 1, in: statement)
-            bind(folder.name, to: 2, in: statement)
-            bind(folder.createdAt.timeIntervalSince1970, to: 3, in: statement)
-            bind(folder.updatedAt.timeIntervalSince1970, to: 4, in: statement)
+            bind(folder.parentId?.uuidString, to: 2, in: statement)
+            bind(folder.name, to: 3, in: statement)
+            bind(folder.createdAt.timeIntervalSince1970, to: 4, in: statement)
+            bind(folder.updatedAt.timeIntervalSince1970, to: 5, in: statement)
             try requireDone(statement)
         }
     }
@@ -527,9 +534,31 @@ public final class Database: @unchecked Sendable {
         }
     }
 
+    public func updateFolderParent(folderID: UUID, parentID: UUID?) throws {
+        try withStatement("UPDATE document_folders SET parent_id = ?, updated_at = ? WHERE id = ?") { statement in
+            bind(parentID?.uuidString, to: 1, in: statement)
+            bind(Date().timeIntervalSince1970, to: 2, in: statement)
+            bind(folderID.uuidString, to: 3, in: statement)
+            try requireDone(statement)
+        }
+    }
+
     public func deleteFolder(id: UUID) throws {
-        try withStatement("UPDATE documents SET folder_id = NULL WHERE folder_id = ?") { statement in
+        var parentId: String? = nil
+        try withStatement("SELECT parent_id FROM document_folders WHERE id = ?") { statement in
             bind(id.uuidString, to: 1, in: statement)
+            if sqlite3_step(statement) == SQLITE_ROW {
+                parentId = text(statement, 0)
+            }
+        }
+        try withStatement("UPDATE documents SET folder_id = ? WHERE folder_id = ?") { statement in
+            bind(parentId, to: 1, in: statement)
+            bind(id.uuidString, to: 2, in: statement)
+            try requireDone(statement)
+        }
+        try withStatement("UPDATE document_folders SET parent_id = ? WHERE parent_id = ?") { statement in
+            bind(parentId, to: 1, in: statement)
+            bind(id.uuidString, to: 2, in: statement)
             try requireDone(statement)
         }
         try delete("DELETE FROM document_folders WHERE id = ?", id.uuidString)

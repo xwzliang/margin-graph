@@ -419,4 +419,167 @@ final class MediaDocumentTests: XCTestCase {
         tabBar.onCloseDocument?(doc1)
         XCTAssertEqual(closedDoc?.id, doc1.id)
     }
+
+    func testFolderSelectionAndBatchOperations() throws {
+        let database = try Database(inMemory: true)
+        let folder1 = DocumentFolder(name: "Physics")
+        let folder2 = DocumentFolder(name: "STEM")
+        try database.insertFolder(folder1)
+        try database.insertFolder(folder2)
+
+        let doc1 = Document(id: UUID(), title: "Quantum", filePath: "/docs/quantum.pdf", md5: "hash_quantum", totalPages: 10, documentType: "pdf", folderId: folder1.id)
+        let doc2 = Document(id: UUID(), title: "Cosmology", filePath: "/docs/cosmology.mp4", md5: "hash_cosmo", totalPages: 200, documentType: "video", folderId: folder1.id)
+        let doc3 = Document(id: UUID(), title: "Calculus", filePath: "/docs/calculus.pdf", md5: "hash_calc", totalPages: 50, documentType: "pdf", folderId: nil)
+        try database.insertDocument(doc1)
+        try database.insertDocument(doc2)
+        try database.insertDocument(doc3)
+
+        var selectedFolderIDs: Set<UUID> = [folder1.id]
+        var selectedDocIDs: Set<UUID> = [doc3.id]
+
+        // 1. Total selection count
+        let totalSelected = selectedFolderIDs.count + selectedDocIDs.count
+        XCTAssertEqual(totalSelected, 2)
+
+        // 2. Study selection collects both directly selected documents and documents in selected folders
+        let allDocs = try database.allDocuments()
+        var studyDocs: [Document] = []
+        var seenIDs = Set<UUID>()
+        for doc in allDocs where selectedDocIDs.contains(doc.id) {
+            if seenIDs.insert(doc.id).inserted { studyDocs.append(doc) }
+        }
+        for fid in selectedFolderIDs {
+            for doc in allDocs where doc.folderId == fid {
+                if seenIDs.insert(doc.id).inserted { studyDocs.append(doc) }
+            }
+        }
+        XCTAssertEqual(studyDocs.count, 3)
+        XCTAssertTrue(studyDocs.contains { $0.id == doc1.id })
+        XCTAssertTrue(studyDocs.contains { $0.id == doc2.id })
+        XCTAssertTrue(studyDocs.contains { $0.id == doc3.id })
+
+        // 3. Batch move to folder2: moves doc3 and all docs in folder1 to folder2
+        for doc in studyDocs {
+            try database.updateDocumentFolder(documentID: doc.id, folderID: folder2.id)
+        }
+        let updatedDocs = try database.allDocuments()
+        XCTAssertTrue(updatedDocs.allSatisfy { $0.folderId == folder2.id })
+
+        // 4. Cancel selection clears sets
+        selectedFolderIDs.removeAll()
+        selectedDocIDs.removeAll()
+        XCTAssertTrue(selectedFolderIDs.isEmpty)
+        XCTAssertTrue(selectedDocIDs.isEmpty)
+    }
+
+    @MainActor
+    func testActionCardViewsInstantiationAndCallbacks() {
+        let doc = Document(id: UUID(), title: "Test Doc", filePath: "/docs/test.pdf", md5: "hash_test", totalPages: 10, documentType: "pdf")
+        let folder = DocumentFolder(id: UUID(), name: "Test Folder")
+
+        var docStudyCalled = false
+        var docMovedFolderID: UUID? = nil
+        var docDeleteCalled = false
+
+        let docCard = DocumentActionCardView(
+            document: doc,
+            folders: [folder],
+            onAddToStudy: { docStudyCalled = true },
+            onMoveToFolder: { targetID in docMovedFolderID = targetID },
+            onDelete: { docDeleteCalled = true }
+        )
+
+        let docHosting = NSHostingView(rootView: docCard)
+        docHosting.frame = NSRect(x: 0, y: 0, width: 175, height: 120)
+        docHosting.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(docHosting)
+
+        docCard.onAddToStudy()
+        XCTAssertTrue(docStudyCalled)
+        docCard.onMoveToFolder(folder.id)
+        XCTAssertEqual(docMovedFolderID, folder.id)
+        docCard.onMoveToFolder(nil)
+        XCTAssertNil(docMovedFolderID)
+        docCard.onDelete()
+        XCTAssertTrue(docDeleteCalled)
+
+        var folderStudyCalled = false
+        var folderRenameCalled = false
+        var folderDeleteCalled = false
+        var folderMovedFolderID: UUID? = UUID()
+
+        let folderCard = FolderActionCardView(
+            folder: folder,
+            allFolders: [folder],
+            itemCount: 3,
+            onAddToStudy: { folderStudyCalled = true },
+            onMoveToFolder: { targetID in folderMovedFolderID = targetID },
+            onRename: { folderRenameCalled = true },
+            onDelete: { folderDeleteCalled = true }
+        )
+
+        let folderHosting = NSHostingView(rootView: folderCard)
+        folderHosting.frame = NSRect(x: 0, y: 0, width: 175, height: 160)
+        folderHosting.layoutSubtreeIfNeeded()
+        XCTAssertNotNil(folderHosting)
+
+        folderCard.onAddToStudy()
+        XCTAssertTrue(folderStudyCalled)
+        folderCard.onRename()
+        XCTAssertTrue(folderRenameCalled)
+        folderCard.onDelete()
+        XCTAssertTrue(folderDeleteCalled)
+        folderCard.onMoveToFolder(nil)
+        XCTAssertNil(folderMovedFolderID)
+    }
+
+    func testNestedFolderDatabaseOperationsAndHierarchy() throws {
+        let database = try Database(inMemory: true)
+
+        let rootFolder = DocumentFolder(name: "Root Work")
+        try database.insertFolder(rootFolder)
+
+        let subFolder1 = DocumentFolder(parentId: rootFolder.id, name: "Project Alpha")
+        try database.insertFolder(subFolder1)
+
+        let subFolder2 = DocumentFolder(parentId: subFolder1.id, name: "Sub-task 1")
+        try database.insertFolder(subFolder2)
+
+        let all = try database.allFolders()
+        XCTAssertEqual(all.count, 3)
+
+        let fetchedRoot = all.first { $0.id == rootFolder.id }
+        XCTAssertNil(fetchedRoot?.parentId)
+
+        let fetchedSub1 = all.first { $0.id == subFolder1.id }
+        XCTAssertEqual(fetchedSub1?.parentId, rootFolder.id)
+
+        let fetchedSub2 = all.first { $0.id == subFolder2.id }
+        XCTAssertEqual(fetchedSub2?.parentId, subFolder1.id)
+
+        // Move subFolder2 to root
+        try database.updateFolderParent(folderID: subFolder2.id, parentID: nil)
+        let afterMove = try database.allFolders()
+        XCTAssertNil(afterMove.first(where: { $0.id == subFolder2.id })?.parentId)
+
+        // Insert a document inside subFolder1
+        let doc = Document(id: UUID(), title: "Spec", filePath: "/docs/spec.pdf", md5: "spec_hash", totalPages: 5, documentType: "pdf", folderId: subFolder1.id)
+        try database.insertDocument(doc)
+
+        // Move subFolder2 back inside subFolder1
+        try database.updateFolderParent(folderID: subFolder2.id, parentID: subFolder1.id)
+
+        // Deleting subFolder1 should safely re-parent doc and subFolder2 to rootFolder (subFolder1's parent)
+        try database.deleteFolder(id: subFolder1.id)
+
+        let foldersAfterDelete = try database.allFolders()
+        XCTAssertEqual(foldersAfterDelete.count, 2)
+        XCTAssertNil(foldersAfterDelete.first(where: { $0.id == subFolder1.id }))
+
+        let reParentedSub2 = foldersAfterDelete.first(where: { $0.id == subFolder2.id })
+        XCTAssertEqual(reParentedSub2?.parentId, rootFolder.id)
+
+        let reParentedDoc = try database.allDocuments().first(where: { $0.id == doc.id })
+        XCTAssertEqual(reParentedDoc?.folderId, rootFolder.id)
+    }
 }

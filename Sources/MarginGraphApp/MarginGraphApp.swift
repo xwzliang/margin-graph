@@ -423,10 +423,10 @@ final class AppModel: ObservableObject {
         reloadLibrary()
     }
 
-    func createFolder(name: String) {
+    func createFolder(name: String, parentId: UUID? = nil) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let folder = DocumentFolder(name: trimmed)
+        let folder = DocumentFolder(parentId: parentId, name: trimmed)
         try? database.insertFolder(folder)
         reloadLibrary()
     }
@@ -440,6 +440,12 @@ final class AppModel: ObservableObject {
 
     func deleteFolder(id: UUID) {
         try? database.deleteFolder(id: id)
+        reloadLibrary()
+    }
+
+    func moveFolder(_ folder: DocumentFolder, to parentID: UUID?) {
+        guard folder.id != parentID else { return }
+        try? database.updateFolderParent(folderID: folder.id, parentID: parentID)
         reloadLibrary()
     }
 
@@ -2647,8 +2653,8 @@ struct MarginGraphApp: App {
                                 onDeleteDocument: { doc in
                                     model.deleteDocument(doc)
                                 },
-                                onCreateFolder: { name in
-                                    model.createFolder(name: name)
+                                onCreateFolder: { name, parentID in
+                                    model.createFolder(name: name, parentId: parentID)
                                 },
                                 onRenameFolder: { id, name in
                                     model.renameFolder(id: id, newName: name)
@@ -2658,6 +2664,9 @@ struct MarginGraphApp: App {
                                 },
                                 onMoveDocument: { doc, folderID in
                                     model.moveDocument(doc, to: folderID)
+                                },
+                                onMoveFolder: { folder, parentID in
+                                    model.moveFolder(folder, to: parentID)
                                 },
                                 onAddToStudy: { docs, topicID, newTitle in
                                     model.addDocumentsToStudy(documents: docs, targetTopicID: topicID, newTopicTitle: newTitle)

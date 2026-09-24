@@ -3,12 +3,14 @@ import CoreGraphics
 
 public struct DocumentFolder: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
+    public var parentId: UUID?
     public var name: String
     public var createdAt: Date
     public var updatedAt: Date
 
-    public init(id: UUID = UUID(), name: String, createdAt: Date = Date(), updatedAt: Date = Date()) {
+    public init(id: UUID = UUID(), parentId: UUID? = nil, name: String, createdAt: Date = Date(), updatedAt: Date = Date()) {
         self.id = id
+        self.parentId = parentId
         self.name = name
         self.createdAt = createdAt
         self.updatedAt = updatedAt
