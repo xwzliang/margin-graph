@@ -1,6 +1,39 @@
 import SwiftUI
 import CoreGraphics
 
+public enum MindMapSearchScope: String, CaseIterable, Identifiable, Sendable {
+    case all = "All"
+    case title = "Title"
+    case content = "Content"
+
+    public var id: String { rawValue }
+}
+
+public enum MindMapSearchMatcher {
+    public static func matches(card: NoteCard, query: String, scope: MindMapSearchScope = .all) -> Bool {
+        let clean = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return true }
+
+        let inTitle = card.title.localizedCaseInsensitiveContains(clean)
+            || (card.title.isEmpty && card.highlightText.localizedCaseInsensitiveContains(clean))
+
+        let inNotes = card.notesText.localizedCaseInsensitiveContains(clean)
+        let inHighlight = card.highlightText.localizedCaseInsensitiveContains(clean)
+        let inSegments = card.excerptSegments.contains { $0.text.localizedCaseInsensitiveContains(clean) }
+        let inTags = card.tags.contains { $0.localizedCaseInsensitiveContains(clean) }
+        let inContent = inNotes || inHighlight || inSegments || inTags
+
+        switch scope {
+        case .all:
+            return inTitle || inContent
+        case .title:
+            return inTitle
+        case .content:
+            return inContent
+        }
+    }
+}
+
 public struct MindMapCanvasView: View {
     public var cards: [NoteCard]
     public var links: [CardLink]
@@ -28,6 +61,11 @@ public struct MindMapCanvasView: View {
     public var initialZoomScale: CGFloat?
     public var onViewportChanged: ((CGPoint, CGFloat) -> Void)?
     @Binding public var editingCardTitleID: UUID?
+    public var searchQuery: String
+    public var searchScope: MindMapSearchScope
+    public var currentSearchMatchID: UUID?
+    public var isSearchActive: Bool
+    public var onToggleSearch: (() -> Void)?
 
     @State private var viewport = CanvasViewport()
     @State private var panStart: CGPoint?
@@ -75,7 +113,12 @@ public struct MindMapCanvasView: View {
         onNewChild: ((UUID) -> Void)? = nil,
         onNewNote: ((CGPoint) -> Void)? = nil,
         onUpdateTitle: ((UUID, String) -> Void)? = nil,
-        onAddToDeck: ((NoteCard) -> Void)? = nil
+        onAddToDeck: ((NoteCard) -> Void)? = nil,
+        searchQuery: String = "",
+        searchScope: MindMapSearchScope = .all,
+        currentSearchMatchID: UUID? = nil,
+        isSearchActive: Bool = false,
+        onToggleSearch: (() -> Void)? = nil
     ) {
         self.cards = cards
         self.links = links
@@ -104,7 +147,16 @@ public struct MindMapCanvasView: View {
         self.onNewNote = onNewNote
         self.onUpdateTitle = onUpdateTitle
         self.onAddToDeck = onAddToDeck
+        self.searchQuery = searchQuery
+        self.searchScope = searchScope
+        self.currentSearchMatchID = currentSearchMatchID
+        self.isSearchActive = isSearchActive
+        self.onToggleSearch = onToggleSearch
         self._layoutResult = State(initialValue: TreeLayout.layout(cards: cards))
+    }
+
+    public static func matchesSearch(card: NoteCard, query: String, scope: MindMapSearchScope = .all) -> Bool {
+        MindMapSearchMatcher.matches(card: card, query: query, scope: scope)
     }
 
     public var body: some View {
@@ -373,9 +425,12 @@ public struct MindMapCanvasView: View {
             }
 
             // Main MindMap Floating Header (MarginNote 3 signature)
-            HStack {
+            HStack(spacing: 8) {
                 Spacer()
                 mainMindMapHeader
+                if onToggleSearch != nil {
+                    searchButton
+                }
                 Spacer()
             }
             .padding(.top, 8)
@@ -471,12 +526,16 @@ public struct MindMapCanvasView: View {
             return frame.intersects(visibleCanvasRect)
         }
 
+        let isSearching = isSearchActive && !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
         ForEach(culledCards, id: \.id) { card in
             if let frame = frames[card.id] {
                 let isCardSelected = selectedCardID == card.id
                 let isTargeted = hoverTargetCardID == card.id
                 let isBeingDragged = draggingCardID == card.id
                 let extraHeight: CGFloat = isCardSelected ? 28 : 0
+                let isMatch = isSearching ? MindMapSearchMatcher.matches(card: card, query: searchQuery, scope: searchScope) : true
+                let isCurrentMatch = isSearching && (currentSearchMatchID == card.id)
                 CardNodeView(
                     card: card,
                     isSelected: isCardSelected,
@@ -520,17 +579,26 @@ public struct MindMapCanvasView: View {
                 )
                 .frame(width: frame.width, height: frame.height + extraHeight)
                 .overlay {
-                    // Bright blue selection border on target card (MarginNote 3 style)
-                    if isTargeted {
+                    if isCurrentMatch {
+                        // Striking gold/amber selection ring for the active search match
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(red: 0.95, green: 0.55, blue: 0.10), lineWidth: 3.5)
+                            .shadow(color: Color.orange.opacity(0.6), radius: 5)
+                    } else if isSearching && isMatch {
+                        // Blue highlight ring for all matching cards
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color(red: 0.15, green: 0.50, blue: 0.95), lineWidth: 2.2)
+                    } else if isTargeted {
+                        // Bright blue selection border on target card (MarginNote 3 style)
                         RoundedRectangle(cornerRadius: 6)
                             .stroke(Color(red: 0.05, green: 0.35, blue: 1.0), lineWidth: 3.2)
                     }
                 }
-                .opacity(isBeingDragged ? 0.78 : 1.0)
+                .opacity(isBeingDragged ? 0.78 : (isSearching ? (isMatch ? 1.0 : 0.28) : 1.0))
                 .shadow(color: isBeingDragged ? Color.black.opacity(0.25) : Color.clear, radius: 10, y: 5)
                 .scaleEffect(viewport.zoomScale)
                 .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale)
-                .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isTargeted ? 50 : 1))
+                .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isCurrentMatch ? 90 : (isTargeted ? 50 : 1)))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
                 .gesture(
                     nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames),
@@ -984,12 +1052,44 @@ public struct MindMapCanvasView: View {
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(white: 0.98).opacity(0.92))
-                    .shadow(color: .black.opacity(0.10), radius: 2, y: 1)
+                    .fill(Color(white: 0.99))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
             )
         }
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .allowsHitTesting(true)
+    }
+
+    private var searchButton: some View {
+        Button {
+            onToggleSearch?()
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Search")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isSearchActive ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.14) : Color(white: 0.99))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(isSearchActive ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.35) : Color.black.opacity(0.10), lineWidth: 0.5)
+                    )
+                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
+            )
+            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+        }
+        .buttonStyle(.plain)
+        .marginNoteTooltip("Search MindMap (⌘F)")
         .allowsHitTesting(true)
     }
 
@@ -1240,6 +1340,8 @@ public struct MindMapCanvasView: View {
         frames: [UUID: CGRect],
         visible: Set<UUID>
     ) {
+        let isSearching = isSearchActive && !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
         for card in cards where visible.contains(card.id) {
             if let parentID = card.groupNoteId,
                visible.contains(parentID),
@@ -1248,7 +1350,15 @@ public struct MindMapCanvasView: View {
                 var path = Path()
                 path.addPath(Path(TreeLayout.connectorPath(from: parent, to: child)))
                 let parentCard = cards.first(where: { $0.id == parentID })
-                let strokeColor = parentCard.map { MarginNoteTheme.cardColors(for: $0.colorIndex).accent } ?? Color(red: 0.70, green: 0.66, blue: 0.58)
+                let baseColor = parentCard.map { MarginNoteTheme.cardColors(for: $0.colorIndex).accent } ?? Color(red: 0.70, green: 0.66, blue: 0.58)
+                let strokeColor: Color
+                if isSearching {
+                    let parentMatch = parentCard.map { MindMapSearchMatcher.matches(card: $0, query: searchQuery, scope: searchScope) } ?? false
+                    let childMatch = MindMapSearchMatcher.matches(card: card, query: searchQuery, scope: searchScope)
+                    strokeColor = (parentMatch || childMatch) ? baseColor : baseColor.opacity(0.18)
+                } else {
+                    strokeColor = baseColor
+                }
                 context.stroke(
                     transformed(path),
                     with: .color(strokeColor),

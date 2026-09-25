@@ -800,4 +800,82 @@ final class MindMapTests: XCTestCase {
             }
         }
     }
+
+    func testMindMapSearchMatchesTitleAndContent() {
+        let topic = UUID()
+        let card1 = NoteCard(
+            id: UUID(),
+            topicId: topic,
+            title: "Chinatown Screenplay",
+            highlightText: "In Chinatown, the mystery unravels.",
+            notesText: "Robert Towne masterpiece analysis.",
+            tags: ["screenwriting"]
+        )
+
+        let card2 = NoteCard(
+            id: UUID(),
+            topicId: topic,
+            title: "Character Arc",
+            highlightText: "The protagonist must change internally.",
+            notesText: "Internal and external journey of the hero.",
+            tags: ["character"]
+        )
+
+        let card3 = NoteCard(
+            id: UUID(),
+            topicId: topic,
+            title: "",
+            highlightText: "A three-act dramatic narrative.",
+            notesText: "",
+            tags: ["drama"]
+        )
+
+        let card4 = NoteCard(
+            id: UUID(),
+            topicId: topic,
+            title: "Three Act Structure",
+            highlightText: "Setup, Confrontation, Resolution",
+            notesText: "",
+            tags: [],
+            excerptSegments: [ExcerptSegment(text: "Inciting incident occurs on page 10.")]
+        )
+
+        let allCards = [card1, card2, card3, card4]
+
+        // 1. Search by title (case-insensitive)
+        let titleMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "chinatown", scope: .title) }
+        XCTAssertEqual(titleMatches.map(\.id), [card1.id])
+
+        // 2. Search by note content (notesText)
+        let noteMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "journey", scope: .content) }
+        XCTAssertEqual(noteMatches.map(\.id), [card2.id])
+        XCTAssertFalse(MindMapSearchMatcher.matches(card: card2, query: "journey", scope: .title), "Title scope must not match note content")
+
+        // 3. Search by excerpt segment text
+        let segmentMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "inciting incident", scope: .content) }
+        XCTAssertEqual(segmentMatches.map(\.id), [card4.id])
+
+        // 4. Search by tag
+        let tagMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "drama", scope: .content) }
+        XCTAssertEqual(tagMatches.map(\.id), [card3.id])
+
+        // 5. Fallback title for untitled card with highlightText
+        let untitledTitleMatch = MindMapSearchMatcher.matches(card: card3, query: "three-act", scope: .title)
+        XCTAssertTrue(untitledTitleMatch, "Untitled cards should match their highlightText when searching by title")
+
+        // 6. Scope .all matches either title or content
+        let allScopeTitle = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "character", scope: .all) }
+        XCTAssertEqual(allScopeTitle.map(\.id), [card2.id])
+
+        let allScopeContent = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "masterpiece", scope: .all) }
+        XCTAssertEqual(allScopeContent.map(\.id), [card1.id])
+
+        // 7. Non-matching query
+        let noMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "NonExistentQueryXYZ", scope: .all) }
+        XCTAssertTrue(noMatches.isEmpty)
+
+        // 8. Empty or whitespace query matches all cards
+        let emptyMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "   ", scope: .all) }
+        XCTAssertEqual(emptyMatches.count, 4)
+    }
 }

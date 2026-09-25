@@ -22,6 +22,86 @@ final class AppModel: ObservableObject {
     @Published var isShelfSearchPresented: Bool = false
     @Published var shelfSearchQuery: String = ""
 
+    // MindMap Search State
+    @Published var isMindMapSearchPresented: Bool = false
+    @Published var mindMapSearchQuery: String = "" {
+        didSet {
+            guard mindMapSearchQuery != oldValue else { return }
+            scheduleMindMapSearchJump()
+        }
+    }
+    @Published var mindMapSearchScope: MindMapSearchScope = .all {
+        didSet {
+            guard mindMapSearchScope != oldValue else { return }
+            scheduleMindMapSearchJump()
+        }
+    }
+    @Published var currentMindMapMatchIndex: Int = 0
+    private var mindMapSearchDebounceTask: Task<Void, Never>? = nil
+
+    var matchingMindMapCards: [NoteCard] {
+        let q = mindMapSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return [] }
+        return mindMapCards.filter { MindMapSearchMatcher.matches(card: $0, query: q, scope: mindMapSearchScope) }
+    }
+
+    private func scheduleMindMapSearchJump() {
+        mindMapSearchDebounceTask?.cancel()
+        currentMindMapMatchIndex = 0
+        let q = mindMapSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        mindMapSearchDebounceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled, let self = self else { return }
+            self.jumpToCurrentMindMapMatch()
+        }
+    }
+
+    func nextMindMapSearchResult() {
+        let matches = matchingMindMapCards
+        guard !matches.isEmpty else { return }
+        currentMindMapMatchIndex = (currentMindMapMatchIndex + 1) % matches.count
+        jumpToCurrentMindMapMatch()
+    }
+
+    func previousMindMapSearchResult() {
+        let matches = matchingMindMapCards
+        guard !matches.isEmpty else { return }
+        currentMindMapMatchIndex = (currentMindMapMatchIndex - 1 + matches.count) % matches.count
+        jumpToCurrentMindMapMatch()
+    }
+
+    func jumpToCurrentMindMapMatch() {
+        let matches = matchingMindMapCards
+        guard !matches.isEmpty else { return }
+        if currentMindMapMatchIndex < 0 || currentMindMapMatchIndex >= matches.count {
+            currentMindMapMatchIndex = 0
+        }
+        let target = matches[currentMindMapMatchIndex]
+        select(card: target)
+        cardIDToCenter = target.id
+    }
+
+    func toggleMindMapSearch() {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            isMindMapSearchPresented.toggle()
+            if isMindMapSearchPresented {
+                if !mindMapSearchQuery.isEmpty {
+                    jumpToCurrentMindMapMatch()
+                }
+            } else {
+                closeMindMapSearch()
+            }
+        }
+    }
+
+    func closeMindMapSearch() {
+        mindMapSearchDebounceTask?.cancel()
+        isMindMapSearchPresented = false
+        mindMapSearchQuery = ""
+        currentMindMapMatchIndex = 0
+    }
+
     @Published var topics: [Topic] = []
     @Published var documents: [Document] = []
     @Published var documentFolders: [DocumentFolder] = []
@@ -332,6 +412,7 @@ final class AppModel: ObservableObject {
         selectedCardID = nil
         activeToolbarOwner = .none
         jumpTarget = nil
+        closeMindMapSearch()
         reloadStudySet()
     }
 
@@ -357,6 +438,7 @@ final class AppModel: ObservableObject {
 
     func exitStudyWorkspace() {
         flushPendingPositions()
+        closeMindMapSearch()
         isInStudyWorkspace = false
     }
 
@@ -1838,6 +1920,23 @@ struct StudyWorkspaceHeaderView: View {
 
                 Spacer()
 
+                // MindMap Search Button
+                Button {
+                    model.toggleMindMapSearch()
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 13, weight: model.isMindMapSearchPresented ? .bold : .regular))
+                        .foregroundStyle(model.isMindMapSearchPresented ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(model.isMindMapSearchPresented ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
+                        )
+                        .enlargedHitTarget(width: 34, height: 32)
+                }
+                .buttonStyle(.plain)
+                .marginNoteTooltip("Search MindMap (⌘F)")
+
                 // More Options Menu (...)
                 Menu {
                     Menu("View Mode") {
@@ -2435,6 +2534,9 @@ struct StudyWorkspaceView: View {
     private var mindMapPane: some View {
         VStack(spacing: 0) {
             StudyWorkspaceHeaderView(model: model)
+            if model.isMindMapSearchPresented {
+                MindMapSearchBarView(model: model)
+            }
             MindMapCanvasView(
                 cards: model.mindMapCards,
                 links: model.links,
@@ -2486,6 +2588,13 @@ struct StudyWorkspaceView: View {
                 },
                 onAddToDeck: { card in
                     model.cardForAddToDeck = card
+                },
+                searchQuery: model.mindMapSearchQuery,
+                searchScope: model.mindMapSearchScope,
+                currentSearchMatchID: model.matchingMindMapCards.indices.contains(model.currentMindMapMatchIndex) ? model.matchingMindMapCards[model.currentMindMapMatchIndex].id : nil,
+                isSearchActive: model.isMindMapSearchPresented,
+                onToggleSearch: { [weak model] in
+                    model?.toggleMindMapSearch()
                 }
             )
         }
@@ -2903,6 +3012,13 @@ struct MarginGraphApp: App {
                     NotificationCenter.default.post(name: .marginGraphGoToPage, object: nil)
                 }
                 .keyboardShortcut("g", modifiers: .command)
+            }
+
+            CommandMenu("Find") {
+                Button("Find in MindMap") {
+                    model.toggleMindMapSearch()
+                }
+                .keyboardShortcut("f", modifiers: .command)
             }
         }
     }
