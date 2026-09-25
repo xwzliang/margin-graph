@@ -2592,10 +2592,7 @@ struct StudyWorkspaceView: View {
                 searchQuery: model.mindMapSearchQuery,
                 searchScope: model.mindMapSearchScope,
                 currentSearchMatchID: model.matchingMindMapCards.indices.contains(model.currentMindMapMatchIndex) ? model.matchingMindMapCards[model.currentMindMapMatchIndex].id : nil,
-                isSearchActive: model.isMindMapSearchPresented,
-                onToggleSearch: { [weak model] in
-                    model?.toggleMindMapSearch()
-                }
+                isSearchActive: model.isMindMapSearchPresented
             )
         }
     }

@@ -65,7 +65,6 @@ public struct MindMapCanvasView: View {
     public var searchScope: MindMapSearchScope
     public var currentSearchMatchID: UUID?
     public var isSearchActive: Bool
-    public var onToggleSearch: (() -> Void)?
 
     @State private var viewport = CanvasViewport()
     @State private var panStart: CGPoint?
@@ -117,8 +116,7 @@ public struct MindMapCanvasView: View {
         searchQuery: String = "",
         searchScope: MindMapSearchScope = .all,
         currentSearchMatchID: UUID? = nil,
-        isSearchActive: Bool = false,
-        onToggleSearch: (() -> Void)? = nil
+        isSearchActive: Bool = false
     ) {
         self.cards = cards
         self.links = links
@@ -151,7 +149,6 @@ public struct MindMapCanvasView: View {
         self.searchScope = searchScope
         self.currentSearchMatchID = currentSearchMatchID
         self.isSearchActive = isSearchActive
-        self.onToggleSearch = onToggleSearch
         self._layoutResult = State(initialValue: TreeLayout.layout(cards: cards))
     }
 
@@ -425,12 +422,9 @@ public struct MindMapCanvasView: View {
             }
 
             // Main MindMap Floating Header (MarginNote 3 signature)
-            HStack(spacing: 8) {
+            HStack {
                 Spacer()
                 mainMindMapHeader
-                if onToggleSearch != nil {
-                    searchButton
-                }
                 Spacer()
             }
             .padding(.top, 8)
@@ -1062,34 +1056,6 @@ public struct MindMapCanvasView: View {
         }
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
-        .allowsHitTesting(true)
-    }
-
-    private var searchButton: some View {
-        Button {
-            onToggleSearch?()
-        } label: {
-            HStack(spacing: 4) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 11, weight: .semibold))
-                Text("Search")
-                    .font(.system(size: 12, weight: .medium))
-            }
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSearchActive ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.14) : Color(white: 0.99))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(isSearchActive ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.35) : Color.black.opacity(0.10), lineWidth: 0.5)
-                    )
-                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-            )
-            .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
-        }
-        .buttonStyle(.plain)
-        .marginNoteTooltip("Search MindMap (⌘F)")
         .allowsHitTesting(true)
     }
 
