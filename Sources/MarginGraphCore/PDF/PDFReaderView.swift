@@ -88,7 +88,7 @@ public final class CursorHandleAnnotation: PDFAnnotation {
     }
     public var stemWidth: CGFloat = 2.0
     public var stemHeight: CGFloat = 16.0
-    public var knobRadius: CGFloat = 4.5
+    public var knobRadius: CGFloat = 3.2
 
     public override init(bounds: CGRect, forType type: PDFAnnotationSubtype, withProperties properties: [AnyHashable : Any]?) {
         super.init(bounds: bounds, forType: .square, withProperties: properties)
@@ -109,46 +109,133 @@ public final class CursorHandleAnnotation: PDFAnnotation {
     }
 
     public override func draw(with box: PDFDisplayBox, in context: CGContext) {
-        context.saveGState()
-        context.setFillColor(fillColor.cgColor)
-        context.setStrokeColor(fillColor.cgColor)
-
-        let clip = context.boundingBoxOfClipPath
-        let isLocalSpace = clip.origin.x < 1.0 && clip.origin.y < 1.0 && (bounds.origin.x > clip.maxX || bounds.origin.y > clip.maxY)
-        let rect = isLocalSpace ? CGRect(origin: .zero, size: bounds.size) : bounds
-
-        let centerX = rect.midX
-        let path = CGMutablePath()
-
-        if isStart {
-            // Start cursor: vertical stem starting at bottom of bounds, circular knob centered at top of stem
-            let stemMinY = rect.minY
-            let stemMaxY = stemMinY + stemHeight
-            let stemRect = CGRect(x: centerX - stemWidth / 2, y: stemMinY, width: stemWidth, height: stemHeight)
-            path.addRect(stemRect)
-
-            let knobCenterY = stemMaxY
-            let knobRect = CGRect(x: centerX - knobRadius, y: knobCenterY - knobRadius, width: knobRadius * 2, height: knobRadius * 2)
-            path.addEllipse(in: knobRect)
-        } else {
-            // End cursor: circular knob centered at bottom of stem, vertical stem extending up to top of bounds
-            let stemMaxY = rect.maxY
-            let stemMinY = stemMaxY - stemHeight
-            let stemRect = CGRect(x: centerX - stemWidth / 2, y: stemMinY, width: stemWidth, height: stemHeight)
-            path.addRect(stemRect)
-
-            let knobCenterY = stemMinY
-            let knobRect = CGRect(x: centerX - knobRadius, y: knobCenterY - knobRadius, width: knobRadius * 2, height: knobRadius * 2)
-            path.addEllipse(in: knobRect)
-        }
-
-        context.addPath(path)
-        context.fillPath()
-        context.restoreGState()
+        // Selection cursors are rendered exclusively by SelectionCursorOverlayView directly in view space.
+        // This guarantees handles are never obscured by PDF text, scanned bitmaps, OCR layers, or highlight annotations,
+        // and eliminates PDFKit annotation tile clipping and subpixel shift artifacts.
     }
 }
 
 public typealias KnobAnnotation = CursorHandleAnnotation
+
+/// Native AppKit overlay that renders selection cursor handles on top of the PDFView.
+/// Because it sits above PDFView's documentView/scrollview, it can NEVER be obscured
+/// by PDF page content, scanned bitmaps, OCR layers, or highlight annotations.
+final class SelectionCursorOverlayView: NSView {
+    weak var pdfView: InteractivePDFView?
+
+    struct HandleState {
+        var page: PDFPage
+        var point: CGPoint // page coordinates (center of line)
+        var lineHeight: CGFloat
+        var color: NSColor
+        var isStart: Bool
+    }
+
+    private var startHandle: HandleState?
+    private var endHandle: HandleState?
+
+    init(pdfView: InteractivePDFView) {
+        self.pdfView = pdfView
+        super.init(frame: pdfView.bounds)
+        self.wantsLayer = true
+        self.layer?.masksToBounds = false
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        self.wantsLayer = true
+        self.layer?.masksToBounds = false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Transparent to mouse events so InteractivePDFView receives all clicks and drags
+        return nil
+    }
+
+    func setHandle(page: PDFPage, point: CGPoint, lineHeight: CGFloat, color: NSColor, isStart: Bool) {
+        let handle = HandleState(
+            page: page,
+            point: point,
+            lineHeight: lineHeight,
+            color: color,
+            isStart: isStart
+        )
+        if isStart {
+            startHandle = handle
+        } else {
+            endHandle = handle
+        }
+        needsDisplay = true
+    }
+
+    func clear() {
+        if startHandle != nil || endHandle != nil {
+            startHandle = nil
+            endHandle = nil
+            needsDisplay = true
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let pdfView, let doc = pdfView.document else { return }
+
+        let visiblePages = pdfView.visiblePages
+        guard !visiblePages.isEmpty else { return }
+
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        for handle in [startHandle, endHandle].compactMap({ $0 }) {
+            guard visiblePages.contains(handle.page) else { continue }
+
+            let dims = InteractivePDFView.handleDimensions(for: handle.lineHeight, scale: pdfView.scaleFactor)
+            let stemHeight = dims.stemHeight
+            let stemWidth = dims.stemWidth
+            let knobRadius = dims.knobRadius
+
+            let centerPage = handle.point
+            let topPage = CGPoint(x: centerPage.x, y: centerPage.y + stemHeight / 2)
+            let bottomPage = CGPoint(x: centerPage.x, y: centerPage.y - stemHeight / 2)
+
+            let centerView = pdfView.convert(centerPage, from: handle.page)
+            let topView = pdfView.convert(topPage, from: handle.page)
+            let bottomView = pdfView.convert(bottomPage, from: handle.page)
+
+            let stemMinY = min(topView.y, bottomView.y)
+            let stemMaxY = max(topView.y, bottomView.y)
+            let stemCenterX = centerView.x
+
+            // For start handle, knob is at the top of the stem; for end handle, knob is at the bottom of the stem
+            let knobCenterY = handle.isStart ? (topView.y >= bottomView.y ? stemMaxY : stemMinY)
+                                             : (topView.y >= bottomView.y ? stemMinY : stemMaxY)
+            let knobCenter = CGPoint(x: stemCenterX, y: knobCenterY)
+
+            ctx.saveGState()
+            ctx.setFillColor(handle.color.cgColor)
+
+            let path = CGMutablePath()
+            let stemRect = CGRect(
+                x: stemCenterX - stemWidth / 2,
+                y: stemMinY,
+                width: stemWidth,
+                height: max(1.0, stemMaxY - stemMinY)
+            )
+            path.addRect(stemRect)
+
+            let knobRect = CGRect(
+                x: knobCenter.x - knobRadius,
+                y: knobCenter.y - knobRadius,
+                width: knobRadius * 2,
+                height: knobRadius * 2
+            )
+            path.addEllipse(in: knobRect)
+
+            ctx.addPath(path)
+            ctx.fillPath()
+            ctx.restoreGState()
+        }
+    }
+}
 
 public enum PDFHighlightResolver {
     public static func sortInReadingOrder(_ rects: [HighlightRect]) -> [HighlightRect] {
@@ -1302,6 +1389,22 @@ public final class InteractivePDFView: PDFView {
     }
 
     private var toolbarHostingView: ToolbarHostingView<AnyView>?
+    private var selectionCursorOverlay: SelectionCursorOverlayView?
+
+    private func ensureSelectionCursorOverlay() {
+        if selectionCursorOverlay == nil {
+            let overlay = SelectionCursorOverlayView(pdfView: self)
+            overlay.frame = bounds
+            overlay.autoresizingMask = [.width, .height]
+            addSubview(overlay, positioned: .above, relativeTo: nil)
+            selectionCursorOverlay = overlay
+        } else if let overlay = selectionCursorOverlay, overlay.superview !== self {
+            addSubview(overlay, positioned: .above, relativeTo: nil)
+        }
+        if let toolbar = toolbarHostingView, toolbar.superview === self {
+            addSubview(toolbar, positioned: .above, relativeTo: nil)
+        }
+    }
     private var scrollObserver: NSObjectProtocol?
     var onScroll: (() -> Void)?
     private var lastClipOrigin: CGPoint? = nil
@@ -1526,6 +1629,7 @@ public final class InteractivePDFView: PDFView {
                 if self.toolbarHostingView?.isHidden == false {
                     self.updateToolbarPosition()
                 }
+                self.selectionCursorOverlay?.needsDisplay = true
                 if let clip = self.pdfScrollView?.contentView {
                     let currentOrigin = clip.bounds.origin
                     if let last = self.lastClipOrigin {
@@ -1574,6 +1678,10 @@ public final class InteractivePDFView: PDFView {
             setupScrollObserver()
         }
         applySubtlePageSeparators()
+        if let overlay = selectionCursorOverlay {
+            overlay.frame = bounds
+            overlay.needsDisplay = true
+        }
         updateToolbarPosition()
     }
 
@@ -2952,7 +3060,7 @@ public final class InteractivePDFView: PDFView {
     }
 
     public static func handleDimensions(for lineHeight: CGFloat, scale: CGFloat = 1.0) -> (stemWidth: CGFloat, stemHeight: CGFloat, knobRadius: CGFloat, knobSize: CGFloat) {
-        let ratio: CGFloat = 1.4
+        let ratio: CGFloat = 1.2
         let rawHeight = lineHeight > 0 ? min(lineHeight, 28.0) : 14.0
         let stemHeight = max(12.0, rawHeight * ratio)
         let stemWidth: CGFloat = 2.0
@@ -2966,6 +3074,15 @@ public final class InteractivePDFView: PDFView {
         let stemWidth = dims.stemWidth
         let stemHeight = dims.stemHeight
         let knobRadius = dims.knobRadius
+
+        ensureSelectionCursorOverlay()
+        selectionCursorOverlay?.setHandle(
+            page: page,
+            point: point,
+            lineHeight: lineHeight,
+            color: cursorColor,
+            isStart: isStart
+        )
 
         let pageBounds = page.bounds(for: .cropBox)
         let pad: CGFloat = 1.0
@@ -3279,6 +3396,7 @@ public final class InteractivePDFView: PDFView {
     }
 
     func clearHandles() {
+        selectionCursorOverlay?.clear()
         guard let document else { return }
         for index in 0..<document.pageCount {
             guard let page = document.page(at: index) else { continue }

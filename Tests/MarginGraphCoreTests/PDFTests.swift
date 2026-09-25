@@ -65,6 +65,7 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(try database.cardsForDocument(md5: "deadbeef").map(\.id), [card.id])
     }
 
+
     func testHighlightResolverUsesStoredRectsAndPDFTextLines() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("MarginGraph-highlight-\(UUID().uuidString).pdf")
@@ -1157,10 +1158,10 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(sHandle.bounds.midX, CGFloat(lineRect.x), accuracy: 1.0, "Start handle center must align with start point x")
         XCTAssertEqual(eHandle.bounds.midX, CGFloat(lineRect.x + lineRect.width), accuracy: 1.0, "End handle center must align with end point x")
 
-        // Fixed ratio of line height: stemHeight = max(12.0, lineHeight * 1.4)
-        let expectedHeight = max(12.0, CGFloat(lineRect.height) * 1.4)
-        XCTAssertEqual(sHandle.stemHeight, expectedHeight, accuracy: 0.1, "Stem height should be 1.4x line height")
-        XCTAssertEqual(eHandle.stemHeight, expectedHeight, accuracy: 0.1, "Stem height should be 1.4x line height")
+        // Fixed ratio of line height: stemHeight = max(12.0, lineHeight * 1.2)
+        let expectedHeight = max(12.0, CGFloat(lineRect.height) * 1.2)
+        XCTAssertEqual(sHandle.stemHeight, expectedHeight, accuracy: 0.1, "Stem height should be 1.2x line height")
+        XCTAssertEqual(eHandle.stemHeight, expectedHeight, accuracy: 0.1, "Stem height should be 1.2x line height")
 
         // Edge containment
         let crop = page.bounds(for: .cropBox)
@@ -1173,21 +1174,21 @@ final class PDFTests: XCTestCase {
     }
 
     func testHandleDimensionsBoundedAtExtremeScales() throws {
-        // 1. Line height 16.0: stemHeight is 16 * 1.4 = 22.4pt
+        // 1. Line height 16.0: stemHeight is 16 * 1.2 = 19.2pt
         let dims16 = InteractivePDFView.handleDimensions(for: 16.0, scale: 1.0)
-        XCTAssertEqual(dims16.stemHeight, 22.4, accuracy: 0.01)
+        XCTAssertEqual(dims16.stemHeight, 19.2, accuracy: 0.01)
         XCTAssertEqual(dims16.stemWidth, 2.0)
         XCTAssertEqual(dims16.knobRadius, 3.2, accuracy: 0.01)
         XCTAssertEqual(dims16.knobSize, dims16.knobRadius)
 
-        // 2. Line height 10.0: stemHeight is max(12.0, 10.0 * 1.4) = 14.0pt
+        // 2. Line height 10.0: stemHeight is max(12.0, 10.0 * 1.2) = 12.0pt
         let dims10 = InteractivePDFView.handleDimensions(for: 10.0, scale: 0.1)
-        XCTAssertEqual(dims10.stemHeight, 14.0, accuracy: 0.01)
+        XCTAssertEqual(dims10.stemHeight, 12.0, accuracy: 0.01)
         XCTAssertEqual(dims10.knobRadius, 3.2, accuracy: 0.01)
 
-        // 3. Line height 24.0: stemHeight is 24.0 * 1.4 = 33.6pt
+        // 3. Line height 24.0: stemHeight is 24.0 * 1.2 = 28.8pt
         let dims24 = InteractivePDFView.handleDimensions(for: 24.0, scale: 3.0)
-        XCTAssertEqual(dims24.stemHeight, 33.6, accuracy: 0.01)
+        XCTAssertEqual(dims24.stemHeight, 28.8, accuracy: 0.01)
         XCTAssertEqual(dims24.knobRadius, 3.2, accuracy: 0.01)
     }
 

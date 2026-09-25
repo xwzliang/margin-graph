@@ -2377,7 +2377,7 @@ public struct DocumentCardView: View {
     private func loadThumbnailAsync() {
         let path = document.filePath
         let type = docType
-        guard !path.isEmpty, !path.contains("Library/Containers/QReader.MarginStudyMac") else { return }
+        guard !path.isEmpty else { return }
         if let cached = coverThumbnailCache.object(forKey: path as NSString) {
             loadedThumbnail = cached
             return
@@ -2397,8 +2397,7 @@ public struct DocumentCardView: View {
         if let cached = coverThumbnailCache.object(forKey: key) {
             return cached
         }
-        guard !path.contains("Library/Containers/QReader.MarginStudyMac"),
-              FileManager.default.fileExists(atPath: path) else { return nil }
+        guard FileManager.default.fileExists(atPath: path) else { return nil }
         let url = URL(fileURLWithPath: path)
         if docType == "video" {
             if let img = MediaDocumentHelper.generatePosterFrame(url: url) {
