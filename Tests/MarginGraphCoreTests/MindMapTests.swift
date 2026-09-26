@@ -878,4 +878,48 @@ final class MindMapTests: XCTestCase {
         let emptyMatches = allCards.filter { MindMapSearchMatcher.matches(card: $0, query: "   ", scope: .all) }
         XCTAssertEqual(emptyMatches.count, 4)
     }
+
+    func testMultiParagraphCardHeightAndNonOverlappingLayout() throws {
+        let topicID = UUID()
+        let card1Text = """
+        There’s an episode of Seinfeld where Jerry goes to pick up a rental car. He’d reserved a certain model. But the agent at the counter says they don’t have any of those models available.
+
+        Jerry protests, “But the reservation keeps the car here. That’s why you have the reservation.”
+
+        “I think I know why we have reservations,” says the agent.
+
+        “I don’t think you do,” says Jerry. “If you did, I’d have a car. See, you know how to take the reservation, you just don't know how to hold the reservation. And that’s really the most important part of the reservation–the holding.”
+        """
+
+        let card2Text = """
+        A short story almost always sticks to one point of view. Certainly, there’s nothing illegal about incorporating another POV in a short story. Just know that when you do, the reader expects a full treatment of that character. This will begin to strain the story because it will want to push beyond its outer boundaries toward the novelette.
+
+        The point of view in a short story is usually one of three types
+        """
+
+        var card1 = NoteCard(id: UUID(), topicId: topicID, title: "", highlightText: card1Text)
+        card1.mindPos = CGPoint(x: 40.0, y: 40.0)
+
+        var card2 = NoteCard(id: UUID(), topicId: topicID, title: "", highlightText: card2Text)
+        // Simulate stale/underestimated coordinates from SQLite (where card2 was placed at 388.5)
+        card2.mindPos = CGPoint(x: 40.0, y: 388.5)
+
+        let h1 = TreeLayout.estimatedCardHeight(for: card1, width: 220)
+        let h2 = TreeLayout.estimatedCardHeight(for: card2, width: 220)
+
+        // Card 1 has 4 paragraphs and over 550 characters, must be estimated accurately >= 340 pt
+        XCTAssertGreaterThanOrEqual(h1, 340.0)
+        XCTAssertGreaterThanOrEqual(h2, 220.0)
+
+        let layout = TreeLayout.layout(cards: [card1, card2])
+        guard let frame1 = layout.frames[card1.id], let frame2 = layout.frames[card2.id] else {
+            XCTFail("Frames missing for cards")
+            return
+        }
+
+        // Ensure no intersection and guaranteed minimum vertical separation
+        XCTAssertFalse(frame1.intersects(frame2), "Card 1 and Card 2 must not intersect")
+        XCTAssertGreaterThanOrEqual(frame2.minY, frame1.maxY + 28.0, "Card 2 must have at least verticalSpacing (28pt) separation below Card 1")
+    }
 }
+

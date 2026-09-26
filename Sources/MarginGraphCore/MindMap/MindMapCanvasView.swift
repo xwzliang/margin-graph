@@ -1234,7 +1234,7 @@ public struct MindMapCanvasView: View {
                     for c in targetColumnCards {
                         let cardH = TreeLayout.estimatedCardHeight(for: c, width: 220)
                         batchUpdates.append((id: c.id, position: CGPoint(x: targetBaseX, y: curY)))
-                        curY += cardH + 28.0
+                        curY += cardH + 36.0
                     }
 
                     // If card was moved from another column, re-pack that source column as well
@@ -1247,7 +1247,7 @@ public struct MindMapCanvasView: View {
                         for sc in remainingSrcCards {
                             let scH = TreeLayout.estimatedCardHeight(for: sc, width: 220)
                             batchUpdates.append((id: sc.id, position: CGPoint(x: srcBaseX, y: srcY)))
-                            srcY += scH + 28.0
+                            srcY += scH + 36.0
                         }
                     }
 
