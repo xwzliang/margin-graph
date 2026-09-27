@@ -586,6 +586,14 @@ Structure each entry concisely with actionable rules:
   - **Rule**:
     1. **Native Text Layout Measurement with `NSAttributedString.boundingRect`**: In `TreeLayout.estimatedCardHeight`, measure text using native font geometry (`boundingRect(with:options:attributes:)` with `[.usesLineFragmentOrigin, .usesFontLeading]`, font size 11.5pt regular/bold, line spacing 2). In headless/non-AppKit environments, split on `\n` to measure explicit lines and paragraph breaks accurately.
     2. **Standard 36pt Vertical Spacing Margin**: Configure `TreeLayoutConfiguration.verticalSpacing = 36.0` and standardize all canvas column re-packing and dynamic card creation offsets on `TreeLayout.estimatedCardHeight(for: card, width: 220) + 36.0`. This guarantees clean 36pt separation between unselected cards and maintains a minimum 8pt buffer when the upper card is selected and expands downward with its 28pt docked action bar.
+- **Standalone Native WebKit EBook Conversion Engine (`EPUBConverter`)**:
+  - **Trap**: Relying on external tools like `ebook-convert` (part of Calibre, which is >1.0 GB and GPLv3-licensed) or Python (`pymupdf`) requires end-users to install Homebrew or Python packages before opening EPUB books. On clean macOS systems without those packages, imports fail with missing converter errors.
+  - **Rule**:
+    1. **Zero-Dependency Native Pipeline**: Use macOS built-in `/usr/bin/unzip`, OPF/NCX XML parsing, and WebKit (`WKWebView.createPDF(configuration:)`) to convert EPUB chapters into a paginated vector PDF with zero external installations and 0MB added app bloat.
+    2. **TOC & Vector Text Preservation**: Parse `toc.ncx` or `nav.xhtml` to build an interactive `PDFOutline` tree assigned to `masterPDF.outlineRoot`, mapping chapters to discrete page destinations for instant Table of Contents navigation and bi-directional jumping.
+    3. **MainActor & Thread-Safe Synchronization**: Since `WKWebView` must be created and driven on the main thread, execute chapter rendering through `MainActor.assumeIsolated` and bridge results to callers via a thread-safe container (`ThreadSafeBox`), allowing synchronous converter calls from both the main UI thread and background sync queues without deadlocks.
+    4. **Multi-Tier Cascade**: Retain PyMuPDF and Calibre as optional accelerators if already present on the user's machine, but always fall back automatically to the built-in native WebKit pipeline so the application operates 100% standalone out of the box.
+
 
 
 

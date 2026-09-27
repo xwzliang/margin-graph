@@ -89,4 +89,30 @@ final class EPUBConverterTests: XCTestCase {
         XCTAssertEqual(cardsForDoc.count, 1)
         XCTAssertEqual(cardsForDoc.first?.title, "Crucial Excerpt")
     }
+
+    func testNativeWebKitEPUBConversionStandalone() throws {
+        let sampleEPUBPath = "/Users/broliang/Documents/book/HowtoWriteShortStoriesAndUseThemtoFurtherYour--JamesScottBell--2016--CompendiumPress--955df5aa080edfb8429de639bf271b11--Anna_sArchive.epub"
+        guard FileManager.default.fileExists(atPath: sampleEPUBPath) else {
+            return
+        }
+
+        let epubURL = URL(fileURLWithPath: sampleEPUBPath)
+        let targetPDF = FileManager.default.temporaryDirectory.appendingPathComponent("test_native_\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: targetPDF) }
+
+        try EPUBConverter.convertWithNativeWebKit(epubURL: epubURL, targetPDF: targetPDF)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: targetPDF.path))
+        let doc = PDFDocument(url: targetPDF)
+        XCTAssertNotNil(doc)
+        XCTAssertGreaterThan(doc?.pageCount ?? 0, 10, "Native WebKit conversion should render all chapters")
+
+        // Verify outline/TOC was generated
+        XCTAssertNotNil(doc?.outlineRoot)
+        XCTAssertGreaterThan(doc?.outlineRoot?.numberOfChildren ?? 0, 5, "Native WebKit conversion should build Table of Contents")
+
+        // Verify selectable text exists on chapters
+        let pageText = doc?.page(at: 4)?.string ?? ""
+        XCTAssertTrue(pageText.contains("SHORT STORY") || pageText.contains("Seinfeld"), "Vector text must be selectable and intact")
+    }
 }
