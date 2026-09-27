@@ -157,8 +157,29 @@ public struct DocumentTabBarView: View {
         switch docType {
         case "video": return "video.fill"
         case "audio": return "waveform"
-        case "epub": return "book.closed.fill"
+        case "comic": return "photo.stack.fill"
+        case "markdown": return "arrow.down.doc.fill"
+        case "text": return "doc.plaintext.fill"
+        case "rtf": return "doc.richtext.fill"
+        case "html": return "safari.fill"
+        case "epub", "mobi", "fb2": return "book.closed.fill"
         default: return "doc.text.fill"
+        }
+    }
+
+    private func docIconColor(for docType: String) -> Color {
+        switch docType {
+        case "video": return Color(red: 0.15, green: 0.45, blue: 0.85)
+        case "audio": return Color(red: 0.12, green: 0.60, blue: 0.42)
+        case "comic": return Color(red: 0.88, green: 0.28, blue: 0.55)
+        case "mobi": return Color(red: 0.35, green: 0.55, blue: 0.85)
+        case "fb2": return Color(red: 0.75, green: 0.45, blue: 0.15)
+        case "text": return Color(red: 0.45, green: 0.45, blue: 0.50)
+        case "markdown": return Color(red: 0.20, green: 0.65, blue: 0.70)
+        case "rtf": return Color(red: 0.50, green: 0.35, blue: 0.75)
+        case "html": return Color(red: 0.20, green: 0.60, blue: 0.35)
+        case "epub": return Color.orange
+        default: return Color(red: 0.85, green: 0.35, blue: 0.25)
         }
     }
 
@@ -170,25 +191,9 @@ public struct DocumentTabBarView: View {
 
         HStack(spacing: 6) {
             // Icon
-            Group {
-                if docType == "video" {
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
-                } else if docType == "audio" {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color(red: 0.12, green: 0.60, blue: 0.42))
-                } else if docType == "epub" {
-                    Image(systemName: "book.closed.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color.orange)
-                } else {
-                    Image(systemName: "doc.text.fill")
-                        .font(.system(size: 10))
-                        .foregroundStyle(Color(red: 0.85, green: 0.35, blue: 0.25))
-                }
-            }
+            Image(systemName: docIconName(for: doc))
+                .font(.system(size: 10))
+                .foregroundStyle(docIconColor(for: docType))
 
             // Title
             Text(doc.title)

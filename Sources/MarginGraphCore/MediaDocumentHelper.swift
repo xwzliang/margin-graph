@@ -8,7 +8,19 @@ import AppKit
 public enum MediaDocumentHelper {
     public static let supportedVideoExtensions: Set<String> = ["mp4", "mov", "m4v", "mkv", "avi", "webm"]
     public static let supportedAudioExtensions: Set<String> = ["mp3", "m4a", "wav", "aac", "flac", "aiff", "caf"]
-    public static let supportedDocumentExtensions: Set<String> = ["pdf", "epub", "marginpkg", "marginnotes", "sqlite"]
+    public static let supportedEBookExtensions: Set<String> = [
+        "epub",
+        "cbz", "cbr",
+        "fb2", "zfb2",
+        "txt", "text",
+        "md", "markdown",
+        "rtf", "rtfd",
+        "html", "htm", "xhtml", "webarchive",
+        "mobi", "prc"
+    ]
+    public static let supportedDocumentExtensions: Set<String> = Set([
+        "pdf", "marginpkg", "marginnotes", "sqlite"
+    ]).union(supportedEBookExtensions)
 
     public static func documentType(for url: URL) -> String {
         let ext = url.pathExtension.lowercased()
@@ -16,11 +28,30 @@ public enum MediaDocumentHelper {
             return "video"
         } else if supportedAudioExtensions.contains(ext) {
             return "audio"
+        } else if ext == "cbz" || ext == "cbr" {
+            return "comic"
+        } else if ext == "fb2" || ext == "zfb2" {
+            return "fb2"
+        } else if ext == "mobi" || ext == "prc" {
+            return "mobi"
+        } else if ext == "txt" || ext == "text" {
+            return "text"
+        } else if ext == "md" || ext == "markdown" {
+            return "markdown"
+        } else if ext == "rtf" || ext == "rtfd" {
+            return "rtf"
+        } else if ext == "html" || ext == "htm" || ext == "xhtml" || ext == "webarchive" {
+            return "html"
         } else if ext == "epub" {
             return "epub"
         } else {
             return "pdf"
         }
+    }
+
+    public static func isEBook(url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        return supportedEBookExtensions.contains(ext)
     }
 
     public static func isMedia(url: URL) -> Bool {

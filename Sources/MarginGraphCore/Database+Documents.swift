@@ -115,7 +115,13 @@ public extension Database {
                     continue
                 }
 
-                let docType = MediaDocumentHelper.documentType(for: fileURL)
+                var docType = MediaDocumentHelper.documentType(for: fileURL)
+                let sidecarFormat = fileURL.deletingPathExtension().appendingPathExtension("format")
+                if docType == "pdf", FileManager.default.fileExists(atPath: sidecarFormat.path),
+                   let fmt = try? String(contentsOf: sidecarFormat, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !fmt.isEmpty {
+                    docType = MediaDocumentHelper.documentType(for: URL(fileURLWithPath: "doc." + fmt))
+                }
+
                 if docType == "video" || docType == "audio" {
                     let docMD5 = md5 ?? MediaDocumentHelper.computeFileMD5(url: fileURL)
                     let duration = MediaDocumentHelper.mediaDuration(url: fileURL)

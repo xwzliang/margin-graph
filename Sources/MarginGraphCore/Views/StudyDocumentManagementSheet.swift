@@ -337,7 +337,12 @@ public struct StudyDocumentManagementSheet: View {
         switch docType {
         case "video": return "video.fill"
         case "audio": return "waveform"
-        case "epub": return "book.closed.fill"
+        case "comic": return "photo.stack.fill"
+        case "markdown": return "arrow.down.doc.fill"
+        case "text": return "doc.plaintext.fill"
+        case "rtf": return "doc.richtext.fill"
+        case "html": return "safari.fill"
+        case "epub", "mobi", "fb2": return "book.closed.fill"
         default: return "doc.text.fill"
         }
     }
@@ -347,6 +352,13 @@ public struct StudyDocumentManagementSheet: View {
         switch docType {
         case "video": return Color(red: 0.15, green: 0.45, blue: 0.85)
         case "audio": return Color(red: 0.12, green: 0.60, blue: 0.42)
+        case "comic": return Color(red: 0.88, green: 0.28, blue: 0.55)
+        case "mobi": return Color(red: 0.35, green: 0.55, blue: 0.85)
+        case "fb2": return Color(red: 0.75, green: 0.45, blue: 0.15)
+        case "text": return Color(red: 0.45, green: 0.45, blue: 0.50)
+        case "markdown": return Color(red: 0.20, green: 0.65, blue: 0.70)
+        case "rtf": return Color(red: 0.50, green: 0.35, blue: 0.75)
+        case "html": return Color(red: 0.20, green: 0.60, blue: 0.35)
         case "epub": return Color.orange
         default: return Color(red: 0.85, green: 0.35, blue: 0.25)
         }
@@ -359,8 +371,22 @@ public struct StudyDocumentManagementSheet: View {
             Text("Video")
         } else if docType == "audio" {
             Text("Audio")
+        } else if docType == "comic" {
+            Text("Comic Book (\(doc.totalPages) pages)")
         } else if docType == "epub" {
-            Text("EPUB Document")
+            Text("EPUB Document (\(doc.totalPages) pages)")
+        } else if docType == "mobi" {
+            Text("MOBI EBook (\(doc.totalPages) pages)")
+        } else if docType == "fb2" {
+            Text("FB2 Book (\(doc.totalPages) pages)")
+        } else if docType == "text" {
+            Text("Text Book (\(doc.totalPages) pages)")
+        } else if docType == "markdown" {
+            Text("Markdown Book (\(doc.totalPages) pages)")
+        } else if docType == "rtf" {
+            Text("Rich Text (\(doc.totalPages) pages)")
+        } else if docType == "html" {
+            Text("Web Book (\(doc.totalPages) pages)")
         } else {
             Text("\(doc.totalPages) pages")
         }

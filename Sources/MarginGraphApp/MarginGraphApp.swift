@@ -648,10 +648,10 @@ final class AppModel: ObservableObject {
         let extensions = [
             "mp4", "mov", "m4v", "mkv", "avi", "webm",
             "mp3", "m4a", "wav", "aac", "flac", "aiff", "caf",
-            "pdf", "epub",
+            "pdf", "epub", "cbz", "cbr", "fb2", "zfb2", "txt", "text", "md", "markdown", "rtf", "rtfd", "html", "htm", "xhtml", "webarchive", "mobi", "prc",
             "marginpkg", "marginnotes", "sqlite"
         ]
-        var types: [UTType] = [.pdf, .movie, .video, .audio, .mpeg4Movie, .quickTimeMovie, .mp3, .wav, .aiff, .epub]
+        var types: [UTType] = [.pdf, .movie, .video, .audio, .mpeg4Movie, .quickTimeMovie, .mp3, .wav, .aiff, .epub, .plainText, .rtf, .rtfd, .html]
         for ext in extensions {
             if let t = UTType(filenameExtension: ext), !types.contains(t) {
                 types.append(t)

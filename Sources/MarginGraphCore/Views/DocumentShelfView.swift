@@ -2125,10 +2125,16 @@ public struct DocumentCardView: View {
     @State private var loadedThumbnail: NSImage? = nil
 
     private var docType: String {
-        if !document.documentType.isEmpty {
+        if !document.documentType.isEmpty && document.documentType != "pdf" {
             return document.documentType
         }
-        return MediaDocumentHelper.documentType(for: URL(fileURLWithPath: document.filePath))
+        let url = URL(fileURLWithPath: document.filePath)
+        let sidecarFormat = url.deletingPathExtension().appendingPathExtension("format")
+        if FileManager.default.fileExists(atPath: sidecarFormat.path),
+           let fmt = try? String(contentsOf: sidecarFormat, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !fmt.isEmpty {
+            return MediaDocumentHelper.documentType(for: URL(fileURLWithPath: "doc." + fmt))
+        }
+        return MediaDocumentHelper.documentType(for: url)
     }
 
     private var badgeColor: Color {
@@ -2139,6 +2145,20 @@ public struct DocumentCardView: View {
             return Color(red: 0.12, green: 0.60, blue: 0.42) // Emerald
         case "epub":
             return Color.orange
+        case "comic":
+            return Color(red: 0.88, green: 0.28, blue: 0.55) // Magenta/Pink for Comics
+        case "mobi":
+            return Color(red: 0.35, green: 0.55, blue: 0.85) // Steel Blue
+        case "fb2":
+            return Color(red: 0.75, green: 0.45, blue: 0.15) // Amber/Bronze
+        case "text":
+            return Color(red: 0.45, green: 0.45, blue: 0.50) // Slate
+        case "markdown":
+            return Color(red: 0.20, green: 0.65, blue: 0.70) // Cyan/Teal
+        case "rtf":
+            return Color(red: 0.50, green: 0.35, blue: 0.75) // Purple
+        case "html":
+            return Color(red: 0.20, green: 0.60, blue: 0.35) // Forest Green
         default:
             return MarginNoteTheme.badgePDFRed
         }
@@ -2180,6 +2200,26 @@ public struct DocumentCardView: View {
                                     Image(systemName: "waveform.circle.fill")
                                         .font(.system(size: 38))
                                         .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "comic" {
+                                    Image(systemName: "photo.stack.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "markdown" {
+                                    Image(systemName: "arrow.down.doc.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "text" {
+                                    Image(systemName: "doc.plaintext.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "rtf" {
+                                    Image(systemName: "doc.richtext.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "html" {
+                                    Image(systemName: "safari.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
                                 } else {
                                     Image(systemName: "book.closed.fill")
                                         .font(.system(size: 38))
@@ -2207,6 +2247,27 @@ public struct DocumentCardView: View {
                                 Image(systemName: "waveform")
                                     .font(.system(size: 7.5))
                                 Text("AUDIO")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "comic" {
+                                Text("COMIC")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "mobi" {
+                                Text("MOBI")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "fb2" {
+                                Text("FB2")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "text" {
+                                Text("TXT")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "markdown" {
+                                Text("MD")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "rtf" {
+                                Text("RTF")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "html" {
+                                Text("HTML")
                                     .font(.system(size: 8.5, weight: .bold))
                             } else if docType == "epub" {
                                 Text("EPUB")
@@ -2404,10 +2465,10 @@ public struct DocumentCardView: View {
                 coverThumbnailCache.setObject(img, forKey: key)
                 return img
             }
-        } else if docType == "pdf" || docType == "epub" {
+        } else if docType == "pdf" || MediaDocumentHelper.isEBook(url: url) {
             let pdfURL: URL?
-            if docType == "epub" && path.lowercased().hasSuffix(".epub") {
-                pdfURL = try? EPUBConverter.ensureConvertedPDF(for: url).pdfURL
+            if MediaDocumentHelper.isEBook(url: url) {
+                pdfURL = try? EBookConverter.ensureConvertedPDF(for: url).pdfURL
             } else {
                 pdfURL = url
             }

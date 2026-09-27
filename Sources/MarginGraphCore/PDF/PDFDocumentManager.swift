@@ -26,16 +26,16 @@ public final class PDFDocumentManager: @unchecked Sendable {
     public let outline: [PDFOutlineItem]
 
     public init(url: URL, md5: String? = nil) throws {
-        let isEPUB = url.pathExtension.lowercased() == "epub"
+        let isEBook = MediaDocumentHelper.isEBook(url: url)
         let effectiveURL: URL
-        let epubMD5: String?
-        if isEPUB {
-            let converted = try EPUBConverter.ensureConvertedPDF(for: url)
+        let ebookMD5: String?
+        if isEBook {
+            let converted = try EBookConverter.ensureConvertedPDF(for: url)
             effectiveURL = converted.pdfURL
-            epubMD5 = converted.md5
+            ebookMD5 = converted.md5
         } else {
             effectiveURL = url
-            epubMD5 = nil
+            ebookMD5 = nil
         }
 
         guard let document = PDFDocument(url: effectiveURL) else {
@@ -47,8 +47,8 @@ public final class PDFDocumentManager: @unchecked Sendable {
 
         if let md5, !md5.isEmpty {
             self.md5 = md5
-        } else if let epubMD5, !epubMD5.isEmpty {
-            self.md5 = epubMD5
+        } else if let ebookMD5, !ebookMD5.isEmpty {
+            self.md5 = ebookMD5
         } else {
             let sidecar1 = url.appendingPathExtension("md5")
             let sidecar2 = url.deletingPathExtension().appendingPathExtension("md5")
