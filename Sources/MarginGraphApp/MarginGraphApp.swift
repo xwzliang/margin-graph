@@ -804,7 +804,7 @@ final class AppModel: ObservableObject {
         // Layout position adjacent to existing cards
         let lastPos = mindMapCards.last?.mindPos ?? CGPoint(x: 100, y: 100)
         let lastH = mindMapCards.last.map { TreeLayout.estimatedCardHeight(for: $0, width: 220) } ?? 100.0
-        let mindPos = CGPoint(x: lastPos.x, y: lastPos.y + lastH + 36.0)
+        let mindPos = CGPoint(x: lastPos.x, y: lastPos.y + lastH + 56.0)
 
         // Choose next distinct color index so notes are color-coded on the timeline
         let nextColor = (mindMapCards.count) % 6
@@ -1484,7 +1484,7 @@ final class AppModel: ObservableObject {
         if let lastChild = existingChildren.last {
             if let ly = lastChild.mindPos?.y {
                 let lastH = TreeLayout.estimatedCardHeight(for: lastChild, width: 220)
-                targetMindPos = CGPoint(x: lastChild.mindPos?.x ?? 0, y: ly + lastH + 36.0)
+                targetMindPos = CGPoint(x: lastChild.mindPos?.x ?? 0, y: ly + lastH + 56.0)
             }
             targetCreatedAt = lastChild.createdAt.addingTimeInterval(1.0)
         } else {
@@ -1544,7 +1544,7 @@ final class AppModel: ObservableObject {
             } else {
                 if let sy = sibling.mindPos?.y {
                     let sibH = TreeLayout.estimatedCardHeight(for: sibling, width: 220)
-                    targetMindPos = CGPoint(x: sibling.mindPos?.x ?? 0, y: sy + sibH + 36.0)
+                    targetMindPos = CGPoint(x: sibling.mindPos?.x ?? 0, y: sy + sibH + 56.0)
                 }
                 targetCreatedAt = sibling.createdAt.addingTimeInterval(1.0)
             }

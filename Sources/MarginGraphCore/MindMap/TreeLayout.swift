@@ -13,7 +13,7 @@ public struct TreeLayoutConfiguration: Sendable {
     public init(
         nodeSize: CGSize = CGSize(width: 220, height: 120),
         horizontalSpacing: CGFloat = 80,
-        verticalSpacing: CGFloat = 36
+        verticalSpacing: CGFloat = 56
     ) {
         self.nodeSize = nodeSize
         self.horizontalSpacing = horizontalSpacing

@@ -592,7 +592,7 @@ public struct MindMapCanvasView: View {
                 .shadow(color: isBeingDragged ? Color.black.opacity(0.25) : Color.clear, radius: 10, y: 5)
                 .scaleEffect(viewport.zoomScale)
                 .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale)
-                .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isCurrentMatch ? 90 : (isTargeted ? 50 : 1)))
+                .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isCurrentMatch ? 90 : (isCardSelected ? 60 : (isTargeted ? 50 : 1))))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
                 .gesture(
                     nodeDrag(card: card, initialFrame: staticFrames[card.id] ?? frame, staticFrames: staticFrames),
@@ -1234,7 +1234,7 @@ public struct MindMapCanvasView: View {
                     for c in targetColumnCards {
                         let cardH = TreeLayout.estimatedCardHeight(for: c, width: 220)
                         batchUpdates.append((id: c.id, position: CGPoint(x: targetBaseX, y: curY)))
-                        curY += cardH + 36.0
+                        curY += cardH + 56.0
                     }
 
                     // If card was moved from another column, re-pack that source column as well
@@ -1247,7 +1247,7 @@ public struct MindMapCanvasView: View {
                         for sc in remainingSrcCards {
                             let scH = TreeLayout.estimatedCardHeight(for: sc, width: 220)
                             batchUpdates.append((id: sc.id, position: CGPoint(x: srcBaseX, y: srcY)))
-                            srcY += scH + 36.0
+                            srcY += scH + 56.0
                         }
                     }
 
