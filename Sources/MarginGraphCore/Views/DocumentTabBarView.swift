@@ -159,10 +159,14 @@ public struct DocumentTabBarView: View {
         case "audio": return "waveform"
         case "comic": return "photo.stack.fill"
         case "markdown": return "arrow.down.doc.fill"
-        case "text": return "doc.plaintext.fill"
-        case "rtf": return "doc.richtext.fill"
+        case "text", "rst": return "doc.plaintext.fill"
+        case "rtf", "djvu": return "doc.richtext.fill"
         case "html": return "safari.fill"
-        case "epub", "mobi", "fb2": return "book.closed.fill"
+        case "chm": return "questionmark.folder.fill"
+        case "latex": return "function"
+        case "org": return "checklist"
+        case "asciidoc": return "text.alignleft"
+        case "epub", "mobi", "azw3", "pdb", "fb2": return "book.closed.fill"
         default: return "doc.text.fill"
         }
     }
@@ -173,6 +177,16 @@ public struct DocumentTabBarView: View {
         case "audio": return Color(red: 0.12, green: 0.60, blue: 0.42)
         case "comic": return Color(red: 0.88, green: 0.28, blue: 0.55)
         case "mobi": return Color(red: 0.35, green: 0.55, blue: 0.85)
+        case "azw3": return Color(red: 0.85, green: 0.48, blue: 0.12)
+        case "pdb": return Color(red: 0.40, green: 0.55, blue: 0.30)
+        case "docx": return Color(red: 0.16, green: 0.42, blue: 0.82)
+        case "odt": return Color(red: 0.28, green: 0.35, blue: 0.78)
+        case "chm": return Color(red: 0.10, green: 0.55, blue: 0.70)
+        case "djvu": return Color(red: 0.65, green: 0.35, blue: 0.15)
+        case "latex": return Color(red: 0.15, green: 0.55, blue: 0.45)
+        case "asciidoc": return Color(red: 0.85, green: 0.35, blue: 0.25)
+        case "org": return Color(red: 0.45, green: 0.35, blue: 0.65)
+        case "rst": return Color(red: 0.25, green: 0.50, blue: 0.65)
         case "fb2": return Color(red: 0.75, green: 0.45, blue: 0.15)
         case "text": return Color(red: 0.45, green: 0.45, blue: 0.50)
         case "markdown": return Color(red: 0.20, green: 0.65, blue: 0.70)

@@ -648,7 +648,11 @@ final class AppModel: ObservableObject {
         let extensions = [
             "mp4", "mov", "m4v", "mkv", "avi", "webm",
             "mp3", "m4a", "wav", "aac", "flac", "aiff", "caf",
-            "pdf", "epub", "cbz", "cbr", "fb2", "zfb2", "txt", "text", "md", "markdown", "rtf", "rtfd", "html", "htm", "xhtml", "webarchive", "mobi", "prc",
+            "pdf", "epub", "cbz", "cbr", "cbt", "fb2", "zfb2", "txt", "text", "md", "markdown", "rtf", "rtfd", "html", "htm", "xhtml", "webarchive",
+            "mobi", "prc", "azw", "azw3", "kf8", "pdb",
+            "docx", "doc", "odt",
+            "chm", "djvu", "djv",
+            "tex", "latex", "adoc", "asciidoc", "org", "rst",
             "marginpkg", "marginnotes", "sqlite"
         ]
         var types: [UTType] = [.pdf, .movie, .video, .audio, .mpeg4Movie, .quickTimeMovie, .mp3, .wav, .aiff, .epub, .plainText, .rtf, .rtfd, .html]

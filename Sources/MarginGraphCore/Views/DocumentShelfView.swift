@@ -2149,6 +2149,26 @@ public struct DocumentCardView: View {
             return Color(red: 0.88, green: 0.28, blue: 0.55) // Magenta/Pink for Comics
         case "mobi":
             return Color(red: 0.35, green: 0.55, blue: 0.85) // Steel Blue
+        case "azw3":
+            return Color(red: 0.85, green: 0.48, blue: 0.12) // Amazon Amber
+        case "pdb":
+            return Color(red: 0.40, green: 0.55, blue: 0.30) // Palm Olive
+        case "docx":
+            return Color(red: 0.16, green: 0.42, blue: 0.82) // Word Blue
+        case "odt":
+            return Color(red: 0.28, green: 0.35, blue: 0.78) // OpenDocument Indigo
+        case "chm":
+            return Color(red: 0.10, green: 0.55, blue: 0.70) // CHM Cyan
+        case "djvu":
+            return Color(red: 0.65, green: 0.35, blue: 0.15) // DjVu Amber
+        case "latex":
+            return Color(red: 0.15, green: 0.55, blue: 0.45) // TeX Emerald
+        case "asciidoc":
+            return Color(red: 0.85, green: 0.35, blue: 0.25) // AsciiDoc Coral
+        case "org":
+            return Color(red: 0.45, green: 0.35, blue: 0.65) // Org Purple
+        case "rst":
+            return Color(red: 0.25, green: 0.50, blue: 0.65) // RST Steel Blue
         case "fb2":
             return Color(red: 0.75, green: 0.45, blue: 0.15) // Amber/Bronze
         case "text":
@@ -2212,6 +2232,34 @@ public struct DocumentCardView: View {
                                     Image(systemName: "doc.plaintext.fill")
                                         .font(.system(size: 38))
                                         .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "docx" || docType == "odt" {
+                                    Image(systemName: "doc.text.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "latex" {
+                                    Image(systemName: "function")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "org" {
+                                    Image(systemName: "checklist")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "asciidoc" {
+                                    Image(systemName: "text.alignleft")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "rst" {
+                                    Image(systemName: "doc.plaintext.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "chm" {
+                                    Image(systemName: "questionmark.folder.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
+                                } else if docType == "djvu" {
+                                    Image(systemName: "doc.richtext.fill")
+                                        .font(.system(size: 38))
+                                        .foregroundStyle(.secondary.opacity(0.6))
                                 } else if docType == "rtf" {
                                     Image(systemName: "doc.richtext.fill")
                                         .font(.system(size: 38))
@@ -2253,6 +2301,36 @@ public struct DocumentCardView: View {
                                     .font(.system(size: 8.5, weight: .bold))
                             } else if docType == "mobi" {
                                 Text("MOBI")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "azw3" {
+                                Text("AZW3")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "pdb" {
+                                Text("PDB")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "docx" {
+                                Text("DOCX")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "odt" {
+                                Text("ODT")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "chm" {
+                                Text("CHM")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "djvu" {
+                                Text("DJVU")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "latex" {
+                                Text("TEX")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "asciidoc" {
+                                Text("ADOC")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "org" {
+                                Text("ORG")
+                                    .font(.system(size: 8.5, weight: .bold))
+                            } else if docType == "rst" {
+                                Text("RST")
                                     .font(.system(size: 8.5, weight: .bold))
                             } else if docType == "fb2" {
                                 Text("FB2")

@@ -10,13 +10,20 @@ public enum MediaDocumentHelper {
     public static let supportedAudioExtensions: Set<String> = ["mp3", "m4a", "wav", "aac", "flac", "aiff", "caf"]
     public static let supportedEBookExtensions: Set<String> = [
         "epub",
-        "cbz", "cbr",
+        "cbz", "cbr", "cbt",
         "fb2", "zfb2",
         "txt", "text",
         "md", "markdown",
         "rtf", "rtfd",
         "html", "htm", "xhtml", "webarchive",
-        "mobi", "prc"
+        "mobi", "prc", "azw", "azw3", "kf8", "pdb",
+        "docx", "doc", "odt",
+        "chm",
+        "djvu", "djv",
+        "tex", "latex",
+        "adoc", "asciidoc",
+        "org",
+        "rst"
     ]
     public static let supportedDocumentExtensions: Set<String> = Set([
         "pdf", "marginpkg", "marginnotes", "sqlite"
@@ -28,12 +35,32 @@ public enum MediaDocumentHelper {
             return "video"
         } else if supportedAudioExtensions.contains(ext) {
             return "audio"
-        } else if ext == "cbz" || ext == "cbr" {
+        } else if ext == "cbz" || ext == "cbr" || ext == "cbt" {
             return "comic"
         } else if ext == "fb2" || ext == "zfb2" {
             return "fb2"
         } else if ext == "mobi" || ext == "prc" {
             return "mobi"
+        } else if ext == "azw" || ext == "azw3" || ext == "kf8" {
+            return "azw3"
+        } else if ext == "pdb" {
+            return "pdb"
+        } else if ext == "docx" || ext == "doc" {
+            return "docx"
+        } else if ext == "odt" {
+            return "odt"
+        } else if ext == "chm" {
+            return "chm"
+        } else if ext == "djvu" || ext == "djv" {
+            return "djvu"
+        } else if ext == "tex" || ext == "latex" {
+            return "latex"
+        } else if ext == "adoc" || ext == "asciidoc" {
+            return "asciidoc"
+        } else if ext == "org" {
+            return "org"
+        } else if ext == "rst" {
+            return "rst"
         } else if ext == "txt" || ext == "text" {
             return "text"
         } else if ext == "md" || ext == "markdown" {

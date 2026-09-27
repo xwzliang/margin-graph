@@ -602,6 +602,24 @@ Structure each entry concisely with actionable rules:
     2. **Format Identity Sidecars (`<md5>.format`)**: Converted files are stored in persistent storage as `<md5>.pdf`. Storing an adjacent `<md5>.format` file allows `Database.syncAvailableDocuments()` and the Document Shelf / Tab Bar to restore original document types (`comic`, `fb2`, `mobi`, `text`, `markdown`, `rtf`, `html`, `epub`) without losing format identity.
     3. **Thread-Safe WebKit Invocation**: Execute WebKit operations on `MainActor.assumeIsolated` and bridge outputs synchronously via `ThreadSafeBox` to ensure compatibility with background import queues.
     4. **Full Feature Parity**: By standardizing all ebook formats into vector PDFs on import, every ebook format inherits 100% of MarginGraph capabilities: precision text selection, selection cursor handles, mindmap card excerpting, jump targets, table of contents, bookmarks, search, and multi-document study tabs.
+- **WebKit Local File Navigation & Symlink Resolution Trap in Headless Converters (`WebKitChapterRenderer`)**:
+  - **Trap**:
+    1. On macOS, `/var/folders/...` is a symbolic link pointing to `/private/var/folders/...`. When file enumerators (`FileManager.default.enumerator`) discover files inside temporary directories, they return canonical paths starting with `/private/var/folders/...`. If `webView.loadFileURL(fileURL, allowingReadAccessTo: tempDir)` is called with an unresolved `tempDir` (`/var/folders/...`), WebKit considers the file outside the permitted sandbox directory and immediately aborts navigation via `didFailProvisionalNavigation`.
+    2. In `WKNavigationDelegate`, routing `didFail` or `didFailProvisionalNavigation` to the standard success completion handler that invokes `evaluateJavaScript(...)` causes silent deadlocks: because the web process never loaded a document, JavaScript evaluation errors out or never yields, and `webView.createPDF(...)` is never called. Any synchronous waiting loop (`runOnMainThread`) then stalls until the global timeout.
+  - **Rule**:
+    1. Always resolve symlinks on both target file and read access directory before invoking WebKit: `url.resolvingSymlinksInPath()` and `readAccessURL.resolvingSymlinksInPath()`.
+    2. In `WKNavigationDelegate`, immediately dispatch `.failure(error)` on `didFail` and `didFailProvisionalNavigation`. Never attempt to evaluate JavaScript or create PDFs on an unnavigated web view.
+    3. Guard all asynchronous WebKit render calls with a one-shot completion handler (`isCompleted` flag) and a 10.0-second safety timeout (`DispatchWorkItem`) to guarantee that `runOnMainThread` never deadlocks.
+- **Comprehensive Zero-Dependency Format Expansion Architecture (`EBookConverter`)**:
+  - **Rule**: Expand native format support to cover all common technical, office, and legacy document types without external package dependencies:
+    - **Office & OpenDocument (`docx`, `doc`, `odt`)**: Leverage system `/usr/bin/textutil -convert html` and AppKit `NSAttributedString` to extract typography, tables, and formatting into vector PDFs.
+    - **Comic Archives (`cbt`, `cbz`, `cbr`)**: Leverage built-in `/usr/bin/tar` (for `.cbt`) alongside `/usr/bin/unzip`, extracting images and ordering pages naturally (`localizedStandardCompare`) into multi-page `PDFDocument`s.
+    - **Kindle & Palm Documents (`azw`, `azw3`, `kf8`, `pdb`)**: Parse Palm Database (`PDB`) headers, record lists, and PalmDOC LZ77 decompression streams. For KF8/AZW3, parse the mobi-header boundaries to extract HTML5 content, CSS styles, and chapter breaks (`<mbp:pagebreak/>`).
+    - **Compiled HTML Help (`chm`)**: Detect `ITSF` magic bytes, extract embedded HTML documentation chapters directly using native stream regex parsing (with `extract_chmLib`/`7z` as transparent accelerators when present), wrap extracted chunks in standard HTML5 with UTF-8 meta charset, and render with hierarchical table of contents.
+    - **Scanned DjVu Documents (`djvu`, `djv`)**: Detect `AT&T` / `FORM DJVU` magic bytes, extract OCR text layers from compressed `TXTz` (zlib) and `TX3t` chunks, and format extracted OCR text into readable vector pages (with `ddjvu` acceleration if available).
+    - **Academic & Technical Markup (`tex`, `latex`, `adoc`, `asciidoc`, `org`, `rst`)**: Implement pure Swift AST parsers that extract document titles, authors, hierarchical section headers (`\section`, `==`, `*`, underlines), styled code blocks, quote callouts, and mathematical formulas into modern, beautifully styled academic typography converted to vector PDF via WebKit with full `PDFOutline` bookmarks.
+    - **Extended Markdown**: Support GitHub Flavored Markdown (GFM) pipe tables (`| col |`), task list checkboxes (`- [ ]`, `- [x]`), and strikethrough (`~~text~~`).
+
 
 
 
