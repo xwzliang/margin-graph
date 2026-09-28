@@ -682,5 +682,23 @@ Structure each entry concisely with actionable rules:
   - **Rule**:
     1. When an external library is opened (`libraryRoot != nil`), strictly limit document discovery search paths to `[libraryRoot] + additionalSearchPaths`. Never add the default `MarginGraph/Documents` folder.
     2. In step 1 of `syncAvailableDocuments()`, when `libraryRoot != nil`, actively purge any records in `documents` whose `filePath` points inside the default Application Support documents directory.
+- **EPUB Typography, Font Normalization & Reflowable Document Dimensions (`EBookConverter`, PyMuPDF, WebKit)**:
+  - **Trap (Bloated / Unstable EPUB Font Sizes & Viewport Scaling)**:
+    1. By default, PyMuPDF (`doc.convert_to_pdf()`) defaults to a tiny `400 x 600 pt` viewport.
+    2. When publisher stylesheets include explicit pixel/point font rules (e.g. `Style01.css` specifying `p { font-size: 18px; }`), PyMuPDF renders body text at `18.0 pt` on the 400pt-wide canvas.
+    3. In `MarginGraphApp`, the split-pane PDF reader scales the 400pt page to fit the ~750-800pt viewer pane (`autoScales = true`), magnifying the 18pt font by ~1.9x into an enormous ~34pt visual appearance on screen with only 3–5 words per line and ballooning page counts (e.g. Autotools ballooned to 1,815 pages).
+    4. Conversely, EPUBs without explicit CSS font overrides fell back to 10–11pt, producing severe font size instability across different EPUB titles.
+    5. Calling `doc.layout(..., fontsize=11)` alone does NOT override publisher CSS font rules because element-level selectors (`p { font-size: 18px }`) take precedence over the layout base font.
+  - **Rule**:
+    1. **Universal CSS Normalization**:
+       Inject standardizing CSS targeting `body, p, div, li, a, td, th` with `font-size: 11pt !important; line-height: 1.45 !important;`. Provide proportional heading scales (`h1: 20pt`, `h2: 16pt`, `h3: 13.5pt`, `h4: 12pt`, `h5/h6: 11pt`), monospace code styling (`code, pre: 9.5pt !important; white-space: pre-wrap !important`), proportional annotations (`small: 9pt`, `sup/sub: 8pt`), and responsive images (`img: max-width: 100% !important; height: auto !important`).
+    2. **PyMuPDF Engine**:
+       For all reflowable documents (`getattr(doc, 'is_refl', getattr(doc, 'is_reflowable', False))`), apply custom CSS via `doc.apply_css(css, append=True)` and set standard A4 paper dimensions via `doc.layout(width=595, height=842, fontsize=11)`. Standard A4 (595pt width) matches desktop split-pane aspect ratios (zoom scale ~1.1x–1.3x) and guarantees consistent ~12–16 words per line.
+    3. **Native WebKit Engine**:
+       Inject the identical normalizing CSS into `WKWebViewConfiguration` via `WKUserScript(source: ..., injectionTime: .atDocumentEnd)` and reinforce it during `webView(_:didFinish:)`. Render PDF pages with standard A4 bounds (`width: 595, height: max(842, scrollHeight)`).
+    4. **Subprocess Pipe Deadlock & MuPDF Error Suppression**:
+       Suppress MuPDF C-level warnings via `pymupdf.TOOLS.mupdf_display_errors(False)` and `pymupdf.TOOLS.mupdf_display_warnings(False)`. When invoking Python via `Process()`, always drain `errorPipe` asynchronously in a background queue before calling `process.waitUntilExit()`.
+    5. **Layout Versioning & Cache Invalidation (`layout_ver`)**:
+       Persist a layout version sidecar (`<md5>.layout_ver = "v2_std_font"`). In `ensureConvertedPDF`, check if reflowable documents have a matching `layout_ver`. If the sidecar is missing or outdated, automatically remove the stale PDF and re-convert, ensuring users immediately enjoy standardized fonts without needing to manually clear caches.
 
 

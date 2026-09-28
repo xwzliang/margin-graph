@@ -137,11 +137,16 @@ public final class EBookConverter: Sendable {
         let docsDir = documentsDirectory()
         let targetPDF = docsDir.appendingPathComponent("\(md5).pdf")
 
+        let currentLayoutVersion = "v2_std_font"
+        let sidecarVer = targetPDF.deletingPathExtension().appendingPathExtension("layout_ver")
+        let isReflowable = ["epub", "fb2", "zfb2", "mobi", "prc", "azw", "azw3", "kf8", "txt", "text", "md", "markdown", "adoc", "asciidoc", "org", "rst", "rtf", "rtfd", "html", "htm", "xhtml"].contains(ext)
+
         // If converted PDF already exists and is non-empty, use it immediately
         if FileManager.default.fileExists(atPath: targetPDF.path),
            let attrs = try? FileManager.default.attributesOfItem(atPath: targetPDF.path),
            let size = attrs[.size] as? Int64, size > 1024,
-           let doc = PDFDocument(url: targetPDF), doc.pageCount > 0 {
+           let doc = PDFDocument(url: targetPDF), doc.pageCount > 0,
+           (!isReflowable || (try? String(contentsOf: sidecarVer, encoding: .utf8)) == currentLayoutVersion) {
             let titleAttr = doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
             let authorAttr = doc.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String
             let fallbackTitle = ebookURL.deletingPathExtension().lastPathComponent
@@ -155,6 +160,10 @@ public final class EBookConverter: Sendable {
                 pageCount: doc.pageCount,
                 format: ext
             )
+        }
+
+        if FileManager.default.fileExists(atPath: targetPDF.path) {
+            try? FileManager.default.removeItem(at: targetPDF)
         }
 
         // Perform format-specific native conversion
@@ -211,6 +220,7 @@ public final class EBookConverter: Sendable {
         try? md5.write(to: sidecarEBook, atomically: true, encoding: .utf8)
         let sidecarFormat = targetPDF.deletingPathExtension().appendingPathExtension("format")
         try? ext.write(to: sidecarFormat, atomically: true, encoding: .utf8)
+        try? currentLayoutVersion.write(to: sidecarVer, atomically: true, encoding: .utf8)
 
         let titleAttr = doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
         let authorAttr = doc.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String
@@ -3014,10 +3024,45 @@ public final class EBookConverter: Sendable {
 
     private static func convertWithPyMuPDF(pythonURL: URL, epubPath: String, pdfPath: String) throws {
         let script = """
-import pymupdf, sys
+import pymupdf, sys, os
+
+try:
+    pymupdf.TOOLS.mupdf_display_errors(False)
+    pymupdf.TOOLS.mupdf_display_warnings(False)
+except Exception:
+    pass
+
 epub_path = sys.argv[1]
 pdf_path = sys.argv[2]
 doc = pymupdf.open(epub_path)
+
+is_reflowable = getattr(doc, 'is_refl', getattr(doc, 'is_reflowable', False))
+if is_reflowable:
+    css = '''
+    body, p, div, li, a, td, th {
+        font-size: 11pt !important;
+        line-height: 1.45 !important;
+    }
+    h1, h1 * { font-size: 20pt !important; line-height: 1.25 !important; }
+    h2, h2 * { font-size: 16pt !important; line-height: 1.3 !important; }
+    h3, h3 * { font-size: 13.5pt !important; line-height: 1.35 !important; }
+    h4, h4 * { font-size: 12pt !important; line-height: 1.35 !important; }
+    h5, h5 *, h6, h6 * { font-size: 11pt !important; line-height: 1.35 !important; }
+    code, pre, tt, kbd, samp, code *, pre * { font-size: 9.5pt !important; font-family: monospace !important; }
+    pre { white-space: pre-wrap !important; word-break: break-all !important; }
+    small, small * { font-size: 9pt !important; }
+    sup, sub, sup *, sub * { font-size: 8pt !important; }
+    img { max-width: 100% !important; height: auto !important; }
+    '''
+    try:
+        doc.apply_css(css, append=True)
+    except Exception:
+        pass
+    try:
+        doc.layout(width=595, height=842, fontsize=11)
+    except Exception:
+        pass
+
 pdf_bytes = doc.convert_to_pdf()
 pdf_doc = pymupdf.open('pdf', pdf_bytes)
 toc = doc.get_toc()
@@ -3033,11 +3078,22 @@ pdf_doc.save(pdf_path)
         process.arguments = ["-c", script, epubPath, pdfPath]
         let errorPipe = Pipe()
         process.standardError = errorPipe
+
+        let dataBox = ThreadSafeBox<Data>()
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            dataBox.value = data
+            group.leave()
+        }
+
         try process.run()
         process.waitUntilExit()
+        group.wait()
 
         if process.terminationStatus != 0 {
-            let data = errorPipe.fileHandleForReading.readDataToEndOfFile()
+            let data = dataBox.value ?? Data()
             let errStr = String(data: data, encoding: .utf8) ?? "PyMuPDF exited with code \(process.terminationStatus)"
             throw NSError(domain: "EBookConverter", code: Int(process.terminationStatus), userInfo: [NSLocalizedDescriptionKey: errStr])
         }
@@ -3081,10 +3137,38 @@ private final class WebKitChapterRenderer: NSObject, WKNavigationDelegate, @unch
     private var isCompleted = false
     private var timeoutWorkItem: DispatchWorkItem?
 
+    private static let normalizingCSS = """
+    body, p, div, li, a, td, th {
+        font-size: 11pt !important;
+        line-height: 1.45 !important;
+    }
+    h1, h1 * { font-size: 20pt !important; line-height: 1.25 !important; }
+    h2, h2 * { font-size: 16pt !important; line-height: 1.3 !important; }
+    h3, h3 * { font-size: 13.5pt !important; line-height: 1.35 !important; }
+    h4, h4 * { font-size: 12pt !important; line-height: 1.35 !important; }
+    h5, h5 *, h6, h6 * { font-size: 11pt !important; line-height: 1.35 !important; }
+    code, pre, tt, kbd, samp, code *, pre * { font-size: 9.5pt !important; font-family: monospace !important; }
+    pre { white-space: pre-wrap !important; word-break: break-all !important; }
+    small, small * { font-size: 9pt !important; }
+    sup, sub, sup *, sub * { font-size: 8pt !important; }
+    img { max-width: 100% !important; height: auto !important; }
+    """
+
     @MainActor
     override init() {
         let config = WKWebViewConfiguration()
-        self.webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 612, height: 792), configuration: config)
+        let scriptSource = """
+        (function() {
+            var style = document.createElement('style');
+            style.id = 'mg-standard-typography';
+            style.type = 'text/css';
+            style.appendChild(document.createTextNode(`\(Self.normalizingCSS)`));
+            (document.head || document.documentElement).appendChild(style);
+        })();
+        """
+        let userScript = WKUserScript(source: scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        config.userContentController.addUserScript(userScript)
+        self.webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 595, height: 842), configuration: config)
         super.init()
         self.webView.navigationDelegate = self
     }
@@ -3124,11 +3208,23 @@ private final class WebKitChapterRenderer: NSObject, WKNavigationDelegate, @unch
 
     @MainActor
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        webView.evaluateJavaScript("Math.max(document.body ? document.body.scrollHeight : 792, document.documentElement ? document.documentElement.scrollHeight : 792, 792)") { [weak self] heightVal, _ in
+        let js = """
+        (function() {
+            if (!document.getElementById('mg-standard-typography')) {
+                var style = document.createElement('style');
+                style.id = 'mg-standard-typography';
+                style.type = 'text/css';
+                style.appendChild(document.createTextNode(`\(Self.normalizingCSS)`));
+                (document.head || document.documentElement).appendChild(style);
+            }
+            return Math.max(document.body ? document.body.scrollHeight : 842, document.documentElement ? document.documentElement.scrollHeight : 842, 842);
+        })()
+        """
+        webView.evaluateJavaScript(js) { [weak self] heightVal, _ in
             guard let self = self, !self.isCompleted else { return }
-            let h = max(792, (heightVal as? CGFloat) ?? 792)
+            let h = max(842, (heightVal as? CGFloat) ?? 842)
             let config = WKPDFConfiguration()
-            config.rect = CGRect(x: 0, y: 0, width: 612, height: h)
+            config.rect = CGRect(x: 0, y: 0, width: 595, height: h)
             self.webView.createPDF(configuration: config) { [weak self] res in
                 guard let self = self, !self.isCompleted else { return }
                 self.safeFinish(result: res)

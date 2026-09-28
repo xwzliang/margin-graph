@@ -128,4 +128,35 @@ final class EPUBConverterTests: XCTestCase {
             XCTAssertGreaterThan(cover.size.height, 400)
         }
     }
+
+    func testEPUBFontNormalizationAndStandardDimensions() throws {
+        let sampleEPUBPath = "/Volumes/omv/backups/marginnote/MarginNoteBackup(2026-09-21-12-33-07).marginbackupall/[John_Calcote]_Autotools,_2nd_Edition__A_Practitio(z-lib.org).epub"
+        guard FileManager.default.fileExists(atPath: sampleEPUBPath) else { return }
+
+        let epubURL = URL(fileURLWithPath: sampleEPUBPath)
+        let result = try EBookConverter.ensureConvertedPDF(for: epubURL)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.pdfURL.path))
+        let sidecarVer = result.pdfURL.deletingPathExtension().appendingPathExtension("layout_ver")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarVer.path))
+        let verContent = try String(contentsOf: sidecarVer, encoding: .utf8)
+        XCTAssertEqual(verContent, "v2_std_font")
+
+        guard let doc = PDFDocument(url: result.pdfURL), doc.pageCount > 0 else {
+            XCTFail("Failed to load converted PDF")
+            return
+        }
+
+        // Verify standard A4 page dimensions (595 x 842 pt) rather than legacy 400x600 pt
+        if let page = doc.page(at: min(10, doc.pageCount - 1)) {
+            let bounds = page.bounds(for: .mediaBox)
+            XCTAssertEqual(bounds.width, 595, accuracy: 2.0, "Reflowable EPUB page width should be standardized to A4 (595pt)")
+            XCTAssertEqual(bounds.height, 842, accuracy: 2.0, "Reflowable EPUB page height should be standardized to A4 (842pt)")
+        }
+
+        // Verify page count normalized (down from 1815 pages to ~600 pages due to proper font scale)
+        XCTAssertLessThan(result.pageCount, 1000, "Normalized font and layout should produce standard book page count (~600 pages)")
+        XCTAssertGreaterThan(result.pageCount, 400)
+    }
 }
+
