@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 import PDFKit
+import SQLite3
 import MarginGraphCore
 
 public enum WorkspaceViewMode: String, CaseIterable, Identifiable {
@@ -214,9 +215,17 @@ final class AppModel: ObservableObject {
         pendingTopicMindMaps.removeAll()
     }
 
-    let database: Database
-    let mediaStorage: MediaStorage
+    var database: Database
+    var mediaStorage: MediaStorage
     let undoManager = UndoManager()
+
+    @Published var activeDatabaseName: String = "Default Library"
+    @Published var activeDatabaseURL: URL? = nil
+    @Published var isExternalDatabase: Bool = false
+    @Published var isOpeningDatabase: Bool = false
+    @Published var databaseOpeningStatus: String = ""
+    @Published var databaseErrorMessage: String? = nil
+    @Published var recentDatabasePaths: [String] = []
 
     var canUndo: Bool { undoManager.canUndo }
     var canRedo: Bool { undoManager.canRedo }
@@ -236,6 +245,7 @@ final class AppModel: ObservableObject {
     init() {
         database = try! Database()
         mediaStorage = try! MediaStorage()
+        recentDatabasePaths = UserDefaults.standard.stringArray(forKey: "MarginGraph.RecentDatabases") ?? []
         try? database.syncAvailableDocuments()
         autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
@@ -672,12 +682,237 @@ final class AppModel: ObservableObject {
     }
 
     func openOrImportFile(url: URL, attachToTopic: Bool = false) {
+        var isDir: ObjCBool = false
+        let fileManager = FileManager.default
+        let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
         let ext = url.pathExtension.lowercased()
-        if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
-            importMarginNoteOrPackage(url: url)
+
+        if exists && isDir.boolValue {
+            let sqliteCand = url.appendingPathComponent("MarginNotes.sqlite")
+            if fileManager.fileExists(atPath: sqliteCand.path) || ext == "marginbackupall" || ext == "marginbackup" {
+                Task { @MainActor in
+                    await self.openMarginNoteBackup(at: url)
+                }
+                return
+            }
+        }
+
+        if ext == "marginbackupall" || ext == "marginbackup" {
+            Task { @MainActor in
+                await self.openMarginNoteBackup(at: url)
+            }
+        } else if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
+            let filename = url.lastPathComponent.lowercased()
+            if filename == "marginnotes.sqlite" || filename.contains("backup") {
+                Task { @MainActor in
+                    await self.openMarginNoteBackup(at: url)
+                }
+            } else {
+                importMarginNoteOrPackage(url: url)
+            }
         } else {
             openDocument(url: url, attachToTopic: attachToTopic)
         }
+    }
+
+    func openMarginNoteBackupPicker() {
+        let panel = NSOpenPanel()
+        panel.title = "Open MarginNote Database or Backup"
+        panel.prompt = "Open"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+
+        var types: [UTType] = [.folder, .database]
+        for ext in ["marginbackupall", "marginbackup", "marginpkg", "sqlite", "marginnotes"] {
+            if let t = UTType(filenameExtension: ext), !types.contains(t) {
+                types.append(t)
+            }
+        }
+        panel.allowedContentTypes = types
+
+        if panel.runModal() == .OK, let selectedURL = panel.url {
+            Task { @MainActor in
+                await self.openMarginNoteBackup(at: selectedURL)
+            }
+        }
+    }
+
+    func saveRecentDatabase(path: String) {
+        var recents = UserDefaults.standard.stringArray(forKey: "MarginGraph.RecentDatabases") ?? []
+        recents.removeAll(where: { $0 == path })
+        recents.insert(path, at: 0)
+        if recents.count > 10 {
+            recents = Array(recents.prefix(10))
+        }
+        UserDefaults.standard.set(recents, forKey: "MarginGraph.RecentDatabases")
+        recentDatabasePaths = recents
+    }
+
+    func openMarginNoteBackup(at url: URL) async {
+        isOpeningDatabase = true
+        databaseOpeningStatus = "Inspecting backup..."
+        defer { isOpeningDatabase = false }
+
+        flushPendingPositions()
+
+        let fileManager = FileManager.default
+        var isDir: ObjCBool = false
+        let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
+        guard exists else {
+            databaseErrorMessage = "File or folder not found at \(url.path)"
+            return
+        }
+
+        let backupDir: URL
+        let sqliteURL: URL
+
+        if isDir.boolValue {
+            backupDir = url
+            let cand1 = url.appendingPathComponent("MarginNotes.sqlite")
+            let cand2 = url.appendingPathComponent("MarginNotes.marginnotes")
+            if fileManager.fileExists(atPath: cand1.path) {
+                sqliteURL = cand1
+            } else if fileManager.fileExists(atPath: cand2.path) {
+                sqliteURL = cand2
+            } else if let items = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil),
+                      let found = items.first(where: { ["sqlite", "marginnotes"].contains($0.pathExtension.lowercased()) }) {
+                sqliteURL = found
+            } else {
+                databaseErrorMessage = "No SQLite database found inside \(url.lastPathComponent)"
+                return
+            }
+        } else {
+            if url.lastPathComponent.lowercased().contains("marginnotes") {
+                backupDir = url.deletingLastPathComponent()
+                sqliteURL = url
+            } else if url.pathExtension.lowercased() == "sqlite" {
+                var testDb: OpaquePointer?
+                let uri = "file:\(url.path)?immutable=1"
+                var isMN = false
+                if sqlite3_open_v2(uri, &testDb, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK, let testDb {
+                    var stmt: OpaquePointer?
+                    if sqlite3_prepare_v2(testDb, "SELECT 1 FROM ZTOPIC LIMIT 1", -1, &stmt, nil) == SQLITE_OK {
+                        isMN = true
+                    }
+                    sqlite3_finalize(stmt)
+                    sqlite3_close(testDb)
+                }
+                if !isMN {
+                    do {
+                        let newDb = try Database(url: url)
+                        self.database = newDb
+                        self.mediaStorage.fallbackDirectories.removeAll()
+                        self.activeDatabaseName = url.lastPathComponent
+                        self.activeDatabaseURL = url
+                        self.isExternalDatabase = true
+                        saveRecentDatabase(path: url.path)
+                        resetWorkspaceForNewDatabase()
+                        reloadLibrary()
+                        return
+                    } catch {
+                        databaseErrorMessage = "Failed to open SQLite database: \(error.localizedDescription)"
+                        return
+                    }
+                }
+                backupDir = url.deletingLastPathComponent()
+                sqliteURL = url
+            } else {
+                backupDir = url.deletingLastPathComponent()
+                sqliteURL = url
+            }
+        }
+
+        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let extDatabasesDir = appSupport.appendingPathComponent("MarginGraph/ExternalDatabases", isDirectory: true)
+        try? fileManager.createDirectory(at: extDatabasesDir, withIntermediateDirectories: true)
+
+        let safeBaseName = backupDir.lastPathComponent
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "_")
+        let cacheName = safeBaseName.isEmpty ? "backup_\(UUID().uuidString.prefix(8))" : safeBaseName
+        let cacheDbURL = extDatabasesDir.appendingPathComponent("\(cacheName).sqlite")
+
+        let mediaDir = backupDir.appendingPathComponent("MarginNotes.sqlite.files")
+
+        do {
+            let newDb: Database
+            if fileManager.fileExists(atPath: cacheDbURL.path) {
+                databaseOpeningStatus = "Opening cached database..."
+                newDb = try Database(url: cacheDbURL)
+            } else {
+                databaseOpeningStatus = "Reading MarginNote database..."
+                newDb = try Database(url: cacheDbURL)
+                let importer = MarginNoteImporter(
+                    url: sqliteURL,
+                    documentsDestinationDirectory: backupDir,
+                    copyDocuments: false,
+                    copyMedia: false
+                )
+                databaseOpeningStatus = "Importing notebooks and documents in-place..."
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try importer.importInto(newDb)
+                }.value
+            }
+
+            if fileManager.fileExists(atPath: mediaDir.path) {
+                self.mediaStorage.fallbackDirectories = [mediaDir]
+            } else {
+                self.mediaStorage.fallbackDirectories.removeAll()
+            }
+
+            self.database = newDb
+            self.activeDatabaseName = backupDir.lastPathComponent
+            self.activeDatabaseURL = backupDir
+            self.isExternalDatabase = true
+            saveRecentDatabase(path: backupDir.path)
+
+            resetWorkspaceForNewDatabase()
+            reloadLibrary()
+        } catch {
+            databaseErrorMessage = "Failed to load backup: \(error.localizedDescription)"
+            print("Error loading MarginNote backup: \(error)")
+        }
+    }
+
+    func switchToDefaultDatabase() {
+        guard isExternalDatabase else { return }
+        flushPendingPositions()
+        do {
+            let defaultDb = try Database()
+            self.database = defaultDb
+            self.mediaStorage.fallbackDirectories.removeAll()
+            self.activeDatabaseName = "Default Library"
+            self.activeDatabaseURL = nil
+            self.isExternalDatabase = false
+            resetWorkspaceForNewDatabase()
+            reloadLibrary()
+        } catch {
+            databaseErrorMessage = "Failed to switch to default database: \(error.localizedDescription)"
+        }
+    }
+
+    private func resetWorkspaceForNewDatabase() {
+        self.selectedTopicID = nil
+        self.activeDocument = nil
+        self.manager = nil
+        self.selectedCardID = nil
+        self.cardIDToCenter = nil
+        self.mindMapCards.removeAll()
+        self.documentCards.removeAll()
+        self.links.removeAll()
+        self.isInStudyWorkspace = false
+        self.selectedMainTab = .document
+        self.activeReviewCards.removeAll()
+        self.activeReviewDocuments.removeAll()
+        self.isReviewPresented = false
+        self.documentCurrentPage.removeAll()
+        self.documentPageOffsets.removeAll()
+        self.documentMindPan.removeAll()
+        self.documentMindZoom.removeAll()
+        self.topicMindPan.removeAll()
+        self.topicMindZoom.removeAll()
     }
 
     func importMarginNoteOrPackage(url: URL) {
@@ -2758,6 +2993,57 @@ struct StudyWorkspaceView: View {
     }
 }
 
+struct ExternalDatabaseBannerView: View {
+    let databaseName: String
+    let onSwitchToDefault: () -> Void
+    let onOpenAnother: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "externaldrive.fill.badge.checkmark")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.blue)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text("External Library:")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Text(databaseName)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary)
+                }
+                Text("Using documents directly in-place without copying • Default database preserved")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button("Switch to Default Library") {
+                onSwitchToDefault()
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+
+            Button("Open Another Backup…") {
+                onOpenAnother()
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.windowBackgroundColor))
+        .overlay(
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundStyle(MarginNoteTheme.separatorColor),
+            alignment: .bottom
+        )
+    }
+}
+
 // MARK: - Main Application Shell
 
 @main
@@ -2770,36 +3056,50 @@ struct MarginGraphApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HStack(spacing: 0) {
-                // Left MarginNote 3 Sidebar (shelves only, hidden inside Study Workspace)
-                if !model.isInStudyWorkspace {
-                    MarginNoteSidebar(
-                        selectedTab: $model.selectedMainTab,
-                        isSearchActive: model.isShelfSearchPresented,
-                        onSearch: {
-                            withAnimation(.easeInOut(duration: 0.15)) {
-                                model.isShelfSearchPresented.toggle()
+            ZStack {
+                HStack(spacing: 0) {
+                    // Left MarginNote 3 Sidebar (shelves only, hidden inside Study Workspace)
+                    if !model.isInStudyWorkspace {
+                        MarginNoteSidebar(
+                            selectedTab: $model.selectedMainTab,
+                            isSearchActive: model.isShelfSearchPresented,
+                            onSearch: {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    model.isShelfSearchPresented.toggle()
+                                }
+                            },
+                            onHelp: {},
+                            onSettings: {
+                                model.openMarginNoteBackupPicker()
                             }
-                        },
-                        onHelp: {},
-                        onSettings: {
-                            model.importMarginNote()
+                        )
+                        .onChange(of: model.selectedMainTab) { _, _ in
+                            model.flushPendingPositions()
+                            model.isInStudyWorkspace = false
+                            model.shelfSearchQuery = ""
                         }
-                    )
-                    .onChange(of: model.selectedMainTab) { _, _ in
-                        model.flushPendingPositions()
-                        model.isInStudyWorkspace = false
-                        model.shelfSearchQuery = ""
+                        .transition(.move(edge: .leading))
                     }
-                    .transition(.move(edge: .leading))
-                }
 
-                // Main Content View
-                Group {
-                    if model.isInStudyWorkspace {
-                        StudyWorkspaceView(model: model)
-                    } else {
-                        switch model.selectedMainTab {
+                    // Main Content View
+                    VStack(spacing: 0) {
+                        if model.isExternalDatabase {
+                            ExternalDatabaseBannerView(
+                                databaseName: model.activeDatabaseName,
+                                onSwitchToDefault: {
+                                    model.switchToDefaultDatabase()
+                                },
+                                onOpenAnother: {
+                                    model.openMarginNoteBackupPicker()
+                                }
+                            )
+                        }
+
+                        Group {
+                            if model.isInStudyWorkspace {
+                                StudyWorkspaceView(model: model)
+                            } else {
+                                switch model.selectedMainTab {
                         case .document:
                             DocumentShelfView(
                                 documents: model.documents,
@@ -2878,10 +3178,43 @@ struct MarginGraphApp: App {
                             )
                         }
                     }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+
+                if model.isOpeningDatabase {
+                    ZStack {
+                        Color.black.opacity(0.35)
+                            .ignoresSafeArea()
+                        VStack(spacing: 16) {
+                            ProgressView()
+                                .controlSize(.large)
+                            Text(model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white)
+                        }
+                        .padding(28)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(Color(white: 0.15).opacity(0.94))
+                                .shadow(color: .black.opacity(0.4), radius: 16, x: 0, y: 6)
+                        )
+                    }
+                    .zIndex(999)
                 }
             }
             .frame(minWidth: 1050, maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)
             .preferredColorScheme(.light)
+            .alert("Database Error", isPresented: Binding(
+                get: { model.databaseErrorMessage != nil },
+                set: { if !$0 { model.databaseErrorMessage = nil } }
+            )) {
+                Button("OK") { model.databaseErrorMessage = nil }
+            } message: {
+                Text(model.databaseErrorMessage ?? "")
+            }
+            .navigationTitle("MarginGraph" + (model.isExternalDatabase ? " — \(model.activeDatabaseName) [External Backup]" : ""))
             .sheet(isPresented: $model.isReviewPresented) {
                 FlashcardReviewView(
                     cards: model.activeReviewCards.isEmpty ? (model.dueFlashcards.isEmpty ? model.mindMapCards : model.dueFlashcards) : model.activeReviewCards,
@@ -2929,10 +3262,34 @@ struct MarginGraphApp: App {
         .defaultSize(width: 1440, height: 920)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open…") {
+                Button("Open Document…") {
                     model.openDocumentPicker(attachToTopic: false)
                 }
                 .keyboardShortcut("o", modifiers: .command)
+
+                Button("Open MarginNote Database or Backup…") {
+                    model.openMarginNoteBackupPicker()
+                }
+                .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Switch to Default Library") {
+                    model.switchToDefaultDatabase()
+                }
+                .disabled(!model.isExternalDatabase)
+
+                if !model.recentDatabasePaths.isEmpty {
+                    Menu("Open Recent Library") {
+                        ForEach(model.recentDatabasePaths, id: \.self) { path in
+                            Button(URL(fileURLWithPath: path).lastPathComponent) {
+                                Task { @MainActor in
+                                    await model.openMarginNoteBackup(at: URL(fileURLWithPath: path))
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             CommandGroup(replacing: .undoRedo) {

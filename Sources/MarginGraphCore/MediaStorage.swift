@@ -78,9 +78,28 @@ public final class MediaStorage: @unchecked Sendable {
         return try saveCGImage(cgImage, format: "heic", quality: quality)
     }
 
+    public var fallbackDirectories: [URL] = []
+
     public func loadImage(hash: String) -> Data? {
         let url = imageURL(hash: hash)
-        return try? Data(contentsOf: url)
+        if let data = try? Data(contentsOf: url), !data.isEmpty {
+            return data
+        }
+        for fallback in fallbackDirectories {
+            let direct = fallback.appendingPathComponent(hash)
+            if fileManager.fileExists(atPath: direct.path), let data = try? Data(contentsOf: direct), !data.isEmpty {
+                return data
+            }
+            if !hash.contains(".") {
+                for ext in ["heic", "png", "jpg", "jpeg", "webp"] {
+                    let candidate = fallback.appendingPathComponent("\(hash).\(ext)")
+                    if fileManager.fileExists(atPath: candidate.path), let data = try? Data(contentsOf: candidate), !data.isEmpty {
+                        return data
+                    }
+                }
+            }
+        }
+        return nil
     }
 
     public func imageURL(hash: String) -> URL {
@@ -98,6 +117,23 @@ public final class MediaStorage: @unchecked Sendable {
                 }
             }
         }
+
+        // Try checking fallback directories (e.g. MarginNotes.sqlite.files in external backup)
+        for fallback in fallbackDirectories {
+            let candidateDirect = fallback.appendingPathComponent(hash)
+            if fileManager.fileExists(atPath: candidateDirect.path) {
+                return candidateDirect
+            }
+            if !hash.contains(".") {
+                for ext in ["heic", "png", "jpg", "jpeg", "webp"] {
+                    let candidate = fallback.appendingPathComponent("\(hash).\(ext)")
+                    if fileManager.fileExists(atPath: candidate.path) {
+                        return candidate
+                    }
+                }
+            }
+        }
+
         return directURL
     }
 

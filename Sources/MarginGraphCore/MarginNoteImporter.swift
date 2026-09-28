@@ -38,10 +38,20 @@ public final class MarginNoteImporter {
     private let url: URL
     public let documentsDestinationDirectory: URL
     public let mediaStorage: MediaStorage?
+    public let copyDocuments: Bool
+    public let copyMedia: Bool
 
-    public init(url: URL, documentsDestinationDirectory: URL? = nil, mediaStorage: MediaStorage? = nil) {
+    public init(
+        url: URL,
+        documentsDestinationDirectory: URL? = nil,
+        mediaStorage: MediaStorage? = nil,
+        copyDocuments: Bool = true,
+        copyMedia: Bool = true
+    ) {
         self.url = url
         self.mediaStorage = mediaStorage
+        self.copyDocuments = copyDocuments
+        self.copyMedia = copyMedia
         if let dir = documentsDestinationDirectory {
             self.documentsDestinationDirectory = dir
         } else {
@@ -53,7 +63,20 @@ public final class MarginNoteImporter {
     }
 
     public func read() throws -> MarginNoteImportResult {
-        if isPackage(url) {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            // It's a directory (such as a .marginbackupall folder)
+            let sqliteCandidate = url.appendingPathComponent("MarginNotes.sqlite")
+            if FileManager.default.fileExists(atPath: sqliteCandidate.path) {
+                return try readDatabase(from: sqliteCandidate, extractedDocuments: [])
+            }
+            if let items = try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: nil) {
+                if let db = items.first(where: { ["sqlite", "marginnotes"].contains($0.pathExtension.lowercased()) }) {
+                    return try readDatabase(from: db, extractedDocuments: [])
+                }
+            }
+            throw DatabaseError.open("No MarginNotes.sqlite database found inside folder \(url.path)")
+        } else if isPackage(url) {
             return try readPackage()
         } else {
             return try readDatabase(from: url, extractedDocuments: [])
@@ -61,8 +84,13 @@ public final class MarginNoteImporter {
     }
 
     private func isPackage(_ url: URL) -> Bool {
-        if url.pathExtension.lowercased() == "marginpkg" { return true }
-        if url.pathExtension.lowercased() == "sqlite" || url.pathExtension.lowercased() == "marginnotes" { return false }
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+            return false
+        }
+        let ext = url.pathExtension.lowercased()
+        if ext == "marginpkg" || ext == "marginbackup" || ext == "marginbackupall" { return true }
+        if ext == "sqlite" || ext == "marginnotes" { return false }
         if let handle = try? FileHandle(forReadingFrom: url) {
             defer { try? handle.close() }
             if let data = try? handle.read(upToCount: 4), data.count >= 4 {
@@ -147,16 +175,24 @@ public final class MarginNoteImporter {
 
     private func readDatabase(from dbURL: URL, extractedDocuments: [URL]) throws -> MarginNoteImportResult {
         var source: OpaquePointer?
-        guard sqlite3_open_v2(dbURL.path, &source, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, let source else {
-            let message = source.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
-            sqlite3_close(source)
-            throw DatabaseError.open(message)
+        let uriPath = "file:\(dbURL.path)?immutable=1"
+        let openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_URI
+        if sqlite3_open_v2(uriPath, &source, openFlags, nil) != SQLITE_OK {
+            if sqlite3_open_v2(dbURL.path, &source, SQLITE_OPEN_READONLY, nil) != SQLITE_OK {
+                let message = source.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
+                sqlite3_close(source)
+                throw DatabaseError.open(message)
+            }
+        }
+        guard let source else {
+            throw DatabaseError.open("Failed to open SQLite source database at \(dbURL.path)")
         }
         defer { sqlite3_close(source) }
 
         let noteRows = (try? rows(in: source, table: "ZBOOKNOTE")) ?? []
         var noteKeyMap: [String: UUID] = [:]
         var topicToBookMD5s: [String: Set<String>] = [:]
+        var noteMaxPages: [String: Int] = [:]
         for row in noteRows {
             let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             noteKeyMap[key] = stableUUID(key)
@@ -164,12 +200,20 @@ public final class MarginNoteImporter {
                let bookMD5 = first(row, ["ZBOOKMD5", "ZMD5"]) {
                 topicToBookMD5s[topicKey, default: []].insert(bookMD5)
             }
+            if let bookMD5 = first(row, ["ZBOOKMD5", "ZMD5"]) {
+                let endPage = zeroBasedPage(first(row, ["ZENDPAGE"])) ?? 0
+                if endPage > (noteMaxPages[bookMD5] ?? 0) {
+                    noteMaxPages[bookMD5] = endPage
+                }
+            }
         }
 
+        let dbDir = dbURL.deletingLastPathComponent()
         let documentSearchPaths: [URL] = [
+            dbDir,
             documentsDestinationDirectory,
-            dbURL.deletingLastPathComponent(),
-            dbURL.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Documents"),
+            dbDir.deletingLastPathComponent().appendingPathComponent("Documents"),
+            dbDir.deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Documents"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Documents"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/QReader.MarginStudyMac/Documents")
         ]
@@ -182,11 +226,14 @@ public final class MarginNoteImporter {
         var documents: [Document] = []
         for row in rawBookRows {
             let rawKey = first(row, ["ZBOOKID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
-            let rawTitle = first(row, ["ZFILE", "ZTITLE", "ZNAME"]) ?? "Untitled Document"
+            let rawTitle = first(row, ["ZTITLE", "ZNAME", "ZFILE"]) ?? "Untitled Document"
             let cleanTitle = rawTitle.hasSuffix(".pdf") ? String(rawTitle.dropLast(4)) : rawTitle
             var filePath = first(row, ["ZFILEPATH", "ZPATH", "ZLOCALPATH"]) ?? ""
+            let rawOriginalPath = filePath
+            let subPath = first(row, ["ZPATH", "ZLOCALPATH"]) ?? ""
 
             if filePath.isEmpty || !FileManager.default.fileExists(atPath: filePath) {
+                var resolvedPath = ""
                 let fileName = first(row, ["ZFILE", "ZPATH"]) ?? ""
                 if let match = extractedDocuments.first(where: {
                     let name = $0.lastPathComponent
@@ -196,17 +243,52 @@ public final class MarginNoteImporter {
                            name == (cleanTitle + ".pdf") ||
                            titleWithoutExt.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame
                 }) {
-                    filePath = match.path
+                    resolvedPath = match.path
                 } else if extractedDocuments.count == 1 {
-                    filePath = extractedDocuments[0].path
+                    resolvedPath = extractedDocuments[0].path
                 } else if !fileName.isEmpty {
                     for dir in documentSearchPaths {
-                        let candidate = dir.appendingPathComponent(fileName).path
-                        if FileManager.default.fileExists(atPath: candidate) {
-                            filePath = candidate
+                        let candidate1 = dir.appendingPathComponent(fileName).path
+                        if FileManager.default.fileExists(atPath: candidate1) {
+                            resolvedPath = candidate1
                             break
                         }
+                        if !subPath.isEmpty {
+                            let candidate2 = dir.appendingPathComponent(subPath).appendingPathComponent(fileName).path
+                            if FileManager.default.fileExists(atPath: candidate2) {
+                                resolvedPath = candidate2
+                                break
+                            }
+                        }
                     }
+                }
+
+                if resolvedPath.isEmpty {
+                    for candidateName in [rawTitle, cleanTitle + ".pdf", cleanTitle + ".epub"] {
+                        for dir in documentSearchPaths {
+                            let candidate1 = dir.appendingPathComponent(candidateName).path
+                            if FileManager.default.fileExists(atPath: candidate1) {
+                                resolvedPath = candidate1
+                                break
+                            }
+                            if !subPath.isEmpty {
+                                let candidate2 = dir.appendingPathComponent(subPath).appendingPathComponent(candidateName).path
+                                if FileManager.default.fileExists(atPath: candidate2) {
+                                resolvedPath = candidate2
+                                break
+                            }
+                        }
+                    }
+                    if !resolvedPath.isEmpty { break }
+                }
+            }
+
+                if !resolvedPath.isEmpty {
+                    filePath = resolvedPath
+                } else if rawOriginalPath.hasPrefix("/") {
+                    filePath = rawOriginalPath
+                } else {
+                    filePath = ""
                 }
             }
 
@@ -217,11 +299,17 @@ public final class MarginNoteImporter {
 
             let md5 = first(row, ["ZMD5LONG", "ZMD5", "ZBOOKMD5", "ZMD5STRING"]) ?? rawKey
             var totalPages = Int(first(row, ["ZTOTALPAGES", "ZPAGECOUNT"]) ?? "0") ?? 0
-            if totalPages <= 0, FileManager.default.fileExists(atPath: filePath), let doc = PDFKit.PDFDocument(url: URL(fileURLWithPath: filePath)) {
-                totalPages = doc.pageCount
+            if totalPages <= 0 {
+                if let maxPage = noteMaxPages[md5], maxPage > 0 {
+                    totalPages = maxPage + 1
+                } else if copyDocuments && FileManager.default.fileExists(atPath: filePath), let doc = PDFKit.PDFDocument(url: URL(fileURLWithPath: filePath)) {
+                    totalPages = doc.pageCount
+                } else {
+                    totalPages = 1
+                }
             }
 
-            if FileManager.default.fileExists(atPath: filePath) {
+            if copyDocuments && FileManager.default.fileExists(atPath: filePath) {
                 let sidecar = URL(fileURLWithPath: filePath).appendingPathExtension("md5")
                 try? md5.write(to: sidecar, atomically: true, encoding: .utf8)
             }
@@ -324,6 +412,7 @@ public final class MarginNoteImporter {
 
         var mediaHashCache: [String: String] = [:]
         func convertMediaToHEIC(_ md5: String) -> String? {
+            guard copyMedia else { return md5 }
             if let cached = mediaHashCache[md5] {
                 return cached
             }
@@ -411,7 +500,7 @@ public final class MarginNoteImporter {
                 mediaType = "video"
             }
 
-            if (mediaType == "video" || videoStartTime != nil),
+            if copyMedia, (mediaType == "video" || videoStartTime != nil),
                picHash == nil,
                let startTime = videoStartTime,
                let bookMD5 = first(row, ["ZBOOKMD5", "ZMD5"]),
@@ -560,28 +649,35 @@ public final class MarginNoteImporter {
             }
         }
 
-        for topic in topicsToInsert {
-            try database.insertTopic(topic)
-        }
-        for document in result.documents {
-            try database.insertDocument(document)
-        }
-        for card in result.cards {
-            var cardToInsert = card
-            if let targetTopicId = topicIdMapping[card.topicId] {
-                cardToInsert.topicId = targetTopicId
+        try database.execute("BEGIN TRANSACTION;")
+        do {
+            for topic in topicsToInsert {
+                try database.insertTopic(topic)
             }
-            try database.insertCard(cardToInsert)
-        }
-        for link in result.links {
-            var linkToInsert = link
-            if let targetTopicId = topicIdMapping[link.topicId] {
-                linkToInsert.topicId = targetTopicId
+            for document in result.documents {
+                try database.insertDocument(document)
             }
-            try? database.insertLink(linkToInsert)
-        }
-        for item in result.reviewItems {
-            try? database.upsertReviewItem(item)
+            for card in result.cards {
+                var cardToInsert = card
+                if let targetTopicId = topicIdMapping[card.topicId] {
+                    cardToInsert.topicId = targetTopicId
+                }
+                try database.insertCard(cardToInsert)
+            }
+            for link in result.links {
+                var linkToInsert = link
+                if let targetTopicId = topicIdMapping[link.topicId] {
+                    linkToInsert.topicId = targetTopicId
+                }
+                try? database.insertLink(linkToInsert)
+            }
+            for item in result.reviewItems {
+                try? database.upsertReviewItem(item)
+            }
+            try database.execute("COMMIT;")
+        } catch {
+            try? database.execute("ROLLBACK;")
+            throw error
         }
 
         return result
@@ -895,7 +991,15 @@ public final class MarginNoteImporter {
     }
 
     private func parseHighlightPic(_ raw: String?) -> HighlightPicInfo {
-        guard let raw, raw.hasPrefix("base64:"),
+        guard let raw else { return HighlightPicInfo(paintMD5: nil, rects: []) }
+        if raw.hasPrefix("paint:") {
+            let hash = String(raw.dropFirst("paint:".count))
+            return HighlightPicInfo(paintMD5: hash, rects: [])
+        }
+        if !raw.hasPrefix("base64:") && !raw.contains(" ") && !raw.contains("\n") && raw.count >= 8 && raw.count <= 64 {
+            return HighlightPicInfo(paintMD5: raw, rects: [])
+        }
+        guard raw.hasPrefix("base64:"),
               let data = Data(base64Encoded: String(raw.dropFirst("base64:".count)))
         else { return HighlightPicInfo(paintMD5: nil, rects: []) }
 

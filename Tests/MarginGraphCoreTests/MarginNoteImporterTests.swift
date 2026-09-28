@@ -451,4 +451,142 @@ final class MarginNoteImporterTests: XCTestCase {
         XCTAssertEqual(dueItems[0].easeFactor, 2.6, accuracy: 0.001)
         XCTAssertEqual(dueItems[0].repetitions, 2)
     }
+
+    func testReadFolderWithoutCopyingDocumentsOrMedia() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_backup_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let subDir = tempDir.appendingPathComponent("Subfolder")
+        try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
+
+        let mediaDir = tempDir.appendingPathComponent("MarginNotes.sqlite.files")
+        try FileManager.default.createDirectory(at: mediaDir, withIntermediateDirectories: true)
+
+        let doc1URL = tempDir.appendingPathComponent("RootBook.pdf")
+        try Data("dummy pdf 1".utf8).write(to: doc1URL)
+
+        let doc2URL = subDir.appendingPathComponent("SubBook.pdf")
+        try Data("dummy pdf 2".utf8).write(to: doc2URL)
+
+        let sampleMediaData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+        let mediaFile = mediaDir.appendingPathComponent("mediahash123")
+        try sampleMediaData.write(to: mediaFile)
+
+        let dbURL = tempDir.appendingPathComponent("MarginNotes.sqlite")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(dbURL.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let topicID = UUID()
+        let cardID = UUID()
+
+        try exec(db, """
+        CREATE TABLE ZTOPIC (Z_PK INTEGER, ZTOPICID TEXT, ZTITLE TEXT, ZBOOKMD5LIST TEXT);
+        CREATE TABLE ZBOOK (Z_PK INTEGER, ZBOOKID TEXT, ZTITLE TEXT, ZFILE TEXT, ZPATH TEXT, ZMD5 TEXT, ZTOTALPAGES INTEGER);
+        CREATE TABLE ZBOOKNOTE (
+            Z_PK INTEGER, ZNOTEID TEXT, ZTOPICID TEXT, ZBOOKMD5 TEXT, ZNOTETITLE TEXT,
+            ZHIGHLIGHT_TEXT TEXT, ZNOTES_TEXT TEXT, ZGROUPNOTEID TEXT, ZMINDPOS TEXT, ZMINDLINKS TEXT,
+            ZHIGHLIGHT_STYLE TEXT, ZHIGHLIGHT_PIC TEXT
+        );
+        INSERT INTO ZTOPIC VALUES(1, '\(topicID.uuidString)', 'Backup Notebook', '["md5-1", "md5-2"]');
+        INSERT INTO ZBOOK VALUES(1, '1', 'Root Book', 'RootBook.pdf', '', 'md5-1', 10);
+        INSERT INTO ZBOOK VALUES(2, '2', 'Sub Book', 'SubBook.pdf', 'Subfolder', 'md5-2', 20);
+        INSERT INTO ZBOOKNOTE VALUES(
+            1, '\(cardID.uuidString)', '\(topicID.uuidString)', 'md5-1',
+            'Card Title', 'quote', 'note', NULL, '{0,0}', '[]', 'style', 'paint:mediahash123'
+        );
+        """)
+
+        let mediaStorage = try MediaStorage(directoryURL: FileManager.default.temporaryDirectory.appendingPathComponent("test_ms_\(UUID().uuidString)"))
+        defer { try? FileManager.default.removeItem(at: mediaStorage.directoryURL) }
+        mediaStorage.fallbackDirectories = [mediaDir]
+
+        // Pass the folder URL directly, with copyDocuments: false and copyMedia: false
+        let importer = MarginNoteImporter(
+            url: tempDir,
+            mediaStorage: mediaStorage,
+            copyDocuments: false,
+            copyMedia: false
+        )
+        let destination = try Database(inMemory: true)
+        let result = try importer.importInto(destination)
+
+        XCTAssertEqual(result.topics.count, 1)
+        XCTAssertEqual(result.documents.count, 2)
+
+        let rootDoc = try XCTUnwrap(result.documents.first(where: { $0.md5 == "md5-1" }))
+        XCTAssertEqual(rootDoc.filePath, doc1URL.path)
+        XCTAssertEqual(rootDoc.title, "Root Book")
+
+        let subDoc = try XCTUnwrap(result.documents.first(where: { $0.md5 == "md5-2" }))
+        XCTAssertEqual(subDoc.filePath, doc2URL.path)
+        XCTAssertEqual(subDoc.title, "Sub Book")
+
+        XCTAssertEqual(result.cards.count, 1)
+        let card = result.cards[0]
+        XCTAssertEqual(card.highlightPicHash, "mediahash123")
+
+        // Verify mediaStorage can read the image directly from fallbackDirectories without copying!
+        let loaded = mediaStorage.loadImage(hash: "mediahash123")
+        XCTAssertEqual(loaded, sampleMediaData)
+    }
+
+    func testLiveBackupAllImportInPlace() throws {
+        let backupURL = URL(fileURLWithPath: "/Volumes/omv/backups/marginnote/MarginNoteBackup(2026-09-21-12-33-07).marginbackupall")
+        guard FileManager.default.fileExists(atPath: backupURL.path) else {
+            print("Omv backup not mounted, skipping testLiveBackupAllImportInPlace")
+            return
+        }
+
+        let tempLocalMediaDir = FileManager.default.temporaryDirectory.appendingPathComponent("test_local_media_\(UUID().uuidString)")
+        let mediaStorage = try MediaStorage(directoryURL: tempLocalMediaDir)
+        defer { try? FileManager.default.removeItem(at: tempLocalMediaDir) }
+
+        let mediaFilesDir = backupURL.appendingPathComponent("MarginNotes.sqlite.files")
+        if FileManager.default.fileExists(atPath: mediaFilesDir.path) {
+            mediaStorage.fallbackDirectories = [mediaFilesDir]
+        }
+
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let extDir = appSupport.appendingPathComponent("MarginGraph/ExternalDatabases", isDirectory: true)
+        try FileManager.default.createDirectory(at: extDir, withIntermediateDirectories: true)
+        let cacheDbURL = extDir.appendingPathComponent("MarginNoteBackup_2026_09_21_12_33_07_marginbackupall.sqlite")
+
+        let destination: Database
+        let startTime = CFAbsoluteTimeGetCurrent()
+
+        if !FileManager.default.fileExists(atPath: cacheDbURL.path) {
+            destination = try Database(url: cacheDbURL)
+            let importer = MarginNoteImporter(
+                url: backupURL,
+                mediaStorage: mediaStorage,
+                copyDocuments: false,
+                copyMedia: false
+            )
+            let result = try importer.importInto(destination)
+            let duration = CFAbsoluteTimeGetCurrent() - startTime
+            print("Imported live backupall to cache in \(duration)s: \(result.topics.count) topics, \(result.documents.count) docs, \(result.cards.count) cards")
+            XCTAssertEqual(result.documents.count, 363)
+            XCTAssertGreaterThan(result.topics.count, 400)
+            XCTAssertGreaterThan(result.cards.count, 15000)
+        } else {
+            destination = try Database(url: cacheDbURL)
+            let duration = CFAbsoluteTimeGetCurrent() - startTime
+            print("Loaded cached external DB in \(duration)s")
+        }
+
+        let allDocs = try destination.allDocuments()
+        XCTAssertEqual(allDocs.count, 363)
+
+        // Verify zero files copied to temp local media storage
+        let localMediaFiles = (try? FileManager.default.contentsOfDirectory(atPath: tempLocalMediaDir.path)) ?? []
+        XCTAssertEqual(localMediaFiles.count, 0, "No media should be copied locally when copyMedia is false")
+
+        // Verify every single document exists in place
+        for doc in allDocs {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: doc.filePath), "Document missing at \(doc.filePath)")
+        }
+    }
 }
