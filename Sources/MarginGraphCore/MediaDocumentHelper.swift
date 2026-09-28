@@ -29,6 +29,38 @@ public enum MediaDocumentHelper {
         "pdf", "marginpkg", "marginnotes", "sqlite"
     ]).union(supportedEBookExtensions)
 
+    public static let supportedReflowableExtensions: Set<String> = [
+        "epub", "fb2", "zfb2", "mobi", "prc", "azw", "azw3", "kf8",
+        "txt", "text", "md", "markdown", "adoc", "asciidoc", "org",
+        "rst", "rtf", "rtfd", "html", "htm", "xhtml"
+    ]
+
+    public static func isReflowableFormat(_ ext: String) -> Bool {
+        supportedReflowableExtensions.contains(ext.lowercased())
+    }
+
+    public static func isReflowable(url: URL) -> Bool {
+        let ext = url.pathExtension.lowercased()
+        if supportedReflowableExtensions.contains(ext) {
+            return true
+        }
+        let sidecarFormat = url.deletingPathExtension().appendingPathExtension("format")
+        if let fmt = try? String(contentsOf: sidecarFormat, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           supportedReflowableExtensions.contains(fmt.lowercased()) {
+            return true
+        }
+        return false
+    }
+
+    public static func resolveSourceURL(for pdfURL: URL) -> URL? {
+        let sidecarSource = pdfURL.deletingPathExtension().appendingPathExtension("source_path")
+        if let path = try? String(contentsOf: sidecarSource, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        return nil
+    }
+
     public static func documentType(for url: URL) -> String {
         let ext = url.pathExtension.lowercased()
         if supportedVideoExtensions.contains(ext) {

@@ -1059,6 +1059,51 @@ final class AppModel: ObservableObject {
         reloadDocumentCards()
     }
 
+    func updateTypography(options: TypographyOptions) {
+        guard let doc = activeDocument else { return }
+        TypographyPreferences.shared.setOptions(options, forDocumentMD5: doc.md5)
+
+        var sourceURL: URL? = nil
+        let directURL = URL(fileURLWithPath: doc.filePath)
+        if MediaDocumentHelper.isEBook(url: directURL) {
+            sourceURL = directURL
+        } else if let sidecarSource = MediaDocumentHelper.resolveSourceURL(for: directURL) {
+            sourceURL = sidecarSource
+        } else if let orig = manager?.originalURL {
+            sourceURL = orig
+        }
+
+        if sourceURL == nil {
+            if let match = try? database.allDocuments().first(where: { $0.md5 == doc.md5 && MediaDocumentHelper.isEBook(url: URL(fileURLWithPath: $0.filePath)) }) {
+                sourceURL = URL(fileURLWithPath: match.filePath)
+            }
+        }
+
+        guard let source = sourceURL else { return }
+
+        let currentIdx = documentCurrentPage[doc.md5] ?? doc.lastPageIndex
+        let oldTotal = max(1, manager?.pageCount ?? doc.totalPages)
+        let progress = Double(currentIdx) / Double(oldTotal)
+
+        do {
+            let converted = try EBookConverter.ensureConvertedPDF(for: source, options: options)
+            guard let newDoc = PDFDocument(url: converted.pdfURL) else { return }
+            let newTotal = newDoc.pageCount
+            let newPage = min(max(0, Int(round(progress * Double(newTotal)))), newTotal - 1)
+
+            let newManager = try PDFDocumentManager(url: source, md5: doc.md5, typographyOptions: options)
+            self.manager = newManager
+            self.documentCurrentPage[doc.md5] = newPage
+            self.activeDocument?.totalPages = newTotal
+            self.activeDocument?.lastPageIndex = newPage
+            try? database.updateDocumentPages(id: doc.id, pages: newTotal)
+            try? database.updateDocumentPosition(id: doc.id, pageIndex: newPage, pageOffsetY: 0.0)
+            self.reloadDocumentCards()
+        } catch {
+            print("Failed to re-convert with typography options: \(error)")
+        }
+    }
+
     func createVideoExcerptCard(startTime: Double, endTime: Double, title: String) {
         guard let activeDocument, let topicID = selectedTopicID else { return }
         let cardID = UUID()
@@ -2970,6 +3015,9 @@ struct StudyWorkspaceView: View {
                 },
                 onDeleteEmphasis: { cardID, text, rects in
                     model.deleteEmphasisInCard(cardID: cardID, text: text, rects: rects)
+                },
+                onUpdateTypography: { [weak model] options in
+                    model?.updateTypography(options: options)
                 }
             )
         } else if let doc = model.activeDocument, doc.documentType == "video" || doc.documentType == "audio" {

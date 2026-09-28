@@ -702,3 +702,30 @@ Structure each entry concisely with actionable rules:
        Persist a layout version sidecar (`<md5>.layout_ver = "v2_std_font"`). In `ensureConvertedPDF`, check if reflowable documents have a matching `layout_ver`. If the sidecar is missing or outdated, automatically remove the stale PDF and re-convert, ensuring users immediately enjoy standardized fonts without needing to manually clear caches.
 
 
+
+- **Custom Typography Controls & Variant Caching for Reflowable eBooks (`TypographyOptions`, `EBookConverter`)**:
+  - **Baseline Font Size Selection**:
+    Analysis of standard professional digital book PDFs (e.g. *How to Take Smart Notes*, *Save the Cat!*) demonstrates that body text renders at ~14.4–15.0 pt on US Letter / A4 width pages. Setting baseline reflowable eBook body font size to 15.0 pt provides optimal desktop split-view readability (~10–12 words / 55–65 characters per line). Headings scale proportionally (`h1: 26pt`, `h2: 21pt`, `h3: 18pt`, `h4: 16pt`, `h5/h6: 15pt`), code blocks at `13pt`, and line-height defaults to `1.50`.
+  - **Multi-Setting Variant Caching**:
+    Store re-rendered reflowable PDFs using deterministic cache keys (`<md5>_<cacheKey>.pdf`, e.g. `<md5>_v3_fs18_ls1.50_system.pdf`) alongside the active `<md5>.pdf`. When the user switches between previously selected font sizes or styles, copy from the cached variant instantly (<10ms) without re-running PyMuPDF or WebKit re-conversion.
+  - **Source File Path Sidecars (`.source_path`)**:
+    MarginNote library databases store the converted PDF path (`.../<md5>.pdf`) in `document.filePath`. To enable dynamic re-conversion with new typography preferences, write a `.source_path` sidecar alongside `<md5>.pdf` containing the absolute path of the original `.epub`/`.mobi` file. `MediaDocumentHelper.resolveSourceURL` and `PDFDocumentManager` resolve the original reflowable source file from this sidecar.
+  - **Proportional Reading Position Preservation**:
+    When font size or line spacing changes, the total page count shifts. Preserve the user's reading position across reflow re-renders by calculating proportional progress (`Double(currentPage) / Double(oldTotalPages)`), re-converting, and restoring `newPageIndex = Int(round(progress * Double(newTotalPages)))`.
+
+- **In-Window Popovers vs Native AppKit NSPopover Boundary Overflow (`InWindowPopoverContainer`)**:
+  - **Trap (Popover Exceeding Program Boundary)**:
+    Using native SwiftUI `.popover(isPresented:arrowEdge:)` creates an AppKit `NSPopover` in a separate floating window. When attached to toolbar buttons positioned near the edge of a pane or window (such as the `"textformat.size"` `AA` button on the far right of the PDF toolbar), AppKit attempts to center the popover horizontally on the anchor button. When the button is closer to the window border than half the popover width, the popover card bleeds outside the boundary of the application window, obscuring external apps or clipping outside display bounds.
+  - **Rule**:
+    1. **Never use native `.popover(isPresented:)` for edge-adjacent toolbar buttons**:
+       Always host toolbar popovers (TOC, Bookmarks, Reading Appearance / Typography) inside `InWindowPopoverContainer`.
+    2. **Anchor Geometry & Clamping**:
+       Record the button's bounds via `GeometryReader` into `PDFToolbarButtonFrameKey.self` preference key. In the container overlay, `InWindowPopoverContainer` computes:
+       `let effectiveWidth = min(popoverWidth, max(180, containerWidth - margin * 2))`
+       `let left = max(margin, min(idealLeft, containerWidth - effectiveWidth - margin))`
+       This mathematically guarantees that the popover card is strictly confined within `[margin, containerWidth - effectiveWidth - margin]`.
+    3. **Dynamic Pointer Arrow Alignment**:
+       `PopoverBubbleShape(arrowX: anchorFrame.midX - left)` dynamically shifts the arrow along the top edge of the card to point directly at the button's center, even when the card itself is clamped at the window edge.
+    4. **Responsive Content Width**:
+       Specify `.frame(maxWidth: popoverWidth)` rather than a fixed `.frame(width: popoverWidth)` on popover content views (like `TypographySettingsPopoverView`) so the view gracefully adapts if the container or split pane is resized narrower than the default width.
+

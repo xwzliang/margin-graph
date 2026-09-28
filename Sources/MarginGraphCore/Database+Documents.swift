@@ -394,4 +394,21 @@ public extension Database {
             try requireDone(stmt)
         }
     }
+
+    func updateDocumentPages(id: UUID, pages: Int) throws {
+        try withStatement("UPDATE documents SET total_pages = ? WHERE id = ?") { stmt in
+            bind(pages, to: 1, in: stmt)
+            bind(id.uuidString, to: 2, in: stmt)
+            try requireDone(stmt)
+        }
+    }
+
+    func updateDocumentPosition(id: UUID, pageIndex: Int, pageOffsetY: Double) throws {
+        try withStatement("UPDATE documents SET last_page_index = ?, last_page_offset_y = ? WHERE id = ?") { stmt in
+            bind(pageIndex, to: 1, in: stmt)
+            bind(pageOffsetY, to: 2, in: stmt)
+            bind(id.uuidString, to: 3, in: stmt)
+            try requireDone(stmt)
+        }
+    }
 }

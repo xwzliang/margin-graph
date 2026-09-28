@@ -86,6 +86,7 @@ public struct MarginNotePDFContainerView: View {
     public var initialPageOffsetY: CGFloat
     public var onPageChanged: ((Int) -> Void)?
     public var onPositionChanged: ((Int, CGFloat) -> Void)?
+    public var onUpdateTypography: ((TypographyOptions) -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -98,8 +99,10 @@ public struct MarginNotePDFContainerView: View {
     @State private var bookmarkedPages: Set<Int> = []
     @State private var showBookmarksPopover: Bool = false
     @State private var showTableOfContentsPopover: Bool = false
+    @State private var showTypographyPopover: Bool = false
     @State private var tocButtonFrame: CGRect? = nil
     @State private var bookmarksButtonFrame: CGRect? = nil
+    @State private var typographyButtonFrame: CGRect? = nil
     @State private var displayMode: PDFReaderDisplayMode = .continuous
     @State private var pageHistory: [Int] = []
     @State private var historyIndex: Int = 0
@@ -140,7 +143,8 @@ public struct MarginNotePDFContainerView: View {
         onAddToComments: ((UUID, String) -> Void)? = nil,
         onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onEmphasize: ((UUID, String, [HighlightRect]) -> Void)? = nil,
-        onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil
+        onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil,
+        onUpdateTypography: ((TypographyOptions) -> Void)? = nil
     ) {
         self.manager = manager
         self.cards = cards
@@ -173,6 +177,7 @@ public struct MarginNotePDFContainerView: View {
         self.onMerge = onMerge
         self.onEmphasize = onEmphasize
         self.onDeleteEmphasis = onDeleteEmphasis
+        self.onUpdateTypography = onUpdateTypography
         self.initialPageIndex = initialPageIndex
         self.onPageChanged = onPageChanged
         self._currentPageIndex = State(initialValue: initialPageIndex)
@@ -240,6 +245,7 @@ public struct MarginNotePDFContainerView: View {
                             showTableOfContentsPopover.toggle()
                             if showTableOfContentsPopover {
                                 showBookmarksPopover = false
+                                showTypographyPopover = false
                             }
                         }
                     } label: {
@@ -290,6 +296,7 @@ public struct MarginNotePDFContainerView: View {
                                 showBookmarksPopover.toggle()
                                 if showBookmarksPopover {
                                     showTableOfContentsPopover = false
+                                    showTypographyPopover = false
                                 }
                             }
                         } label: {
@@ -311,8 +318,51 @@ public struct MarginNotePDFContainerView: View {
                         )
                     }
 
+                    // Reading Typography (Font Size, Style, Spacing)
+                    if manager.isReflowable {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showTypographyPopover.toggle()
+                                if showTypographyPopover {
+                                    showBookmarksPopover = false
+                                    showTableOfContentsPopover = false
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "textformat.size")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundStyle(showTypographyPopover ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
+                                .frame(width: 26, height: 26)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(showTypographyPopover ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12) : Color.clear)
+                                )
+                                .enlargedHitTarget(width: 32, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .marginNoteTooltip("Reading Appearance (Font Size, Spacing, Font)")
+                        .background(
+                            GeometryReader { geo in
+                                Color.clear.preference(
+                                    key: PDFToolbarButtonFrameKey.self,
+                                    value: ["typography": geo.frame(in: .named("PDFContainerSpace"))]
+                                )
+                            }
+                        )
+                    }
+
                     // More options menu
                     Menu {
+                        if manager.isReflowable {
+                            Button("Reading Appearance…") {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showBookmarksPopover = false
+                                    showTableOfContentsPopover = false
+                                    showTypographyPopover = true
+                                }
+                            }
+                            Divider()
+                        }
                         Button(displayMode == .continuous ? "✓ Continuous Scroll" : "Continuous Scroll") {
                             displayMode = .continuous
                         }
@@ -631,6 +681,28 @@ public struct MarginNotePDFContainerView: View {
                     .zIndex(200)
                 }
 
+                if showTypographyPopover {
+                    InWindowPopoverContainer(
+                        anchorFrame: typographyButtonFrame ?? CGRect(x: containerGeometry.size.width - 40, y: 7, width: 24, height: 24),
+                        containerWidth: containerGeometry.size.width,
+                        popoverWidth: 280,
+                        onDismiss: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showTypographyPopover = false
+                            }
+                        }
+                    ) {
+                        TypographySettingsPopoverView(
+                            documentMD5: manager.md5,
+                            onApply: { options in
+                                onUpdateTypography?(options)
+                            }
+                        )
+                    }
+                    .transition(.opacity)
+                    .zIndex(200)
+                }
+
                 if showGoToPageDialog {
                     let totalCount = max(manager.pageCount, totalPageCount)
                     Color.black.opacity(0.12)
@@ -731,6 +803,9 @@ public struct MarginNotePDFContainerView: View {
                 }
                 if let f = frames["bookmarks"] {
                     bookmarksButtonFrame = f
+                }
+                if let f = frames["typography"] {
+                    typographyButtonFrame = f
                 }
             }
         }

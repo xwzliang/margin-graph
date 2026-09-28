@@ -24,19 +24,47 @@ public final class PDFDocumentManager: @unchecked Sendable {
     public let title: String
     public let pageCount: Int
     public let outline: [PDFOutlineItem]
+    public let originalURL: URL?
+    public let typographyOptions: TypographyOptions?
 
-    public init(url: URL, md5: String? = nil) throws {
+    public var isReflowable: Bool {
+        if let originalURL, MediaDocumentHelper.isReflowable(url: originalURL) {
+            return true
+        }
+        return MediaDocumentHelper.isReflowable(url: url)
+    }
+
+    public init(url: URL, md5: String? = nil, typographyOptions: TypographyOptions? = nil) throws {
         let isEBook = MediaDocumentHelper.isEBook(url: url)
         let effectiveURL: URL
         let ebookMD5: String?
+        let resolvedOriginalURL: URL?
+
         if isEBook {
-            let converted = try EBookConverter.ensureConvertedPDF(for: url)
+            let docMD5 = md5 ?? MediaDocumentHelper.computeFileMD5(url: url)
+            let options = typographyOptions ?? TypographyPreferences.shared.options(forDocumentMD5: docMD5)
+            let converted = try EBookConverter.ensureConvertedPDF(for: url, options: options)
             effectiveURL = converted.pdfURL
             ebookMD5 = converted.md5
+            resolvedOriginalURL = url
+            self.typographyOptions = options
         } else {
-            effectiveURL = url
-            ebookMD5 = nil
+            if let source = MediaDocumentHelper.resolveSourceURL(for: url), MediaDocumentHelper.isEBook(url: source) {
+                let docMD5 = md5 ?? MediaDocumentHelper.computeFileMD5(url: source)
+                let options = typographyOptions ?? TypographyPreferences.shared.options(forDocumentMD5: docMD5)
+                let converted = try EBookConverter.ensureConvertedPDF(for: source, options: options)
+                effectiveURL = converted.pdfURL
+                ebookMD5 = converted.md5
+                resolvedOriginalURL = source
+                self.typographyOptions = options
+            } else {
+                effectiveURL = url
+                ebookMD5 = nil
+                resolvedOriginalURL = nil
+                self.typographyOptions = nil
+            }
         }
+        self.originalURL = resolvedOriginalURL
 
         guard let document = PDFDocument(url: effectiveURL) else {
             throw CocoaError(.fileReadCorruptFile)

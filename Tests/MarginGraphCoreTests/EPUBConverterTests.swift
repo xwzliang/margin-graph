@@ -140,7 +140,10 @@ final class EPUBConverterTests: XCTestCase {
         let sidecarVer = result.pdfURL.deletingPathExtension().appendingPathExtension("layout_ver")
         XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarVer.path))
         let verContent = try String(contentsOf: sidecarVer, encoding: .utf8)
-        XCTAssertEqual(verContent, "v2_std_font")
+        XCTAssertEqual(verContent, TypographyOptions.default.cacheKey)
+
+        let sidecarSource = result.pdfURL.deletingPathExtension().appendingPathExtension("source_path")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarSource.path))
 
         guard let doc = PDFDocument(url: result.pdfURL), doc.pageCount > 0 else {
             XCTFail("Failed to load converted PDF")
@@ -154,9 +157,43 @@ final class EPUBConverterTests: XCTestCase {
             XCTAssertEqual(bounds.height, 842, accuracy: 2.0, "Reflowable EPUB page height should be standardized to A4 (842pt)")
         }
 
-        // Verify page count normalized (down from 1815 pages to ~600 pages due to proper font scale)
-        XCTAssertLessThan(result.pageCount, 1000, "Normalized font and layout should produce standard book page count (~600 pages)")
-        XCTAssertGreaterThan(result.pageCount, 400)
+        // Verify page count normalized (comfortable reading font size)
+        XCTAssertLessThan(result.pageCount, 1200, "Normalized font and layout should produce standard book page count")
+        XCTAssertGreaterThan(result.pageCount, 500)
+    }
+
+    func testCustomTypographyConversion() throws {
+        let sampleEPUBPath = "/Volumes/omv/backups/marginnote/MarginNoteBackup(2026-09-21-12-33-07).marginbackupall/[John_Calcote]_Autotools,_2nd_Edition__A_Practitio(z-lib.org).epub"
+        guard FileManager.default.fileExists(atPath: sampleEPUBPath) else { return }
+
+        let epubURL = URL(fileURLWithPath: sampleEPUBPath)
+
+        let customOptions = TypographyOptions(fontSize: 18.0, lineSpacing: 1.75, fontStyle: .serif)
+        XCTAssertEqual(customOptions.cacheKey, "v3_fs18_ls175_serif")
+
+        let result = try EBookConverter.ensureConvertedPDF(for: epubURL, options: customOptions)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: result.pdfURL.path))
+
+        let sidecarVer = result.pdfURL.deletingPathExtension().appendingPathExtension("layout_ver")
+        let verContent = try String(contentsOf: sidecarVer, encoding: .utf8)
+        XCTAssertEqual(verContent, "v3_fs18_ls175_serif")
+
+        // Larger font (18pt vs 15pt) and looser spacing (1.75x vs 1.5x) should produce more pages
+        guard let doc = PDFDocument(url: result.pdfURL), doc.pageCount > 0 else {
+            XCTFail("Failed to load converted PDF with custom typography")
+            return
+        }
+        XCTAssertGreaterThan(doc.pageCount, 800)
+
+        // Test instant variant cache reuse when switching back to default
+        let defaultResult = try EBookConverter.ensureConvertedPDF(for: epubURL, options: .default)
+        let defaultVer = try String(contentsOf: defaultResult.pdfURL.deletingPathExtension().appendingPathExtension("layout_ver"), encoding: .utf8)
+        XCTAssertEqual(defaultVer, TypographyOptions.default.cacheKey)
+
+        // Switching back to custom options should be instant from disk cache
+        let reusedResult = try EBookConverter.ensureConvertedPDF(for: epubURL, options: customOptions)
+        let reusedVer = try String(contentsOf: reusedResult.pdfURL.deletingPathExtension().appendingPathExtension("layout_ver"), encoding: .utf8)
+        XCTAssertEqual(reusedVer, "v3_fs18_ls175_serif")
     }
 }
 

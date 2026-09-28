@@ -123,7 +123,7 @@ public final class EBookConverter: Sendable {
         return docs
     }
 
-    public static func ensureConvertedPDF(for ebookURL: URL) throws -> ConvertedEBookResult {
+    public static func ensureConvertedPDF(for ebookURL: URL, options: TypographyOptions = .default) throws -> ConvertedEBookResult {
         guard FileManager.default.fileExists(atPath: ebookURL.path) else {
             throw EBookConverterError.fileNotFound(ebookURL.path)
         }
@@ -137,16 +137,45 @@ public final class EBookConverter: Sendable {
         let docsDir = documentsDirectory()
         let targetPDF = docsDir.appendingPathComponent("\(md5).pdf")
 
-        let currentLayoutVersion = "v2_std_font"
+        let isReflowable = MediaDocumentHelper.isReflowableFormat(ext)
+        let currentLayoutVersion = isReflowable ? options.cacheKey : "v1_fixed"
+        let variantPDF = docsDir.appendingPathComponent("\(md5)_\(currentLayoutVersion).pdf")
         let sidecarVer = targetPDF.deletingPathExtension().appendingPathExtension("layout_ver")
-        let isReflowable = ["epub", "fb2", "zfb2", "mobi", "prc", "azw", "azw3", "kf8", "txt", "text", "md", "markdown", "adoc", "asciidoc", "org", "rst", "rtf", "rtfd", "html", "htm", "xhtml"].contains(ext)
+        let sidecarSource = targetPDF.deletingPathExtension().appendingPathExtension("source_path")
+        let sidecarFormat = targetPDF.deletingPathExtension().appendingPathExtension("format")
 
-        // If converted PDF already exists and is non-empty, use it immediately
+        // 1. If targetPDF already exists, has valid layout_ver matching currentLayoutVersion, use it immediately
         if FileManager.default.fileExists(atPath: targetPDF.path),
            let attrs = try? FileManager.default.attributesOfItem(atPath: targetPDF.path),
            let size = attrs[.size] as? Int64, size > 1024,
            let doc = PDFDocument(url: targetPDF), doc.pageCount > 0,
            (!isReflowable || (try? String(contentsOf: sidecarVer, encoding: .utf8)) == currentLayoutVersion) {
+            try? ebookURL.path.write(to: sidecarSource, atomically: true, encoding: .utf8)
+            let titleAttr = doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
+            let authorAttr = doc.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String
+            let fallbackTitle = ebookURL.deletingPathExtension().lastPathComponent
+            let title = (titleAttr?.isEmpty == false ? titleAttr : nil) ?? fallbackTitle
+            return ConvertedEBookResult(
+                originalURL: ebookURL,
+                pdfURL: targetPDF,
+                md5: md5,
+                title: title,
+                author: authorAttr ?? "",
+                pageCount: doc.pageCount,
+                format: ext
+            )
+        }
+
+        // 2. If variantPDF already exists for this layout version, copy it to targetPDF instantly
+        if isReflowable && FileManager.default.fileExists(atPath: variantPDF.path),
+           let attrs = try? FileManager.default.attributesOfItem(atPath: variantPDF.path),
+           let size = attrs[.size] as? Int64, size > 1024,
+           let doc = PDFDocument(url: variantPDF), doc.pageCount > 0 {
+            try? FileManager.default.removeItem(at: targetPDF)
+            try? FileManager.default.copyItem(at: variantPDF, to: targetPDF)
+            try? currentLayoutVersion.write(to: sidecarVer, atomically: true, encoding: .utf8)
+            try? ebookURL.path.write(to: sidecarSource, atomically: true, encoding: .utf8)
+            try? ext.write(to: sidecarFormat, atomically: true, encoding: .utf8)
             let titleAttr = doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
             let authorAttr = doc.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String
             let fallbackTitle = ebookURL.deletingPathExtension().lastPathComponent
@@ -169,7 +198,7 @@ public final class EBookConverter: Sendable {
         // Perform format-specific native conversion
         switch ext {
         case "epub":
-            try convertEPUB(epubURL: ebookURL, targetPDF: targetPDF)
+            try convertEPUB(epubURL: ebookURL, targetPDF: targetPDF, options: options)
         case "cbz", "cbr":
             try convertCBZ(cbzURL: ebookURL, targetPDF: targetPDF)
         case "cbt":
@@ -213,14 +242,20 @@ public final class EBookConverter: Sendable {
             throw EBookConverterError.conversionFailed("Conversion produced empty or invalid PDF")
         }
 
+        // Cache variant if reflowable
+        if isReflowable {
+            try? FileManager.default.removeItem(at: variantPDF)
+            try? FileManager.default.copyItem(at: targetPDF, to: variantPDF)
+        }
+
         // Write MD5 sidecars
         let sidecarPDF = targetPDF.appendingPathExtension("md5")
         try? md5.write(to: sidecarPDF, atomically: true, encoding: .utf8)
         let sidecarEBook = ebookURL.appendingPathExtension("md5")
         try? md5.write(to: sidecarEBook, atomically: true, encoding: .utf8)
-        let sidecarFormat = targetPDF.deletingPathExtension().appendingPathExtension("format")
         try? ext.write(to: sidecarFormat, atomically: true, encoding: .utf8)
         try? currentLayoutVersion.write(to: sidecarVer, atomically: true, encoding: .utf8)
+        try? ebookURL.path.write(to: sidecarSource, atomically: true, encoding: .utf8)
 
         let titleAttr = doc.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
         let authorAttr = doc.documentAttributes?[PDFDocumentAttribute.authorAttribute] as? String
@@ -240,14 +275,14 @@ public final class EBookConverter: Sendable {
 
     // MARK: - 1. EPUB Converter
 
-    public static func convertEPUB(epubURL: URL, targetPDF: URL) throws {
+    public static func convertEPUB(epubURL: URL, targetPDF: URL, options: TypographyOptions = .default) throws {
         var conversionError: String? = nil
 
         // Method 1: PyMuPDF (fast, if user has Python+PyMuPDF)
         if ProcessInfo.processInfo.environment["FORCE_NATIVE_EPUB"] != "1",
            let pythonURL = findExecutable(named: "python3") {
             do {
-                try convertWithPyMuPDF(pythonURL: pythonURL, epubPath: epubURL.path, pdfPath: targetPDF.path)
+                try convertWithPyMuPDF(pythonURL: pythonURL, epubPath: epubURL.path, pdfPath: targetPDF.path, options: options)
             } catch {
                 conversionError = error.localizedDescription
             }
@@ -259,7 +294,7 @@ public final class EBookConverter: Sendable {
 
         if !pdfCreated {
             do {
-                try convertWithNativeWebKitEPUB(epubURL: epubURL, targetPDF: targetPDF)
+                try convertWithNativeWebKitEPUB(epubURL: epubURL, targetPDF: targetPDF, options: options)
             } catch {
                 conversionError = (conversionError != nil ? "\(conversionError!) | " : "") + "Native WebKit: \(error.localizedDescription)"
             }
@@ -285,11 +320,11 @@ public final class EBookConverter: Sendable {
         }
     }
 
-    public static func convertWithNativeWebKit(epubURL: URL, targetPDF: URL) throws {
-        try convertWithNativeWebKitEPUB(epubURL: epubURL, targetPDF: targetPDF)
+    public static func convertWithNativeWebKit(epubURL: URL, targetPDF: URL, options: TypographyOptions = .default) throws {
+        try convertWithNativeWebKitEPUB(epubURL: epubURL, targetPDF: targetPDF, options: options)
     }
 
-    private static func convertWithNativeWebKitEPUB(epubURL: URL, targetPDF: URL) throws {
+    private static func convertWithNativeWebKitEPUB(epubURL: URL, targetPDF: URL, options: TypographyOptions = .default) throws {
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("EPUB_\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDir) }
@@ -408,7 +443,8 @@ public final class EBookConverter: Sendable {
             title: bookTitle,
             author: bookAuthor,
             tocItems: tocMapped,
-            targetPDF: targetPDF
+            targetPDF: targetPDF,
+            options: options
         )
     }
 
@@ -2725,11 +2761,12 @@ public final class EBookConverter: Sendable {
         title: String,
         author: String,
         tocItems: [(title: String, targetURL: URL)],
-        targetPDF: URL
+        targetPDF: URL,
+        options: TypographyOptions = .default
     ) throws {
         let masterDoc: PDFDocument = try runOnMainThread { (completion: @escaping (Result<PDFDocument, Error>) -> Void) in
             let masterPDF = PDFDocument()
-            let renderer = WebKitChapterRenderer()
+            let renderer = WebKitChapterRenderer(options: options)
             var chapterIndex = 0
             var urlToPageMap: [URL: Int] = [:]
 
@@ -3022,9 +3059,41 @@ public final class EBookConverter: Sendable {
 
     // MARK: - Legacy / Optional External Converters
 
-    private static func convertWithPyMuPDF(pythonURL: URL, epubPath: String, pdfPath: String) throws {
+    public static func normalizingCSS(for options: TypographyOptions = .default) -> String {
+        let fs = options.fontSize
+        let ls = options.lineSpacing
+        let h1 = round(fs * 1.7)
+        let h2 = round(fs * 1.4)
+        let h3 = round(fs * 1.2)
+        let h4 = round(fs * 1.05)
+        let h5_6 = fs
+        let codeFs = max(9.0, round(fs * 0.85))
+        let smallFs = max(8.0, round(fs * 0.8))
+        let subFs = max(7.0, round(fs * 0.7))
+        let ff = options.fontStyle.cssFontFamily
+
+        return """
+        body, p, div, li, a, td, th {
+            font-size: \(fs)pt !important;
+            line-height: \(ls) !important;
+            font-family: \(ff) !important;
+        }
+        h1, h1 * { font-size: \(h1)pt !important; line-height: 1.25 !important; font-family: \(ff) !important; }
+        h2, h2 * { font-size: \(h2)pt !important; line-height: 1.3 !important; font-family: \(ff) !important; }
+        h3, h3 * { font-size: \(h3)pt !important; line-height: 1.35 !important; font-family: \(ff) !important; }
+        h4, h4 * { font-size: \(h4)pt !important; line-height: 1.35 !important; font-family: \(ff) !important; }
+        h5, h5 *, h6, h6 * { font-size: \(h5_6)pt !important; line-height: 1.35 !important; font-family: \(ff) !important; }
+        code, pre, tt, kbd, samp, code *, pre * { font-size: \(codeFs)pt !important; font-family: Menlo, Monaco, Consolas, 'Courier New', monospace !important; }
+        pre { white-space: pre-wrap !important; word-break: break-all !important; }
+        small, small * { font-size: \(smallFs)pt !important; }
+        sup, sub, sup *, sub * { font-size: \(subFs)pt !important; }
+        img { max-width: 100% !important; height: auto !important; }
+        """
+    }
+
+    private static func convertWithPyMuPDF(pythonURL: URL, epubPath: String, pdfPath: String, options: TypographyOptions = .default) throws {
         let script = """
-import pymupdf, sys, os
+import pymupdf, sys, os, base64
 
 try:
     pymupdf.TOOLS.mupdf_display_errors(False)
@@ -3034,32 +3103,20 @@ except Exception:
 
 epub_path = sys.argv[1]
 pdf_path = sys.argv[2]
+css_str = base64.b64decode(sys.argv[3]).decode('utf-8') if len(sys.argv) > 3 else ''
+base_fs = float(sys.argv[4]) if len(sys.argv) > 4 else 15.0
+
 doc = pymupdf.open(epub_path)
 
 is_reflowable = getattr(doc, 'is_refl', getattr(doc, 'is_reflowable', False))
 if is_reflowable:
-    css = '''
-    body, p, div, li, a, td, th {
-        font-size: 11pt !important;
-        line-height: 1.45 !important;
-    }
-    h1, h1 * { font-size: 20pt !important; line-height: 1.25 !important; }
-    h2, h2 * { font-size: 16pt !important; line-height: 1.3 !important; }
-    h3, h3 * { font-size: 13.5pt !important; line-height: 1.35 !important; }
-    h4, h4 * { font-size: 12pt !important; line-height: 1.35 !important; }
-    h5, h5 *, h6, h6 * { font-size: 11pt !important; line-height: 1.35 !important; }
-    code, pre, tt, kbd, samp, code *, pre * { font-size: 9.5pt !important; font-family: monospace !important; }
-    pre { white-space: pre-wrap !important; word-break: break-all !important; }
-    small, small * { font-size: 9pt !important; }
-    sup, sub, sup *, sub * { font-size: 8pt !important; }
-    img { max-width: 100% !important; height: auto !important; }
-    '''
+    if css_str:
+        try:
+            doc.apply_css(css_str, append=True)
+        except Exception:
+            pass
     try:
-        doc.apply_css(css, append=True)
-    except Exception:
-        pass
-    try:
-        doc.layout(width=595, height=842, fontsize=11)
+        doc.layout(width=595, height=842, fontsize=base_fs)
     except Exception:
         pass
 
@@ -3073,9 +3130,13 @@ if meta:
     pdf_doc.set_metadata(meta)
 pdf_doc.save(pdf_path)
 """
+        let cssData = Data(normalizingCSS(for: options).utf8)
+        let cssBase64 = cssData.base64EncodedString()
+        let fsStr = String(format: "%.1f", options.fontSize)
+
         let process = Process()
         process.executableURL = pythonURL
-        process.arguments = ["-c", script, epubPath, pdfPath]
+        process.arguments = ["-c", script, epubPath, pdfPath, cssBase64, fsStr]
         let errorPipe = Pipe()
         process.standardError = errorPipe
 
@@ -3136,33 +3197,21 @@ private final class WebKitChapterRenderer: NSObject, WKNavigationDelegate, @unch
     private var completionHandler: ((Result<Data, Error>) -> Void)?
     private var isCompleted = false
     private var timeoutWorkItem: DispatchWorkItem?
-
-    private static let normalizingCSS = """
-    body, p, div, li, a, td, th {
-        font-size: 11pt !important;
-        line-height: 1.45 !important;
-    }
-    h1, h1 * { font-size: 20pt !important; line-height: 1.25 !important; }
-    h2, h2 * { font-size: 16pt !important; line-height: 1.3 !important; }
-    h3, h3 * { font-size: 13.5pt !important; line-height: 1.35 !important; }
-    h4, h4 * { font-size: 12pt !important; line-height: 1.35 !important; }
-    h5, h5 *, h6, h6 * { font-size: 11pt !important; line-height: 1.35 !important; }
-    code, pre, tt, kbd, samp, code *, pre * { font-size: 9.5pt !important; font-family: monospace !important; }
-    pre { white-space: pre-wrap !important; word-break: break-all !important; }
-    small, small * { font-size: 9pt !important; }
-    sup, sub, sup *, sub * { font-size: 8pt !important; }
-    img { max-width: 100% !important; height: auto !important; }
-    """
+    private let options: TypographyOptions
+    private let customCSS: String
 
     @MainActor
-    override init() {
+    init(options: TypographyOptions = .default) {
+        self.options = options
+        let css = EBookConverter.normalizingCSS(for: options)
+        self.customCSS = css
         let config = WKWebViewConfiguration()
         let scriptSource = """
         (function() {
             var style = document.createElement('style');
             style.id = 'mg-standard-typography';
             style.type = 'text/css';
-            style.appendChild(document.createTextNode(`\(Self.normalizingCSS)`));
+            style.appendChild(document.createTextNode(`\(css)`));
             (document.head || document.documentElement).appendChild(style);
         })();
         """
@@ -3214,7 +3263,7 @@ private final class WebKitChapterRenderer: NSObject, WKNavigationDelegate, @unch
                 var style = document.createElement('style');
                 style.id = 'mg-standard-typography';
                 style.type = 'text/css';
-                style.appendChild(document.createTextNode(`\(Self.normalizingCSS)`));
+                style.appendChild(document.createTextNode(`\(self.customCSS)`));
                 (document.head || document.documentElement).appendChild(style);
             }
             return Math.max(document.body ? document.body.scrollHeight : 842, document.documentElement ? document.documentElement.scrollHeight : 842, 842);
