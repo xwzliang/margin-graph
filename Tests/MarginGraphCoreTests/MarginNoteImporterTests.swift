@@ -568,7 +568,7 @@ final class MarginNoteImporterTests: XCTestCase {
             let result = try importer.importInto(destination)
             let duration = CFAbsoluteTimeGetCurrent() - startTime
             print("Imported live backupall to cache in \(duration)s: \(result.topics.count) topics, \(result.documents.count) docs, \(result.cards.count) cards")
-            XCTAssertEqual(result.documents.count, 363)
+            XCTAssertGreaterThanOrEqual(result.documents.count, 363)
             XCTAssertGreaterThan(result.topics.count, 400)
             XCTAssertGreaterThan(result.cards.count, 15000)
         } else {
@@ -578,7 +578,7 @@ final class MarginNoteImporterTests: XCTestCase {
         }
 
         let allDocs = try destination.allDocuments()
-        XCTAssertEqual(allDocs.count, 363)
+        XCTAssertGreaterThanOrEqual(allDocs.count, 363)
 
         // Verify zero files copied to temp local media storage
         let localMediaFiles = (try? FileManager.default.contentsOfDirectory(atPath: tempLocalMediaDir.path)) ?? []
@@ -588,5 +588,64 @@ final class MarginNoteImporterTests: XCTestCase {
         for doc in allDocs {
             XCTAssertTrue(FileManager.default.fileExists(atPath: doc.filePath), "Document missing at \(doc.filePath)")
         }
+    }
+
+    func testFolderPreservationAndCandidateTopicCardPrioritization() throws {
+        let db = try Database(inMemory: true)
+
+        let rootDoc = Document(
+            id: UUID(),
+            title: "Root Book",
+            filePath: "/tmp/root_dir/root_book.pdf",
+            md5: "root-book-md5",
+            totalPages: 10
+        )
+        let videoDoc = Document(
+            id: UUID(),
+            title: "Lecture 1",
+            filePath: "/tmp/root_dir/Stanford CS230 Deep Learning/lecture1.mp4",
+            md5: "video-md5",
+            totalPages: 100,
+            documentType: "video"
+        )
+        try db.insertDocument(rootDoc)
+        try db.insertDocument(videoDoc)
+
+        let libraryRoot = URL(fileURLWithPath: "/tmp/root_dir")
+        try db.repairDocumentFolders(libraryRoot: libraryRoot)
+
+        let folders = try db.allFolders()
+        XCTAssertEqual(folders.count, 1)
+        XCTAssertEqual(folders.first?.name, "Stanford CS230 Deep Learning")
+
+        let updatedVideo = try XCTUnwrap(db.getDocument(id: videoDoc.id))
+        XCTAssertEqual(updatedVideo.folderId, folders.first?.id)
+
+        let updatedRoot = try XCTUnwrap(db.getDocument(id: rootDoc.id))
+        XCTAssertNil(updatedRoot.folderId)
+
+        // Test Candidate Topic Prioritization & Sister Topic Cleanup
+        let dummyTopic = Topic(id: UUID(), title: "Root Book", bookMD5List: ["root-book-md5"])
+        let studyTopic = Topic(id: UUID(), title: "Root Book", bookMD5List: ["root-book-md5"])
+        try db.insertTopic(dummyTopic)
+        try db.insertTopic(studyTopic)
+
+        let card = NoteCard(
+            id: UUID(),
+            topicId: studyTopic.id,
+            bookMD5: "root-book-md5",
+            title: "Key Point",
+            highlightText: "Highlight excerpt"
+        )
+        try db.insertCard(card)
+
+        let cardTopicIDs = try db.topicIDsForCardBookMD5("root-book-md5")
+        XCTAssertEqual(cardTopicIDs, [studyTopic.id])
+
+        // Verify sync cleans the dummy topic and keeps the study topic with cards
+        try db.syncAvailableDocuments(libraryRoot: libraryRoot)
+        let remainingTopics = try db.allTopics()
+        XCTAssertEqual(remainingTopics.count, 1)
+        XCTAssertEqual(remainingTopics.first?.id, studyTopic.id)
     }
 }

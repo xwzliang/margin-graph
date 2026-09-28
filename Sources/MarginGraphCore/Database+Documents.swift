@@ -14,7 +14,7 @@ public extension Database {
         try execute("DELETE FROM documents WHERE md5 = '\(md5)';")
     }
 
-    func syncAvailableDocuments(additionalSearchPaths: [URL] = []) throws {
+    func syncAvailableDocuments(additionalSearchPaths: [URL] = [], libraryRoot: URL? = nil) throws {
         try repairDocumentIDs()
 
         // 1. Remove phantom documents with empty or non-existent file paths
@@ -111,7 +111,12 @@ public extension Database {
                 let titleMatch = cleanOtherTitle.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame ||
                                  cleanOtherTitle.localizedCaseInsensitiveContains(cleanTitle) ||
                                  cleanTitle.localizedCaseInsensitiveContains(cleanOtherTitle)
-                let bookMatch = !Set(topic.bookMD5List).isDisjoint(with: Set(other.bookMD5List))
+                let bookMatch = !Set(topic.bookMD5List).isDisjoint(with: Set(other.bookMD5List)) ||
+                    topic.bookMD5List.contains(where: { tmd5 in
+                        other.bookMD5List.contains(where: { omd5 in
+                            tmd5 == omd5 || tmd5.hasPrefix(omd5) || omd5.hasPrefix(tmd5)
+                        })
+                    })
                 return titleMatch || bookMatch
             }
             if hasSisterTopicWithCards {
@@ -229,6 +234,7 @@ public extension Database {
 
         // 3. Repair topic bookMD5List to remove bloated 500+ phantom MD5s
         try repairTopicBookMD5Lists()
+        try repairDocumentFolders(libraryRoot: libraryRoot)
     }
 
     func repairTopicBookMD5Lists() throws {
@@ -282,6 +288,71 @@ public extension Database {
             if newBookList != topic.bookMD5List {
                 topic.bookMD5List = newBookList
                 try updateTopic(topic)
+            }
+        }
+    }
+
+    func repairDocumentFolders(libraryRoot: URL? = nil) throws {
+        let allDocs = try allDocuments()
+        let existingFolders = try allFolders()
+        var folderMap: [String: DocumentFolder] = [:]
+        for folder in existingFolders {
+            let key = "\(folder.parentId?.uuidString ?? "root"):\(folder.name.lowercased())"
+            folderMap[key] = folder
+        }
+
+        for doc in allDocs {
+            guard !doc.filePath.isEmpty else { continue }
+            let docURL = URL(fileURLWithPath: doc.filePath)
+            let parentDirURL = docURL.deletingLastPathComponent()
+            let parentDir = parentDirURL.standardizedFileURL.path
+            let parentName = parentDirURL.lastPathComponent
+
+            var folderPath: String? = nil
+
+            if let libraryRoot {
+                let libPath = libraryRoot.standardizedFileURL.path
+                if parentDir != libPath && parentDir.hasPrefix(libPath) {
+                    let relative = String(parentDir.dropFirst(libPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    if !relative.isEmpty && relative != "MarginNotes.sqlite.files" && relative != "files" && relative != "Documents" {
+                        folderPath = relative
+                    }
+                }
+            }
+
+            if folderPath == nil {
+                if doc.documentType == "video" || doc.documentType == "audio" {
+                    if !parentName.isEmpty && parentName != "Documents" && parentName != "MarginGraph" && !parentName.hasSuffix(".marginbackupall") && !parentName.hasSuffix(".marginpkg") {
+                        folderPath = parentName
+                    }
+                }
+            }
+
+            guard let folderPath, !folderPath.isEmpty else { continue }
+
+            let segments = folderPath.components(separatedBy: "/").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            var currentParentID: UUID? = nil
+
+            for segment in segments {
+                let key = "\(currentParentID?.uuidString ?? "root"):\(segment.lowercased())"
+                let folder: DocumentFolder
+                if let existing = folderMap[key] {
+                    folder = existing
+                } else if let matchInDb = existingFolders.first(where: { $0.parentId == currentParentID && $0.name.localizedCaseInsensitiveCompare(segment) == .orderedSame }) {
+                    folder = matchInDb
+                    folderMap[key] = folder
+                } else {
+                    let newFolderID = Document.stableUUID("folder_\(currentParentID?.uuidString ?? "")_\(segment)")
+                    let newFolder = DocumentFolder(id: newFolderID, parentId: currentParentID, name: segment)
+                    try insertFolder(newFolder)
+                    folder = newFolder
+                    folderMap[key] = folder
+                }
+                currentParentID = folder.id
+            }
+
+            if let targetFolderID = currentParentID, doc.folderId != targetFolderID {
+                try updateDocumentFolder(documentID: doc.id, folderID: targetFolderID)
             }
         }
     }

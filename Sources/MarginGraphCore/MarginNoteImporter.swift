@@ -12,19 +12,22 @@ public struct MarginNoteImportResult: Sendable {
     public var cards: [NoteCard]
     public var links: [CardLink]
     public var reviewItems: [ReviewItem]
+    public var folders: [DocumentFolder]
 
     public init(
         topics: [Topic],
         documents: [Document],
         cards: [NoteCard],
         links: [CardLink] = [],
-        reviewItems: [ReviewItem] = []
+        reviewItems: [ReviewItem] = [],
+        folders: [DocumentFolder] = []
     ) {
         self.topics = topics
         self.documents = documents
         self.cards = cards
         self.links = links
         self.reviewItems = reviewItems
+        self.folders = folders
     }
 }
 
@@ -224,6 +227,8 @@ public final class MarginNoteImporter {
         }
 
         var documents: [Document] = []
+        var folders: [DocumentFolder] = []
+        var folderMap: [String: DocumentFolder] = [:]
         for row in rawBookRows {
             let rawKey = first(row, ["ZBOOKID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let rawTitle = first(row, ["ZTITLE", "ZNAME", "ZFILE"]) ?? "Untitled Document"
@@ -324,6 +329,39 @@ public final class MarginNoteImporter {
                 docType = "pdf"
             }
 
+            var folderName = first(row, ["ZPATH"])?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if folderName == nil || folderName?.isEmpty == true {
+                let docParent = URL(fileURLWithPath: filePath).deletingLastPathComponent().path
+                let destPath = documentsDestinationDirectory.path
+                if docParent.hasPrefix(destPath) && docParent != destPath {
+                    let relative = String(docParent.dropFirst(destPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                    if !relative.isEmpty && relative != "MarginNotes.sqlite.files" && relative != "files" && relative != "Documents" {
+                        folderName = relative
+                    }
+                }
+            }
+
+            var assignedFolderId: UUID? = nil
+            if let folderName, !folderName.isEmpty {
+                let segments = folderName.components(separatedBy: "/").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                var currentParentID: UUID? = nil
+                for segment in segments {
+                    let key = "\(currentParentID?.uuidString ?? "root"):\(segment.lowercased())"
+                    let folder: DocumentFolder
+                    if let existing = folderMap[key] {
+                        folder = existing
+                    } else {
+                        let folderID = Document.stableUUID("folder_\(currentParentID?.uuidString ?? "")_\(segment)")
+                        let newFolder = DocumentFolder(id: folderID, parentId: currentParentID, name: segment)
+                        folderMap[key] = newFolder
+                        folders.append(newFolder)
+                        folder = newFolder
+                    }
+                    currentParentID = folder.id
+                }
+                assignedFolderId = currentParentID
+            }
+
             documents.append(Document(
                 id: Document.stableUUID(md5),
                 title: cleanTitle,
@@ -331,7 +369,8 @@ public final class MarginNoteImporter {
                 md5: md5,
                 totalPages: totalPages,
                 lastVisited: parseDate(first(row, ["ZLASTVISITED", "ZLASTOPENDATE"])),
-                documentType: docType
+                documentType: docType,
+                folderId: assignedFolderId
             ))
         }
 
@@ -583,7 +622,8 @@ public final class MarginNoteImporter {
             documents: documents,
             cards: cards,
             links: links,
-            reviewItems: reviewItems
+            reviewItems: reviewItems,
+            folders: folders
         )
     }
 
@@ -651,6 +691,9 @@ public final class MarginNoteImporter {
 
         try database.execute("BEGIN TRANSACTION;")
         do {
+            for folder in result.folders {
+                try? database.insertFolder(folder)
+            }
             for topic in topicsToInsert {
                 try database.insertTopic(topic)
             }

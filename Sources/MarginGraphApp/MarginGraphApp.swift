@@ -460,36 +460,55 @@ final class AppModel: ObservableObject {
         let cleanDocTitle = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let docFileName = URL(fileURLWithPath: document.filePath).deletingPathExtension().lastPathComponent
 
-        // 1. Direct match on topic.bookMD5List
-        var matchingTopic = topics.first(where: { topic in
-            topic.bookMD5List.contains { bmd5 in
+        // Collect all candidate matching topics
+        var candidates: [Topic] = []
+        var candidateIDs = Set<UUID>()
+
+        func addCandidate(_ t: Topic) {
+            if !candidateIDs.contains(t.id) {
+                candidateIDs.insert(t.id)
+                candidates.append(t)
+            }
+        }
+
+        // 1. Topics where topic.bookMD5List matches document.md5
+        for topic in topics {
+            let matches = topic.bookMD5List.contains { bmd5 in
                 bmd5 == document.md5 || bmd5.hasPrefix(document.md5) || document.md5.hasPrefix(bmd5)
             }
-        })
+            if matches {
+                addCandidate(topic)
+            }
+        }
 
-        // 2. Match on cards' bookMD5 in the topic
-        if matchingTopic == nil {
-            matchingTopic = topics.first(where: { topic in
-                let cards = (try? database.cardsForTopic(id: topic.id)) ?? []
-                return cards.contains {
-                    guard let bmd5 = $0.bookMD5 else { return false }
-                    return bmd5 == document.md5 || bmd5.hasPrefix(document.md5) || document.md5.hasPrefix(bmd5)
+        // 2. Topics containing cards with document.md5
+        if let cardTopicIDs = try? database.topicIDsForCardBookMD5(document.md5) {
+            let topicMap = Dictionary(uniqueKeysWithValues: topics.map { ($0.id, $0) })
+            for tid in cardTopicIDs {
+                if let t = topicMap[tid] {
+                    addCandidate(t)
                 }
-            })
+            }
         }
 
         // 3. Match on topic title vs document title or document filename
-        if matchingTopic == nil {
-            matchingTopic = topics.first(where: { topic in
-                let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                return cleanTopicTitle.localizedCaseInsensitiveCompare(cleanDocTitle) == .orderedSame ||
-                       cleanTopicTitle.localizedCaseInsensitiveCompare(docFileName) == .orderedSame ||
-                       cleanTopicTitle.localizedCaseInsensitiveContains(docFileName) ||
-                       docFileName.localizedCaseInsensitiveContains(cleanTopicTitle) ||
-                       cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) ||
-                       cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle)
-            })
+        for topic in topics where !candidateIDs.contains(topic.id) {
+            let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let matches = cleanTopicTitle.localizedCaseInsensitiveCompare(cleanDocTitle) == .orderedSame ||
+                   cleanTopicTitle.localizedCaseInsensitiveCompare(docFileName) == .orderedSame ||
+                   cleanTopicTitle.localizedCaseInsensitiveContains(docFileName) ||
+                   docFileName.localizedCaseInsensitiveContains(cleanTopicTitle) ||
+                   cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) ||
+                   cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle)
+            if matches {
+                addCandidate(topic)
+            }
         }
+
+        // Prioritize candidate with cards (> 0), choosing the one with the highest card count
+        let allCounts = (try? database.cardCountsByTopic()) ?? cardCounts
+        let candidatesWithCards = candidates.filter { (allCounts[$0.id] ?? 0) > 0 }
+        let matchingTopic = candidatesWithCards.max(by: { (allCounts[$0.id] ?? 0) < (allCounts[$1.id] ?? 0) }) ?? candidates.first
 
         if let matchingTopic {
             try? database.updateTopicUpdatedAt(id: matchingTopic.id, date: now)
@@ -498,15 +517,16 @@ final class AppModel: ObservableObject {
             }
             reloadLibrary()
             selectedTopicID = matchingTopic.id
+            switchToDocument(document, clearSelection: false)
             reloadStudySet()
         } else {
             let newTopic = Topic(title: document.title, bookMD5List: [document.md5], createdAt: now, updatedAt: now)
             try? database.insertTopic(newTopic)
             reloadLibrary()
             selectedTopicID = newTopic.id
+            switchToDocument(document, clearSelection: false)
             reloadStudySet()
         }
-        switchToDocument(document)
         workspaceMode = .splitView
         isInStudyWorkspace = true
     }
@@ -841,6 +861,7 @@ final class AppModel: ObservableObject {
             if fileManager.fileExists(atPath: cacheDbURL.path) {
                 databaseOpeningStatus = "Opening cached database..."
                 newDb = try Database(url: cacheDbURL)
+                try? newDb.syncAvailableDocuments(libraryRoot: backupDir)
             } else {
                 databaseOpeningStatus = "Reading MarginNote database..."
                 newDb = try Database(url: cacheDbURL)
@@ -854,6 +875,7 @@ final class AppModel: ObservableObject {
                 _ = try await Task.detached(priority: .userInitiated) {
                     try importer.importInto(newDb)
                 }.value
+                try? newDb.syncAvailableDocuments(libraryRoot: backupDir)
             }
 
             if fileManager.fileExists(atPath: mediaDir.path) {

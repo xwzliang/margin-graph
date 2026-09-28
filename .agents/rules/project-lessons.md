@@ -651,14 +651,16 @@ Structure each entry concisely with actionable rules:
     3. Size sidebar action cards with adequate width buffer (`.frame(width: 335)`) and `.lineLimit(1)` so full item labels display cleanly without clipping.
     4. Dismiss the menu first (`isShowingSidebarMenu = false`), then dispatch modal presentation actions asynchronously on the next runloop turn via `DispatchQueue.main.async { onAction() }` so the menu is dismissed before AppKit presents modal sheets or file picker panels.
     5. Maintain consistent design language matching `DocumentActionCardView`: standard icon sizing (`16pt` frame width, `12pt` font), hover highlight (`Color.secondary.opacity(0.12)` in `RoundedRectangle(cornerRadius: 5)`), and clear hierarchical sections with subtle dividers.
-
-
-
-
-
-
-
-
-
-
+- **External MarginNote Backup Import: Folder Hierarchy Preservation & Reader Topic Selection (`MarginNoteImporter`, `openDocumentInReader`)**:
+  - **Trap 1 (Lost Course / Video Folder Structures)**:
+    In MarginNote backups (`.marginbackupall`), multimedia lecture files and documents are stored in structured subfolders on disk (e.g. `Stanford CS230 Deep Learning/`, `tom_mitchell_machine_learning/`), recorded in `ZBOOK.ZPATH`. Previous import routines discarded `ZPATH` and flattened all documents into the root shelf (`folderId = nil`), wiping out the user's nested course organization.
+  - **Trap 2 (Blank MindMap Canvas on PDF Document Open)**:
+    MarginNote library databases contain two topics for each document: (1) a 0-card placeholder topic created by the MarginNote document reader, and (2) the actual study notebook topic containing tens to hundreds of note cards. When opening a document in reader mode, naive topic lookup (`topics.first(where: { $0.bookMD5List.contains(doc.md5) })`) frequently matched the 0-card reading placeholder first, opening an empty MindMap split view despite hundreds of existing cards in SQLite.
+  - **Rule**:
+    1. **Folder Hierarchy Extraction & Preservation**:
+       During external backup and folder imports in `MarginNoteImporter`, inspect `ZBOOK.ZPATH` as well as relative filesystem subdirectory paths. Automatically synthesize `DocumentFolder` records for each unique path, assign `doc.folderId = folder.id`, and insert them via `database.insertFolder()`. Provide automatic folder repair in `Database.syncAvailableDocuments()`.
+    2. **Candidate Topic Prioritization with Cards**:
+       In `openDocumentInReader(document:)`, collect all candidate topics via `topic.bookMD5List`, `Database.topicIDsForCardBookMD5`, and normalized title matching. Always prioritize candidates that have cards (`cardCounts[topic.id] > 0`), selecting the notebook with the maximum card count (`candidatesWithCards.max(by: { cardCounts[$0.id] < cardCounts[$1.id] })`). Fall back to 0-card topics only when no card-bearing notebooks exist.
+    3. **Indexed Reverse Card MD5 Lookup**:
+       Maintain an index `CREATE INDEX IF NOT EXISTS idx_cards_book_md5 ON cards(book_md5)` in SQLite. Querying `SELECT DISTINCT topic_id FROM cards WHERE book_md5 = ? ...` provides instant $O(1)$ lookup from a document's hash to all notebooks containing its excerpts, avoiding full table scans across tens of thousands of cards.
 

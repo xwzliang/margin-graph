@@ -110,6 +110,7 @@ public final class Database: @unchecked Sendable {
         );
         CREATE INDEX IF NOT EXISTS idx_cards_topic ON cards(topic_id);
         CREATE INDEX IF NOT EXISTS idx_cards_parent ON cards(topic_id, group_note_id);
+        CREATE INDEX IF NOT EXISTS idx_cards_book_md5 ON cards(book_md5);
         CREATE TABLE IF NOT EXISTS card_links(
             id TEXT PRIMARY KEY, topic_id TEXT NOT NULL, source_card_id TEXT NOT NULL,
             target_card_id TEXT NOT NULL, label TEXT, is_bidirectional INTEGER NOT NULL,
@@ -837,6 +838,21 @@ public final class Database: @unchecked Sendable {
 
     public func cardsForTopic(id: UUID) throws -> [NoteCard] {
         try cards(sql: "SELECT * FROM cards WHERE topic_id=? ORDER BY created_at", values: [id.uuidString])
+    }
+
+    public func topicIDsForCardBookMD5(_ md5: String) throws -> [UUID] {
+        try withStatement("SELECT DISTINCT topic_id FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%')") { statement in
+            bind(md5, to: 1, in: statement)
+            bind(md5 + "%", to: 2, in: statement)
+            bind(md5, to: 3, in: statement)
+            var ids: [UUID] = []
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let str = text(statement, 0), let uuid = UUID(uuidString: str) {
+                    ids.append(uuid)
+                }
+            }
+            return ids
+        }
     }
 
     public func childCards(parentId: UUID?, topicId: UUID) throws -> [NoteCard] {
