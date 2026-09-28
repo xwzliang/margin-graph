@@ -641,6 +641,18 @@ Structure each entry concisely with actionable rules:
 - **Bare macOS AppKit Binary CLI Arguments Interception by `NSDocumentController` vs `WindowGroup`**:
   - **Trap**: When launching an unbundled macOS binary (`.build/.../debug/MarginGraphApp <filePath>`) from the command line, AppKit's `NSDocumentController` automatically intercepts any command-line arguments as files to open. Without an `Info.plist` declaring document types or a custom `NSDocument` subclass, `NSDocumentController.openDocument(...)` encounters an error, suppresses SwiftUI's default window creation (`count of windows == 0`), and leaves the app running invisibly in the background.
   - **Rule**: Bare binaries must be launched without path arguments (`./MarginGraphApp`). Documents and backup libraries should be opened through standard AppKit/SwiftUI mechanisms: File Menu (`⌘⇧O`), "Open Recent Library", drag-and-drop, or in-app buttons.
+- **Sidebar Action Card Popovers & Modal Presentation from Dismissing Popovers (`SidebarActionCardView`, `MarginNoteSidebar`)**:
+  - **Trap 1**: Calling synchronous modal dialogs (such as `NSOpenPanel.runModal()`) directly inside a SwiftUI button action that simultaneously toggles `@State isShowingPopover = false` can block popover dismissal, freeze UI responsiveness, or trap key responder focus inside an un-dismissed popover window.
+  - **Trap 2**: Sizing popovers with insufficient width (e.g. 270pt) when menu items have descriptive actions like `"Open MarginNote Database or Backup…"` with icons and chevron badges leads to ugly text truncation (`"Open MarginNote Database or..."`).
+  - **Trap 3 (Window Boundary Overflow with AppKit `NSPopover`)**: SwiftUI's `.popover` creates a separate AppKit `NSPopoverWindow` panel that is constrained only to the *screen's* visible frame, NOT the parent `NSWindow`'s boundary. Attaching `.popover` to edge controls (like the ellipsis button at the bottom of the sidebar) vertically centers the popover on the button, causing 50-70pt of the popover to hang outside the bottom border of the program window into the desktop.
+  - **Rule**:
+    1. For controls fixed at the window's edge (such as bottom sidebar actions), do not use AppKit `.popover`. Instead, render an in-window floating action card in the application's root `ZStack(alignment: .bottomLeading)` (`.zIndex(600)`), padded with `.padding(.leading, sidebarWidth + 6).padding(.bottom, 16)`. This guarantees the popup stays 100% within the program window boundary across all window sizes, screen resolutions, and positions.
+    2. Provide an invisible backdrop (`Color.black.opacity(0.001).ignoresSafeArea()`) with `.onTapGesture` to dismiss on outside click, and attach `.onExitCommand` to handle Escape dismissal.
+    3. Size sidebar action cards with adequate width buffer (`.frame(width: 335)`) and `.lineLimit(1)` so full item labels display cleanly without clipping.
+    4. Dismiss the menu first (`isShowingSidebarMenu = false`), then dispatch modal presentation actions asynchronously on the next runloop turn via `DispatchQueue.main.async { onAction() }` so the menu is dismissed before AppKit presents modal sheets or file picker panels.
+    5. Maintain consistent design language matching `DocumentActionCardView`: standard icon sizing (`16pt` frame width, `12pt` font), hover highlight (`Color.secondary.opacity(0.12)` in `RoundedRectangle(cornerRadius: 5)`), and clear hierarchical sections with subtle dividers.
+
+
 
 
 

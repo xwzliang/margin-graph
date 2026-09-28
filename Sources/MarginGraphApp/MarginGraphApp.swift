@@ -3049,6 +3049,7 @@ struct ExternalDatabaseBannerView: View {
 @main
 struct MarginGraphApp: App {
     @StateObject private var model = AppModel()
+    @State private var isShowingSidebarMenu = false
 
     init() {
         NSApplication.shared.setActivationPolicy(.regular)
@@ -3062,18 +3063,34 @@ struct MarginGraphApp: App {
                     if !model.isInStudyWorkspace {
                         MarginNoteSidebar(
                             selectedTab: $model.selectedMainTab,
+                            isMenuPresented: $isShowingSidebarMenu,
                             isSearchActive: model.isShelfSearchPresented,
+                            recentBackupPaths: model.recentDatabasePaths,
+                            isExternalDatabase: model.isExternalDatabase,
+                            activeDatabaseName: model.activeDatabaseName,
                             onSearch: {
                                 withAnimation(.easeInOut(duration: 0.15)) {
                                     model.isShelfSearchPresented.toggle()
                                 }
                             },
                             onHelp: {},
-                            onSettings: {
+                            onOpenMarginNoteBackup: {
                                 model.openMarginNoteBackupPicker()
+                            },
+                            onSelectRecentBackup: { path in
+                                Task { @MainActor in
+                                    await model.openMarginNoteBackup(at: URL(fileURLWithPath: path))
+                                }
+                            },
+                            onSwitchToDefaultDatabase: {
+                                model.switchToDefaultDatabase()
+                            },
+                            onImportDocument: {
+                                model.openDocumentPicker(attachToTopic: false)
                             }
                         )
                         .onChange(of: model.selectedMainTab) { _, _ in
+                            isShowingSidebarMenu = false
                             model.flushPendingPositions()
                             model.isInStudyWorkspace = false
                             model.shelfSearchQuery = ""
@@ -3202,6 +3219,77 @@ struct MarginGraphApp: App {
                         )
                     }
                     .zIndex(999)
+                }
+
+                // In-window floating popup menu for sidebar ellipsis button (guaranteed inside window boundary)
+                if isShowingSidebarMenu && !model.isInStudyWorkspace {
+                    Color.black.opacity(0.001)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeOut(duration: 0.12)) {
+                                isShowingSidebarMenu = false
+                            }
+                        }
+
+                    VStack {
+                        Spacer()
+                        HStack(alignment: .bottom, spacing: 0) {
+                            SidebarActionCardView(
+                                onOpenMarginNoteBackup: {
+                                    isShowingSidebarMenu = false
+                                    DispatchQueue.main.async {
+                                        model.openMarginNoteBackupPicker()
+                                    }
+                                },
+                                recentBackupPaths: model.recentDatabasePaths,
+                                isExternalDatabase: model.isExternalDatabase,
+                                activeDatabaseName: model.activeDatabaseName,
+                                onSelectRecentBackup: { path in
+                                    isShowingSidebarMenu = false
+                                    Task { @MainActor in
+                                        await model.openMarginNoteBackup(at: URL(fileURLWithPath: path))
+                                    }
+                                },
+                                onSwitchToDefaultDatabase: {
+                                    isShowingSidebarMenu = false
+                                    model.switchToDefaultDatabase()
+                                },
+                                onImportDocument: {
+                                    isShowingSidebarMenu = false
+                                    model.openDocumentPicker(attachToTopic: false)
+                                },
+                                onCreateFolder: nil,
+                                onHelp: {
+                                    isShowingSidebarMenu = false
+                                },
+                                onDismiss: {
+                                    withAnimation(.easeOut(duration: 0.12)) {
+                                        isShowingSidebarMenu = false
+                                    }
+                                }
+                            )
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(Color(NSColor.windowBackgroundColor))
+                                    .shadow(color: Color.black.opacity(0.24), radius: 14, x: 2, y: 5)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .stroke(Color.secondary.opacity(0.22), lineWidth: 0.5)
+                            )
+                            .padding(.leading, MarginNoteTheme.sidebarWidth + 6)
+                            .padding(.bottom, 16)
+
+                            Spacer()
+                        }
+                    }
+                    .zIndex(600)
+                    .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+                    .onExitCommand {
+                        withAnimation(.easeOut(duration: 0.12)) {
+                            isShowingSidebarMenu = false
+                        }
+                    }
                 }
             }
             .frame(minWidth: 1050, maxWidth: .infinity, minHeight: 680, maxHeight: .infinity)

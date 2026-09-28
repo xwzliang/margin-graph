@@ -19,21 +19,51 @@ public enum MainNavigationTab: String, CaseIterable, Identifiable {
 public struct MarginNoteSidebar: View {
     @Binding public var selectedTab: MainNavigationTab
     public var isSearchActive: Bool
+    public var recentBackupPaths: [String]
+    public var isExternalDatabase: Bool
+    public var activeDatabaseName: String
     public var onSearch: () -> Void
     public var onHelp: () -> Void
+    public var onOpenMarginNoteBackup: () -> Void
+    public var onSelectRecentBackup: ((String) -> Void)?
+    public var onSwitchToDefaultDatabase: (() -> Void)?
+    @Binding public var isMenuPresented: Bool
+    public var onImportDocument: (() -> Void)?
+    public var onCreateFolder: (() -> Void)?
     public var onSettings: () -> Void
+
+    @State private var isHoveringSettings: Bool = false
+    @State private var isHoveringHelp: Bool = false
 
     public init(
         selectedTab: Binding<MainNavigationTab>,
+        isMenuPresented: Binding<Bool> = .constant(false),
         isSearchActive: Bool = false,
+        recentBackupPaths: [String] = [],
+        isExternalDatabase: Bool = false,
+        activeDatabaseName: String = "",
         onSearch: @escaping () -> Void = {},
         onHelp: @escaping () -> Void = {},
+        onOpenMarginNoteBackup: @escaping () -> Void = {},
+        onSelectRecentBackup: ((String) -> Void)? = nil,
+        onSwitchToDefaultDatabase: (() -> Void)? = nil,
+        onImportDocument: (() -> Void)? = nil,
+        onCreateFolder: (() -> Void)? = nil,
         onSettings: @escaping () -> Void = {}
     ) {
         self._selectedTab = selectedTab
+        self._isMenuPresented = isMenuPresented
         self.isSearchActive = isSearchActive
+        self.recentBackupPaths = recentBackupPaths
+        self.isExternalDatabase = isExternalDatabase
+        self.activeDatabaseName = activeDatabaseName
         self.onSearch = onSearch
         self.onHelp = onHelp
+        self.onOpenMarginNoteBackup = onOpenMarginNoteBackup
+        self.onSelectRecentBackup = onSelectRecentBackup
+        self.onSwitchToDefaultDatabase = onSwitchToDefaultDatabase
+        self.onImportDocument = onImportDocument
+        self.onCreateFolder = onCreateFolder
         self.onSettings = onSettings
     }
 
@@ -65,18 +95,28 @@ public struct MarginNoteSidebar: View {
                 Button(action: onHelp) {
                     Image(systemName: "questionmark")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(MarginNoteTheme.sidebarTextInactive)
+                        .foregroundStyle(isHoveringHelp ? MarginNoteTheme.sidebarTextActive : MarginNoteTheme.sidebarTextInactive)
                         .frame(width: 36, height: 32)
+                        .background(isHoveringHelp ? Color.white.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { isHoveringHelp = $0 }
 
-                Button(action: onSettings) {
+                Button {
+                    withAnimation(.easeOut(duration: 0.12)) {
+                        isMenuPresented.toggle()
+                    }
+                } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(MarginNoteTheme.sidebarTextInactive)
+                        .foregroundStyle((isMenuPresented || isHoveringSettings) ? MarginNoteTheme.sidebarTextActive : MarginNoteTheme.sidebarTextInactive)
                         .frame(width: 36, height: 32)
+                        .background((isMenuPresented || isHoveringSettings) ? Color.white.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .onHover { isHoveringSettings = $0 }
             }
             .padding(.bottom, 16)
         }
@@ -109,5 +149,291 @@ public struct MarginNoteSidebar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Sidebar Action Popover Card
+
+public struct SidebarActionCardView: View {
+    public var onOpenMarginNoteBackup: () -> Void
+    public var recentBackupPaths: [String]
+    public var isExternalDatabase: Bool
+    public var activeDatabaseName: String
+    public var onSelectRecentBackup: ((String) -> Void)?
+    public var onSwitchToDefaultDatabase: (() -> Void)?
+    public var onImportDocument: (() -> Void)?
+    public var onCreateFolder: (() -> Void)?
+    public var onHelp: (() -> Void)?
+    public var onDismiss: () -> Void
+
+    @State private var hoveredItem: String? = nil
+    @State private var showingRecentBackups: Bool = false
+
+    public init(
+        onOpenMarginNoteBackup: @escaping () -> Void,
+        recentBackupPaths: [String] = [],
+        isExternalDatabase: Bool = false,
+        activeDatabaseName: String = "",
+        onSelectRecentBackup: ((String) -> Void)? = nil,
+        onSwitchToDefaultDatabase: (() -> Void)? = nil,
+        onImportDocument: (() -> Void)? = nil,
+        onCreateFolder: (() -> Void)? = nil,
+        onHelp: (() -> Void)? = nil,
+        onDismiss: @escaping () -> Void = {}
+    ) {
+        self.onOpenMarginNoteBackup = onOpenMarginNoteBackup
+        self.recentBackupPaths = recentBackupPaths
+        self.isExternalDatabase = isExternalDatabase
+        self.activeDatabaseName = activeDatabaseName
+        self.onSelectRecentBackup = onSelectRecentBackup
+        self.onSwitchToDefaultDatabase = onSwitchToDefaultDatabase
+        self.onImportDocument = onImportDocument
+        self.onCreateFolder = onCreateFolder
+        self.onHelp = onHelp
+        self.onDismiss = onDismiss
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if showingRecentBackups {
+                // Back button
+                Button {
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        showingRecentBackups = false
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .semibold))
+                            .frame(width: 16)
+                        Text("Recent Libraries")
+                            .font(.system(size: 12.5, weight: .semibold))
+                        Spacer()
+                    }
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(hoveredItem == "back" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveredItem = $0 ? "back" : nil }
+
+                Divider()
+                    .padding(.vertical, 2)
+
+                ScrollView(.vertical, showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(recentBackupPaths, id: \.self) { path in
+                            let name = URL(fileURLWithPath: path).lastPathComponent
+                            let isCurrent = isExternalDatabase && name == activeDatabaseName
+                            Button {
+                                onDismiss()
+                                DispatchQueue.main.async {
+                                    onSelectRecentBackup?(path)
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Image(systemName: "externaldrive")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(isCurrent ? .secondary : Color.accentColor)
+                                        .frame(width: 16)
+                                    Text(name)
+                                        .font(.system(size: 12, weight: isCurrent ? .regular : .medium))
+                                        .foregroundStyle(isCurrent ? .secondary : .primary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                    Spacer()
+                                    if isCurrent {
+                                        Image(systemName: "checkmark")
+                                            .font(.system(size: 10, weight: .semibold))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(hoveredItem == path ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(isCurrent)
+                            .onHover { hoveredItem = $0 ? path : nil }
+                        }
+                    }
+                }
+                .frame(maxHeight: 200)
+            } else {
+                // Item 1: Open MarginNote Database or Backup
+                Button {
+                    onDismiss()
+                    DispatchQueue.main.async {
+                        onOpenMarginNoteBackup()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "folder.badge.gearshape")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 16)
+                        Text("Open MarginNote Database or Backup…")
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(hoveredItem == "open_mn" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveredItem = $0 ? "open_mn" : nil }
+
+                // Recent Libraries Submenu (if any)
+                if !recentBackupPaths.isEmpty {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.12)) {
+                            showingRecentBackups = true
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .frame(width: 16)
+                            Text("Recent Libraries…")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "recent_libs" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "recent_libs" : nil }
+                }
+
+                // If currently viewing external database, option to switch back to default
+                if isExternalDatabase {
+                    Button {
+                        onDismiss()
+                        DispatchQueue.main.async {
+                            onSwitchToDefaultDatabase?()
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "house.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(width: 16)
+                            Text("Switch to Default Library")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "switch_default" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "switch_default" : nil }
+                }
+
+                Divider()
+                    .padding(.vertical, 2)
+
+                // Import Document
+                if let onImportDocument {
+                    Button {
+                        onDismiss()
+                        DispatchQueue.main.async {
+                            onImportDocument()
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.and.arrow.down")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .frame(width: 16)
+                            Text("Import Document…")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "import_doc" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "import_doc" : nil }
+                }
+
+                // New Folder
+                if let onCreateFolder {
+                    Button {
+                        onDismiss()
+                        DispatchQueue.main.async {
+                            onCreateFolder()
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "folder.badge.plus")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .frame(width: 16)
+                            Text("New Folder…")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "new_folder" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "new_folder" : nil }
+                }
+
+                if onImportDocument != nil || onCreateFolder != nil {
+                    Divider()
+                        .padding(.vertical, 2)
+                }
+
+                // Help & Feedback
+                Button {
+                    onDismiss()
+                    DispatchQueue.main.async {
+                        onHelp?()
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 16)
+                        Text("Help & Feedback")
+                            .font(.system(size: 12.5, weight: .medium))
+                            .foregroundStyle(.primary)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(hoveredItem == "help" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { hoveredItem = $0 ? "help" : nil }
+            }
+        }
+        .padding(6)
+        .frame(width: 335)
     }
 }
