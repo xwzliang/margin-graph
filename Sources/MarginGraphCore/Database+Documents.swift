@@ -51,6 +51,54 @@ public extension Database {
             try? bestDoc.md5.write(to: sidecar, atomically: true, encoding: .utf8)
         }
 
+        // Deduplicate documents sharing the same title in the same folder
+        let docsAfterFilePath = try allDocuments()
+        struct FolderTitleKey: Hashable {
+            let folderId: UUID?
+            let title: String
+        }
+        let groupedByFolderTitle = Dictionary(grouping: docsAfterFilePath) { doc in
+            FolderTitleKey(
+                folderId: doc.folderId,
+                title: doc.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            )
+        }
+
+        for (key, docs) in groupedByFolderTitle where docs.count > 1 && !key.title.isEmpty {
+            let bestDoc = docs.max { a, b in
+                let aCards = (try? cardCountForDocument(md5: a.md5)) ?? 0
+                let bCards = (try? cardCountForDocument(md5: b.md5)) ?? 0
+                if aCards != bCards { return aCards < bCards }
+                let aTopics = (try? allTopics().filter { $0.bookMD5List.contains(a.md5) }.count) ?? 0
+                let bTopics = (try? allTopics().filter { $0.bookMD5List.contains(b.md5) }.count) ?? 0
+                if aTopics != bTopics { return aTopics < bTopics }
+                let aExists = FileManager.default.fileExists(atPath: a.filePath)
+                let bExists = FileManager.default.fileExists(atPath: b.filePath)
+                if aExists != bExists { return !aExists && bExists }
+                if a.totalPages != b.totalPages { return a.totalPages < b.totalPages }
+                return a.id.uuidString < b.id.uuidString
+            } ?? docs[0]
+
+            for doc in docs where doc.id != bestDoc.id {
+                try migrateDocumentMD5(from: doc.md5, to: bestDoc.md5)
+                try deleteDocument(id: doc.id)
+
+                // If the redundant file is an auto-converted file inside MarginGraph/Documents, clean it from disk
+                if !doc.filePath.isEmpty && doc.filePath != bestDoc.filePath {
+                    let docURL = URL(fileURLWithPath: doc.filePath)
+                    if docURL.path.contains("/MarginGraph/Documents/") {
+                        try? FileManager.default.removeItem(at: docURL)
+                        let sidecar1 = docURL.appendingPathExtension("md5")
+                        try? FileManager.default.removeItem(at: sidecar1)
+                        let sidecar2 = docURL.deletingPathExtension().appendingPathExtension("format")
+                        try? FileManager.default.removeItem(at: sidecar2)
+                        let sidecar3 = docURL.deletingPathExtension().appendingPathExtension("md5")
+                        try? FileManager.default.removeItem(at: sidecar3)
+                    }
+                }
+            }
+        }
+
         // Clean up dummy topics with 0 cards when a real topic with cards already exists for the same book or title
         let allTopicsList = try allTopics()
         let cardCounts = (try? cardCountsByTopic()) ?? [:]
@@ -123,9 +171,19 @@ public extension Database {
                 }
 
                 if docType == "video" || docType == "audio" {
+                    let title = fileURL.deletingPathExtension().lastPathComponent.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !title.isEmpty, let existingByTitle = try? allDocuments().first(where: {
+                        $0.folderId == nil &&
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(title) == .orderedSame
+                    }) {
+                        if !FileManager.default.fileExists(atPath: existingByTitle.filePath) {
+                            try? deleteDocument(id: existingByTitle.id)
+                        } else {
+                            continue
+                        }
+                    }
                     let docMD5 = md5 ?? MediaDocumentHelper.computeFileMD5(url: fileURL)
                     let duration = MediaDocumentHelper.mediaDuration(url: fileURL)
-                    let title = fileURL.deletingPathExtension().lastPathComponent
                     let newDoc = Document(
                         id: Document.stableUUID(docMD5),
                         title: title,
@@ -137,6 +195,17 @@ public extension Database {
                     )
                     try? insertDocument(newDoc)
                 } else if let mgr = try? PDFDocumentManager(url: fileURL, md5: md5) {
+                    let title = mgr.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !title.isEmpty, let existingByTitle = try? allDocuments().first(where: {
+                        $0.folderId == nil &&
+                        $0.title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(title) == .orderedSame
+                    }) {
+                        if !FileManager.default.fileExists(atPath: existingByTitle.filePath) {
+                            try? deleteDocument(id: existingByTitle.id)
+                        } else {
+                            continue
+                        }
+                    }
                     let docMD5 = mgr.md5
                     let newDoc = Document(
                         id: Document.stableUUID(docMD5),

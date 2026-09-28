@@ -110,7 +110,13 @@ public final class EBookConverter: Sendable {
         return nil
     }
 
+    public nonisolated(unsafe) static var customDocumentsDirectory: URL? = nil
+
     public static func documentsDirectory() -> URL {
+        if let custom = customDocumentsDirectory {
+            try? FileManager.default.createDirectory(at: custom, withIntermediateDirectories: true)
+            return custom
+        }
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let docs = appSupport.appendingPathComponent("MarginGraph/Documents", isDirectory: true)
         try? FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)

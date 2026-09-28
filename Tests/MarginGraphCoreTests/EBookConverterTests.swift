@@ -4,6 +4,24 @@ import AppKit
 @testable import MarginGraphCore
 
 final class EBookConverterTests: XCTestCase {
+    private var testDocsDir: URL?
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("EBookTestDocs_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        self.testDocsDir = dir
+        EBookConverter.customDocumentsDirectory = dir
+    }
+
+    override func tearDownWithError() throws {
+        if let dir = testDocsDir {
+            try? FileManager.default.removeItem(at: dir)
+            testDocsDir = nil
+        }
+        EBookConverter.customDocumentsDirectory = nil
+        try super.tearDownWithError()
+    }
 
     func testSupportedExtensionsAndMediaDocumentHelper() {
         let extensions = [

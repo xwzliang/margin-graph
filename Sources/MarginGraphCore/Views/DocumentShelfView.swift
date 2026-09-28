@@ -2543,22 +2543,23 @@ public struct DocumentCardView: View {
                 coverThumbnailCache.setObject(img, forKey: key)
                 return img
             }
-        } else if docType == "pdf" || MediaDocumentHelper.isEBook(url: url) {
+        } else if docType != "audio" {
             let pdfURL: URL?
-            if MediaDocumentHelper.isEBook(url: url) {
+            if url.pathExtension.lowercased() == "pdf" {
+                pdfURL = url
+            } else if MediaDocumentHelper.isEBook(url: url) {
                 pdfURL = try? EBookConverter.ensureConvertedPDF(for: url).pdfURL
             } else {
-                pdfURL = url
+                pdfURL = nil
             }
-            guard let validPDFURL = pdfURL,
-                  let pdfDoc = PDFDocument(url: validPDFURL),
-                  let page = pdfDoc.page(at: 0) else {
-                return nil
+            if let validPDFURL = pdfURL,
+               let pdfDoc = PDFDocument(url: validPDFURL),
+               let page = pdfDoc.page(at: 0) {
+                let thumbSize = NSSize(width: 148, height: 180)
+                let img = page.thumbnail(of: thumbSize, for: .mediaBox)
+                coverThumbnailCache.setObject(img, forKey: key)
+                return img
             }
-            let thumbSize = NSSize(width: 148, height: 180)
-            let img = page.thumbnail(of: thumbSize, for: .mediaBox)
-            coverThumbnailCache.setObject(img, forKey: key)
-            return img
         }
         return nil
     }

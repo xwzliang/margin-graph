@@ -362,7 +362,29 @@ public final class Database: @unchecked Sendable {
             }
         }
 
-        // 3. Purge any duplicate rows that might share the same file_path with a different ID
+        // 3. Existing by Folder & Title: prevent duplicate document names in the same folder
+        let cleanTitle = doc.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanTitle.isEmpty,
+           let existingByTitle = try? allDocuments().first(where: {
+               $0.id != doc.id &&
+               $0.folderId == doc.folderId &&
+               $0.title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame
+           }) {
+            let existingCards = (try? cardCountForDocument(md5: existingByTitle.md5)) ?? 0
+            let newCards = (try? cardCountForDocument(md5: doc.md5)) ?? 0
+            if newCards > existingCards {
+                try execute("DELETE FROM documents WHERE id = '\(existingByTitle.id.uuidString)';")
+                try migrateDocumentMD5(from: existingByTitle.md5, to: doc.md5)
+            } else {
+                doc.id = existingByTitle.id
+                if doc.md5 != existingByTitle.md5 {
+                    try migrateDocumentMD5(from: doc.md5, to: existingByTitle.md5)
+                    doc.md5 = existingByTitle.md5
+                }
+            }
+        }
+
+        // 4. Purge any duplicate rows that might share the same file_path with a different ID
         if !doc.filePath.isEmpty {
             try withStatement("DELETE FROM documents WHERE file_path = ? AND id != ?") { statement in
                 bind(doc.filePath, to: 1, in: statement)

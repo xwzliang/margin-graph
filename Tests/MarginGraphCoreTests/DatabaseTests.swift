@@ -299,6 +299,27 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(docs.contains { $0.md5 == "custom-sidecar-md5-12345" && $0.title == "TestDocument" })
     }
 
+    func testSameFolderSameTitleDeduplication() throws {
+        let db = try Database(inMemory: true)
+        let doc1 = Document(title: "OpenDoc", filePath: "/tmp/doc1.pdf", md5: "md5-1", totalPages: 10)
+        let doc2 = Document(title: "OpenDoc", filePath: "/tmp/doc2.pdf", md5: "md5-2", totalPages: 10)
+        try db.insertDocument(doc1)
+        try db.insertDocument(doc2)
+
+        // insertDocument should not create duplicate documents with the same title in the same folder
+        let docs = try db.allDocuments()
+        XCTAssertEqual(docs.filter { $0.title == "OpenDoc" }.count, 1)
+
+        // Also test syncAvailableDocuments deduplication pass
+        // Insert via raw SQL to simulate legacy duplicate rows in database
+        try db.execute("INSERT INTO documents(id, title, file_path, md5, total_pages, document_type) VALUES('\(UUID().uuidString)', 'SpiderHero', '/tmp/sp1.pdf', 'md5-sp1', 5, 'comic');")
+        try db.execute("INSERT INTO documents(id, title, file_path, md5, total_pages, document_type) VALUES('\(UUID().uuidString)', 'SpiderHero', '/tmp/sp2.pdf', 'md5-sp2', 8, 'comic');")
+        XCTAssertEqual(try db.allDocuments().filter { $0.title == "SpiderHero" }.count, 2)
+
+        try db.syncAvailableDocuments()
+        XCTAssertEqual(try db.allDocuments().filter { $0.title == "SpiderHero" }.count, 1)
+    }
+
     func testSyncRestoresAllDocumentsInLiveEnvironmentIfExists() throws {
         let liveDBPath = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("MarginGraph/MarginGraph.sqlite").path
