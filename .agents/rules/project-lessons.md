@@ -729,3 +729,17 @@ Structure each entry concisely with actionable rules:
     4. **Responsive Content Width**:
        Specify `.frame(maxWidth: popoverWidth)` rather than a fixed `.frame(width: popoverWidth)` on popover content views (like `TypographySettingsPopoverView`) so the view gracefully adapts if the container or split pane is resized narrower than the default width.
 
+- **Mandatory Boundary Containment for All Buttons, Menus & Dropdowns (`NSMenu` / `Menu` Trailing Edge Overflow)**:
+  - **Trap (Native AppKit `Menu` / `NSMenu` Bleeding Past Window Edge)**:
+    SwiftUI's `Menu` on macOS wraps AppKit's `NSMenu` / `NSPopUpButton`. By default, AppKit anchors the popup menu to the button's leading edge (`minX`) and expands downwards and to the right. SwiftUI provides no alignment API (such as trailing edge alignment) for `Menu`. When a `Menu` is attached to a button situated near the trailing edge of a toolbar, header, or pane (such as the `"..."` Document Options button), the menu card extends 100–160pt beyond the right edge of the program window, visually breaking containment, clipping on display edges, and obscuring other desktop applications.
+  - **Rule**:
+    1. **Mandatory Check Whenever Modifying or Adding Any Button, Menu, Popover, or Dropdown**:
+       Before declaring any task complete that touches a button, menu, dropdown, or popover, agents MUST verify and guarantee that all openable UI elements stay strictly within the program window boundaries.
+    2. **Never Use Native SwiftUI `Menu` Near Trailing Pane or Window Edges**:
+       Replace edge-aligned `Menu` controls with standard SwiftUI `Button` triggers that present custom popover cards hosted inside `InWindowPopoverContainer` (such as `DocumentOptionsMenuView`).
+    3. **Window Clamping & Arrow Alignment**:
+       By capturing the button's frame in `.named("PDFContainerSpace")` and hosting within `InWindowPopoverContainer`, the menu is strictly clamped within `[margin, containerWidth - effectiveWidth - margin]`, while the arrow tip automatically shifts to point at the button's center.
+    4. **Interactive Live Testing Verification**:
+       You MUST launch the app (`.build/arm64-apple-macosx/debug/MarginGraphApp`), click every newly added or modified button/menu, capture screenshots, and verify visually that no dropdown, popover, or menu extends past the program window boundary.
+
+

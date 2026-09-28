@@ -100,9 +100,11 @@ public struct MarginNotePDFContainerView: View {
     @State private var showBookmarksPopover: Bool = false
     @State private var showTableOfContentsPopover: Bool = false
     @State private var showTypographyPopover: Bool = false
+    @State private var showMoreOptionsPopover: Bool = false
     @State private var tocButtonFrame: CGRect? = nil
     @State private var bookmarksButtonFrame: CGRect? = nil
     @State private var typographyButtonFrame: CGRect? = nil
+    @State private var moreOptionsButtonFrame: CGRect? = nil
     @State private var displayMode: PDFReaderDisplayMode = .continuous
     @State private var pageHistory: [Int] = []
     @State private var historyIndex: Int = 0
@@ -246,6 +248,7 @@ public struct MarginNotePDFContainerView: View {
                             if showTableOfContentsPopover {
                                 showBookmarksPopover = false
                                 showTypographyPopover = false
+                                showMoreOptionsPopover = false
                             }
                         }
                     } label: {
@@ -297,6 +300,7 @@ public struct MarginNotePDFContainerView: View {
                                 if showBookmarksPopover {
                                     showTableOfContentsPopover = false
                                     showTypographyPopover = false
+                                    showMoreOptionsPopover = false
                                 }
                             }
                         } label: {
@@ -326,6 +330,7 @@ public struct MarginNotePDFContainerView: View {
                                 if showTypographyPopover {
                                     showBookmarksPopover = false
                                     showTableOfContentsPopover = false
+                                    showMoreOptionsPopover = false
                                 }
                             }
                         } label: {
@@ -351,35 +356,37 @@ public struct MarginNotePDFContainerView: View {
                         )
                     }
 
-                    // More options menu
-                    Menu {
-                        if manager.isReflowable {
-                            Button("Reading Appearance…") {
-                                withAnimation(.easeInOut(duration: 0.15)) {
-                                    showBookmarksPopover = false
-                                    showTableOfContentsPopover = false
-                                    showTypographyPopover = true
-                                }
+                    // Document Options button (In-Window Popover strictly confined within window boundaries)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) {
+                            showMoreOptionsPopover.toggle()
+                            if showMoreOptionsPopover {
+                                showBookmarksPopover = false
+                                showTableOfContentsPopover = false
+                                showTypographyPopover = false
                             }
-                            Divider()
-                        }
-                        Button(displayMode == .continuous ? "✓ Continuous Scroll" : "Continuous Scroll") {
-                            displayMode = .continuous
-                        }
-                        Button(displayMode == .singlePage ? "✓ Single Page" : "Single Page") {
-                            displayMode = .singlePage
                         }
                     } label: {
                         Image(systemName: "ellipsis")
                             .font(.system(size: 13))
-                            .foregroundStyle(Color(white: 0.35))
+                            .foregroundStyle(showMoreOptionsPopover ? Color(red: 0.15, green: 0.45, blue: 0.85) : Color(white: 0.35))
                             .frame(width: 26, height: 26)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(showMoreOptionsPopover ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12) : Color.clear)
+                            )
                             .enlargedHitTarget(width: 32, height: 28)
                     }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .frame(width: 32, height: 28)
+                    .buttonStyle(.plain)
                     .marginNoteTooltip("Document Options")
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: PDFToolbarButtonFrameKey.self,
+                                value: ["moreOptions": geo.frame(in: .named("PDFContainerSpace"))]
+                            )
+                        }
+                    )
                 }
             }
             .padding(.horizontal, 14)
@@ -703,6 +710,40 @@ public struct MarginNotePDFContainerView: View {
                     .zIndex(200)
                 }
 
+                if showMoreOptionsPopover {
+                    InWindowPopoverContainer(
+                        anchorFrame: moreOptionsButtonFrame ?? CGRect(x: containerGeometry.size.width - 36, y: 7, width: 24, height: 24),
+                        containerWidth: containerGeometry.size.width,
+                        popoverWidth: 195,
+                        onDismiss: {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                showMoreOptionsPopover = false
+                            }
+                        }
+                    ) {
+                        DocumentOptionsMenuView(
+                            isReflowable: manager.isReflowable,
+                            displayMode: displayMode,
+                            onSelectDisplayMode: { mode in
+                                displayMode = mode
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showMoreOptionsPopover = false
+                                }
+                            },
+                            onOpenReadingAppearance: {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    showMoreOptionsPopover = false
+                                    showBookmarksPopover = false
+                                    showTableOfContentsPopover = false
+                                    showTypographyPopover = true
+                                }
+                            }
+                        )
+                    }
+                    .transition(.opacity)
+                    .zIndex(200)
+                }
+
                 if showGoToPageDialog {
                     let totalCount = max(manager.pageCount, totalPageCount)
                     Color.black.opacity(0.12)
@@ -806,6 +847,9 @@ public struct MarginNotePDFContainerView: View {
                 }
                 if let f = frames["typography"] {
                     typographyButtonFrame = f
+                }
+                if let f = frames["moreOptions"] {
+                    moreOptionsButtonFrame = f
                 }
             }
         }
