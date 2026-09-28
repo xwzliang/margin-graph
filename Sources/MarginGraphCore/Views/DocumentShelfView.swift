@@ -2544,6 +2544,14 @@ public struct DocumentCardView: View {
                 return img
             }
         } else if docType != "audio" {
+            // For EPUB, extract native high-resolution cover image directly if available
+            if url.pathExtension.lowercased() == "epub" {
+                if let coverImg = MediaDocumentHelper.extractEPUBCoverImage(url: url) {
+                    coverThumbnailCache.setObject(coverImg, forKey: key)
+                    return coverImg
+                }
+            }
+
             let pdfURL: URL?
             if url.pathExtension.lowercased() == "pdf" {
                 pdfURL = url
@@ -2556,7 +2564,9 @@ public struct DocumentCardView: View {
                let pdfDoc = PDFDocument(url: validPDFURL),
                let page = pdfDoc.page(at: 0) {
                 let thumbSize = NSSize(width: 148, height: 180)
-                let img = page.thumbnail(of: thumbSize, for: .mediaBox)
+                let cropBox = page.bounds(for: .cropBox)
+                let box: PDFDisplayBox = (cropBox.width > 0 && cropBox.height > 0) ? .cropBox : .mediaBox
+                let img = page.thumbnail(of: thumbSize, for: box)
                 coverThumbnailCache.setObject(img, forKey: key)
                 return img
             }

@@ -115,4 +115,17 @@ final class EPUBConverterTests: XCTestCase {
         let pageText = doc?.page(at: 4)?.string ?? ""
         XCTAssertTrue(pageText.contains("SHORT STORY") || pageText.contains("Seinfeld"), "Vector text must be selectable and intact")
     }
+
+    func testExtractEPUBCoverImage() throws {
+        let sampleEPUBPath = "/Volumes/omv/backups/marginnote/MarginNoteBackup(2026-09-21-12-33-07).marginbackupall/Cade Metz - Genius Makers_ The Mavericks Who Brought AI to Google, Facebook, and the World-Dutton (2021).epub"
+        guard FileManager.default.fileExists(atPath: sampleEPUBPath) else { return }
+
+        let epubURL = URL(fileURLWithPath: sampleEPUBPath)
+        let cover = MediaDocumentHelper.extractEPUBCoverImage(url: epubURL)
+        XCTAssertNotNil(cover, "Genius Makers EPUB should extract cover image")
+        if let cover {
+            XCTAssertGreaterThan(cover.size.width, 300)
+            XCTAssertGreaterThan(cover.size.height, 400)
+        }
+    }
 }

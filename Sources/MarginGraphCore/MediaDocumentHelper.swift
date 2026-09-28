@@ -173,5 +173,169 @@ public enum MediaDocumentHelper {
         let naturalSize = (w > 0 && h > 0) ? NSSize(width: w, height: h) : NSSize(width: size.width, height: size.height)
         return NSImage(cgImage: cgImg, size: naturalSize)
     }
+
+    public static func extractEPUBCoverImage(url: URL) -> NSImage? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+
+        // Check disk cache first
+        let cacheDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("MarginGraph/Thumbnails", isDirectory: true)
+        if let cacheDir {
+            try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        }
+        let fileMD5 = computeFileMD5(url: url)
+        let cacheFile = cacheDir?.appendingPathComponent("epub_\(fileMD5).jpg")
+        if let cacheFile, FileManager.default.fileExists(atPath: cacheFile.path),
+           let cachedImg = NSImage(contentsOf: cacheFile) {
+            return cachedImg
+        }
+
+        func runUnzip(args: [String]) -> Data? {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+            p.arguments = args
+            let pipe = Pipe()
+            p.standardOutput = pipe
+            p.standardError = Pipe()
+            do {
+                try p.run()
+            } catch {
+                return nil
+            }
+            let watchdog = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+            watchdog.schedule(deadline: .now() + 5.0)
+            watchdog.setEventHandler {
+                if p.isRunning { p.terminate() }
+            }
+            watchdog.resume()
+            defer { watchdog.cancel() }
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            p.waitUntilExit()
+            guard p.terminationStatus == 0 else { return nil }
+            return data
+        }
+
+        let epubPath = url.path
+        guard let containerData = runUnzip(args: ["-p", epubPath, "META-INF/container.xml"]),
+              let containerStr = String(data: containerData, encoding: .utf8) else {
+            return nil
+        }
+
+        var opfRelPath = "OEBPS/content.opf"
+        if let match = containerStr.range(of: "full-path=\"([^\"]+)\"", options: .regularExpression) {
+            let sub = containerStr[match]
+            opfRelPath = String(sub.dropFirst(11).dropLast(1))
+        }
+
+        guard let opfData = runUnzip(args: ["-p", epubPath, opfRelPath]),
+              let opfStr = String(data: opfData, encoding: .utf8) else {
+            return nil
+        }
+
+        let opfDir = (opfRelPath as NSString).deletingLastPathComponent
+        func resolve(_ rel: String) -> String {
+            let clean = rel.components(separatedBy: "#").first ?? rel
+            if opfDir.isEmpty || opfDir == "." { return clean }
+            return "\(opfDir)/\(clean)"
+        }
+
+        var coverHref: String? = nil
+
+        // A. EPUB 3 cover-image property
+        if let regex = try? NSRegularExpression(pattern: "<item\\s+[^>]*properties=\"[^\"]*cover-image[^\"]*\"[^>]*href=\"([^\"]+)\"", options: .caseInsensitive),
+           let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+           let r = Range(match.range(at: 1), in: opfStr) {
+            coverHref = resolve(String(opfStr[r]))
+        }
+
+        // B. EPUB 2 meta name="cover"
+        if coverHref == nil {
+            var coverId: String? = nil
+            if let regex = try? NSRegularExpression(pattern: "<meta\\s+[^>]*name=\"cover\"[^>]*content=\"([^\"]+)\"", options: .caseInsensitive),
+               let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+               let r = Range(match.range(at: 1), in: opfStr) {
+                coverId = String(opfStr[r])
+            } else if let regex = try? NSRegularExpression(pattern: "<meta\\s+[^>]*content=\"([^\"]+)\"[^>]*name=\"cover\"", options: .caseInsensitive),
+                      let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+                      let r = Range(match.range(at: 1), in: opfStr) {
+                coverId = String(opfStr[r])
+            }
+
+            if let coverId {
+                let lower = coverId.lowercased()
+                if lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") || lower.hasSuffix(".webp") {
+                    coverHref = resolve(coverId)
+                } else {
+                    let pat1 = "<item\\s+[^>]*id=\"\(NSRegularExpression.escapedPattern(for: coverId))\"[^>]*href=\"([^\"]+)\""
+                    let pat2 = "<item\\s+[^>]*href=\"([^\"]+)\"[^>]*id=\"\(NSRegularExpression.escapedPattern(for: coverId))\""
+                    if let regex = try? NSRegularExpression(pattern: pat1, options: .caseInsensitive),
+                       let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+                       let r = Range(match.range(at: 1), in: opfStr) {
+                        coverHref = resolve(String(opfStr[r]))
+                    } else if let regex = try? NSRegularExpression(pattern: pat2, options: .caseInsensitive),
+                              let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+                              let r = Range(match.range(at: 1), in: opfStr) {
+                        coverHref = resolve(String(opfStr[r]))
+                    }
+                }
+            }
+        }
+
+        // C. Fallback id="cover" or id="cover-image"
+        if coverHref == nil {
+            if let regex = try? NSRegularExpression(pattern: "<item\\s+[^>]*id=\"(?:cover|cover-image|coverimage)\"[^>]*href=\"([^\"]+)\"", options: .caseInsensitive),
+               let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+               let r = Range(match.range(at: 1), in: opfStr) {
+                coverHref = resolve(String(opfStr[r]))
+            }
+        }
+
+        // D. Fallback guide reference type="cover"
+        if coverHref == nil {
+            if let regex = try? NSRegularExpression(pattern: "<reference\\s+[^>]*type=\"cover\"[^>]*href=\"([^\"]+)\"", options: .caseInsensitive),
+               let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+               let r = Range(match.range(at: 1), in: opfStr) {
+                let refHref = String(opfStr[r])
+                let resolvedRef = resolve(refHref)
+                let lower = resolvedRef.lowercased()
+                if lower.hasSuffix(".jpg") || lower.hasSuffix(".jpeg") || lower.hasSuffix(".png") || lower.hasSuffix(".webp") {
+                    coverHref = resolvedRef
+                } else if lower.hasSuffix(".xhtml") || lower.hasSuffix(".html") || lower.hasSuffix(".htm") {
+                    if let htmlData = runUnzip(args: ["-p", epubPath, resolvedRef]),
+                       let htmlStr = String(data: htmlData, encoding: .utf8) {
+                        let pageDir = (resolvedRef as NSString).deletingLastPathComponent
+                        if let imgReg = try? NSRegularExpression(pattern: "<(?:img|image)\\s+[^>]*(?:src|href|xlink:href)=\"([^\"]+)\"", options: .caseInsensitive),
+                           let imMatch = imgReg.firstMatch(in: htmlStr, options: [], range: NSRange(location: 0, length: htmlStr.utf16.count)),
+                           let imR = Range(imMatch.range(at: 1), in: htmlStr) {
+                            let imSrc = String(htmlStr[imR])
+                            coverHref = pageDir.isEmpty || pageDir == "." ? imSrc : "\(pageDir)/\(imSrc)"
+                        }
+                    }
+                }
+            }
+        }
+
+        // E. Fallback manifest item href containing cover
+        if coverHref == nil {
+            if let regex = try? NSRegularExpression(pattern: "<item\\s+[^>]*href=\"([^\"]*cover[^\"]*\\.(?:jpe?g|png|webp))\"", options: .caseInsensitive),
+               let match = regex.firstMatch(in: opfStr, options: [], range: NSRange(location: 0, length: opfStr.utf16.count)),
+               let r = Range(match.range(at: 1), in: opfStr) {
+                coverHref = resolve(String(opfStr[r]))
+            }
+        }
+
+        guard let foundPath = coverHref else { return nil }
+        let standardPath = (foundPath as NSString).standardizingPath.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let imgData = runUnzip(args: ["-p", epubPath, standardPath]),
+              let img = NSImage(data: imgData) else {
+            return nil
+        }
+
+        if let cacheFile {
+            try? imgData.write(to: cacheFile, options: .atomic)
+        }
+        return img
+    }
     #endif
 }

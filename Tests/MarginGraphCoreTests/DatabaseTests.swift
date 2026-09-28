@@ -320,6 +320,37 @@ final class DatabaseTests: XCTestCase {
         XCTAssertEqual(try db.allDocuments().filter { $0.title == "SpiderHero" }.count, 1)
     }
 
+    func testExternalLibrarySyncIsolation() throws {
+        let db = try Database(inMemory: true)
+        let defaultDocsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MarginGraph/Documents", isDirectory: true).standardizedFileURL.path
+        let defaultDocPath = defaultDocsDir + "/SampleDefault.pdf"
+
+        // Insert a document that simulates belonging to default library
+        let defaultDoc = Document(
+            title: "DefaultDoc",
+            filePath: defaultDocPath,
+            md5: "default-doc-md5",
+            totalPages: 5
+        )
+        try db.insertDocument(defaultDoc)
+        XCTAssertEqual(try db.allDocuments().count, 1)
+
+        // Sync with an external libraryRoot: it must purge documents belonging to default library
+        let extTempDir = FileManager.default.temporaryDirectory.appendingPathComponent("ExtLib_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: extTempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: extTempDir) }
+
+        let extPDF = extTempDir.appendingPathComponent("ExternalDoc.pdf")
+        let pdfData = "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Count 1/Kids[3 0 R]>>endobj\n3 0 obj<</Type/Page/MediaBox[0 0 100 100]/Parent 2 0 R>>endobj\nxref\n0 4\n0000000000 65535 f\n0000000009 00000 n\n0000000052 00000 n\n0000000101 00000 n\ntrailer<</Size 4/Root 1 0 R>>\nstartxref\n178\n%%EOF\n".data(using: .utf8)!
+        try pdfData.write(to: extPDF)
+
+        try db.syncAvailableDocuments(libraryRoot: extTempDir)
+        let docs = try db.allDocuments()
+        XCTAssertFalse(docs.contains { $0.filePath.hasPrefix(defaultDocsDir) }, "Default library documents must be purged from external library")
+        XCTAssertTrue(docs.contains { $0.title == "ExternalDoc" }, "External documents must be discovered")
+    }
+
     func testSyncRestoresAllDocumentsInLiveEnvironmentIfExists() throws {
         let liveDBPath = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("MarginGraph/MarginGraph.sqlite").path

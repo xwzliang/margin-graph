@@ -250,6 +250,14 @@ final class AppModel: ObservableObject {
         autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
 
+        if let backupArgIndex = CommandLine.arguments.firstIndex(of: "--open-backup"),
+           backupArgIndex + 1 < CommandLine.arguments.count {
+            let backupPath = CommandLine.arguments[backupArgIndex + 1]
+            Task { @MainActor in
+                await self.openMarginNoteBackup(at: URL(fileURLWithPath: backupPath))
+            }
+        }
+
         let center = NotificationCenter.default
         let undoNotifications: [Notification.Name] = [
             .NSUndoManagerDidCloseUndoGroup,

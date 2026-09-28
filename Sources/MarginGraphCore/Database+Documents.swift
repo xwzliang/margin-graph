@@ -28,6 +28,21 @@ public extension Database {
             }
         }
 
+        // When syncing an external library, purge any documents originating from the default Application Support directory
+        if libraryRoot != nil {
+            let defaultDocsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("MarginGraph/Documents", isDirectory: true).standardizedFileURL.path
+            if let defaultDocsDir {
+                let currentDocs = try allDocuments()
+                for doc in currentDocs {
+                    let standardPath = URL(fileURLWithPath: doc.filePath).standardizedFileURL.path
+                    if standardPath.hasPrefix(defaultDocsDir) {
+                        try deleteDocument(id: doc.id)
+                    }
+                }
+            }
+        }
+
         // Deduplicate any documents sharing the same file_path
         let currentDocs = try allDocuments()
         let groupedByPath = Dictionary(grouping: currentDocs, by: { $0.filePath })
@@ -125,11 +140,18 @@ public extension Database {
         }
 
         // 2. Discover physical PDF files in search directories
-        var searchDirectories: [URL] = isInMemory ? [] : [
-            FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-                .appendingPathComponent("MarginGraph/Documents", isDirectory: true)
-        ]
+        var searchDirectories: [URL] = []
+        if let libraryRoot {
+            searchDirectories = [libraryRoot]
+        } else if !isInMemory {
+            if let defaultDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("MarginGraph/Documents", isDirectory: true) {
+                searchDirectories.append(defaultDir)
+            }
+        }
         searchDirectories.append(contentsOf: additionalSearchPaths)
+        var seenDirs = Set<String>()
+        searchDirectories = searchDirectories.filter { seenDirs.insert($0.standardizedFileURL.path).inserted }
 
         for dir in searchDirectories where FileManager.default.fileExists(atPath: dir.path) {
             guard let enumerator = FileManager.default.enumerator(

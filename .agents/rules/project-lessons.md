@@ -663,4 +663,24 @@ Structure each entry concisely with actionable rules:
        In `openDocumentInReader(document:)`, collect all candidate topics via `topic.bookMD5List`, `Database.topicIDsForCardBookMD5`, and normalized title matching. Always prioritize candidates that have cards (`cardCounts[topic.id] > 0`), selecting the notebook with the maximum card count (`candidatesWithCards.max(by: { cardCounts[$0.id] < cardCounts[$1.id] })`). Fall back to 0-card topics only when no card-bearing notebooks exist.
     3. **Indexed Reverse Card MD5 Lookup**:
        Maintain an index `CREATE INDEX IF NOT EXISTS idx_cards_book_md5 ON cards(book_md5)` in SQLite. Querying `SELECT DISTINCT topic_id FROM cards WHERE book_md5 = ? ...` provides instant $O(1)$ lookup from a document's hash to all notebooks containing its excerpts, avoiding full table scans across tens of thousands of cards.
+- **Process Pipe Buffer Deadlock & Subprocess Execution (`Process`, `Pipe`, `readDataToEndOfFile`)**:
+  - **Trap**: When launching a subprocess using Swift `Process()` and attaching a `Pipe()` to `standardOutput`, calling `process.waitUntilExit()` BEFORE reading `pipe.fileHandleForReading.readDataToEndOfFile()` causes an immediate permanent deadlock if the command's stdout output exceeds the macOS kernel pipe buffer size (typically 64KB). The child process blocks trying to write to the full pipe buffer, while the parent thread blocks waiting for the child to exit.
+  - **Rule**:
+    1. Always read pipe data (`pipe.fileHandleForReading.readDataToEndOfFile()`) BEFORE calling `process.waitUntilExit()`. This drains the OS pipe buffer in real time as data arrives and unblocks the child process.
+    2. Always attach a watchdog timer (e.g. `DispatchSource.makeTimerSource` with a 5s deadline) that terminates `process` if it exceeds expected execution time to eliminate any chance of the thread hanging indefinitely.
+- **PDF Thumbnail Rendering: `.cropBox` vs `.mediaBox` (`PDFPage.thumbnail(of:for:)`)**:
+  - **Trap**: In PDF specifications, `MediaBox` defines the physical medium boundary (e.g., an untrimmed two-page spread or publisher imposition sheet, such as 1234.5x870 pt for a book cover with spine and back cover), while `CropBox` defines the intended display region (e.g., the 503x739 pt front cover). Using `page.thumbnail(of: size, for: .mediaBox)` for document covers renders the entire imposition sheet, resulting in a tiny, squished cover offset to the right with a large blank gap on the left (as observed on *Chapman & Hall_CRC Machine Learning*).
+  - **Rule**: Always render document thumbnails using `for: .cropBox` (`let box: PDFDisplayBox = (page.bounds(for: .cropBox).width > 0 && page.bounds(for: .cropBox).height > 0) ? .cropBox : .mediaBox`). Never use `.mediaBox` unconditionally for shelf cover previews.
+- **Native EPUB Cover Art Extraction vs WebKit HTML-to-PDF Conversion**:
+  - **Trap**: Converting EPUB cover documents (`01_Cover.xhtml`) via WebKit to PDF applies browser styling (such as viewport scales, default margins, and unconstrained wrapper `<div>`s with `height: 95vh`), causing the cover image to render as a miniature postage-stamp graphic centered in an empty white PDF canvas. Generating a PDF thumbnail from that page shrinks the image twice, producing tiny unreadable shelf covers.
+  - **Rule**:
+    1. Implement native EPUB cover extraction (`MediaDocumentHelper.extractEPUBCoverImage(url:)`): inspect `container.xml` -> OPF manifest for EPUB 3 `properties="cover-image"`, EPUB 2 `<meta name="cover" content="...">` (resolving both manifest IDs and direct relative paths), `<item id="cover">`, guide `<reference type="cover">`, and cover image fallbacks.
+    2. Extract the original high-resolution JPEG/PNG artwork directly from the EPUB ZIP archive via `/usr/bin/unzip -p` in under 250ms without invoking WebKit or PDFKit conversions.
+    3. Persist extracted covers into `Application Support/MarginGraph/Thumbnails/epub_<md5>.jpg` and cache in memory via `coverThumbnailCache` (`NSCache`), giving sub-millisecond shelf rendering on subsequent visits.
+- **External Library Discovery & Default Storage Isolation (`syncAvailableDocuments(libraryRoot:)`)**:
+  - **Trap**: In `Database.syncAvailableDocuments()`, scanning the default `~/Library/Application Support/MarginGraph/Documents` directory unconditionally causes sample and default library books (such as *Scarlet*, *OpenDoc*, *MobiBook*) to be inserted into external backup databases when opened, polluting the external library shelf.
+  - **Rule**:
+    1. When an external library is opened (`libraryRoot != nil`), strictly limit document discovery search paths to `[libraryRoot] + additionalSearchPaths`. Never add the default `MarginGraph/Documents` folder.
+    2. In step 1 of `syncAvailableDocuments()`, when `libraryRoot != nil`, actively purge any records in `documents` whose `filePath` points inside the default Application Support documents directory.
+
 
