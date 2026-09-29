@@ -277,6 +277,75 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public func allDescendants(in cards: [NoteCard]) -> [NoteCard] {
         NoteCard.allDescendants(of: id, in: cards)
     }
+
+    /// For MarginNote libraries, backups (.marginbackupall), or exports (.marginpkg),
+    /// MarginNote often creates a top-level synthetic "document note card" that is the father
+    /// of all other remaining note cards in the notebook.
+    /// This method identifies if a single top-level root card exists and is the ancestor of
+    /// ALL other remaining note cards in the topic. If so, it ignores that root card and
+    /// promotes its direct children to top-level root cards (groupNoteId = nil).
+    public static func filterMarginNoteDocumentRootCard(from cards: [NoteCard]) -> [NoteCard] {
+        guard cards.count > 1 else { return cards }
+
+        // A MarginNote synthetic document card has no excerpt highlight text, no notes text,
+        // no highlight rects, no start page, and no highlight pic.
+        let candidates = cards.filter { card in
+            card.groupNoteId == nil &&
+            card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            card.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+            card.highlightRects.isEmpty &&
+            card.startPage == nil &&
+            card.highlightPicHash == nil
+        }
+
+        guard !candidates.isEmpty else { return cards }
+
+        for rootCard in candidates {
+            // 1. Check groupNoteId tree hierarchy:
+            let descendants = allDescendants(of: rootCard.id, in: cards)
+            if descendants.count == cards.count - 1 {
+                return removeCardAndPromoteChildren(rootCard.id, from: cards)
+            }
+
+            // 2. Check mindLinks graph reachability:
+            let mindLinksMap = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.mindLinks) })
+            var reachable = Set<UUID>()
+            var queue: [UUID] = [rootCard.id]
+            while !queue.isEmpty {
+                let curr = queue.removeFirst()
+                for target in mindLinksMap[curr] ?? [] where target != rootCard.id {
+                    if reachable.insert(target).inserted {
+                        queue.append(target)
+                    }
+                }
+            }
+
+            let otherCardsCount = cards.count - 1
+            if otherCardsCount > 0 && (reachable.count == otherCardsCount || (otherCardsCount >= 5 && Double(reachable.count) / Double(otherCardsCount) >= 0.8)) {
+                // Ensure no other card has this rootCard in its mindLinks (it's strictly a root)
+                let isTargetOfOther = cards.contains { $0.id != rootCard.id && $0.mindLinks.contains(rootCard.id) }
+                if !isTargetOfOther {
+                    return removeCardAndPromoteChildren(rootCard.id, from: cards)
+                }
+            }
+        }
+
+        return cards
+    }
+
+    private static func removeCardAndPromoteChildren(_ rootCardID: UUID, from cards: [NoteCard]) -> [NoteCard] {
+        cards.compactMap { card in
+            if card.id == rootCardID {
+                return nil
+            }
+            if card.groupNoteId == rootCardID {
+                var promoted = card
+                promoted.groupNoteId = nil
+                return promoted
+            }
+            return card
+        }
+    }
 }
 
 public struct CardLink: Codable, Hashable, Sendable {

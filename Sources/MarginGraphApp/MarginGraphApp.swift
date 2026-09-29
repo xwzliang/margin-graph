@@ -642,10 +642,27 @@ final class AppModel: ObservableObject {
             dueFlashcards = []
             return
         }
+        var cards = (try? database.cardsForTopic(id: topicID)) ?? []
+        var topicLinks = (try? database.linksForTopic(id: topicID)) ?? []
+
+        if isExternalDatabase {
+            let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+            if filtered.count < cards.count {
+                let filteredIDs = Set(filtered.map(\.id))
+                let removedIDs = Set(cards.map(\.id)).subtracting(filteredIDs)
+                topicLinks.removeAll { removedIDs.contains($0.sourceCardId) || removedIDs.contains($0.targetCardId) }
+                cards = filtered
+            }
+        }
+
         studyDocuments = (try? database.documentsForTopic(id: topicID)) ?? []
-        mindMapCards = (try? database.cardsForTopic(id: topicID)) ?? []
-        links = (try? database.linksForTopic(id: topicID)) ?? []
+        mindMapCards = cards
+        links = topicLinks
         dueFlashcards = (try? database.dueCardsForTopic(id: topicID)) ?? []
+        if isExternalDatabase && !mindMapCards.isEmpty {
+            let validIDs = Set(mindMapCards.map(\.id))
+            dueFlashcards.removeAll { !validIDs.contains($0.id) }
+        }
 
         if let activeDocument, studyDocuments.contains(where: { $0.md5 == activeDocument.md5 }) {
             reloadDocumentCards()
@@ -1819,7 +1836,10 @@ final class AppModel: ObservableObject {
         }
         guard let parent = mindMapCards.first(where: { $0.id == parentID }) ?? (try? database.getCard(id: parentID)) else { return }
 
-        let allCardsInTopic = (try? database.cardsForTopic(id: parent.topicId)) ?? mindMapCards
+        var allCardsInTopic = (try? database.cardsForTopic(id: parent.topicId)) ?? mindMapCards
+        if isExternalDatabase {
+            allCardsInTopic = NoteCard.filterMarginNoteDocumentRootCard(from: allCardsInTopic)
+        }
         let existingChildren = allCardsInTopic
             .filter { $0.groupNoteId == parentID }
             .sorted(by: TreeLayout.cardOrder)
@@ -1869,7 +1889,10 @@ final class AppModel: ObservableObject {
         guard let sibling = mindMapCards.first(where: { $0.id == siblingID })
             ?? (try? database.getCard(id: siblingID)) else { return }
 
-        let allCardsInTopic = (try? database.cardsForTopic(id: sibling.topicId)) ?? mindMapCards
+        var allCardsInTopic = (try? database.cardsForTopic(id: sibling.topicId)) ?? mindMapCards
+        if isExternalDatabase {
+            allCardsInTopic = NoteCard.filterMarginNoteDocumentRootCard(from: allCardsInTopic)
+        }
         let siblings = allCardsInTopic
             .filter { $0.groupNoteId == sibling.groupNoteId }
             .sorted(by: TreeLayout.cardOrder)

@@ -617,6 +617,28 @@ public final class MarginNoteImporter {
             }
         }
 
+        // For MarginNote libraries, backups, or exports, filter out the top-level document root note
+        // that is the father of all other cards in each topic, promoting its direct children to roots.
+        let cardsByTopic = Dictionary(grouping: cards, by: \.topicId)
+        var filteredCards: [NoteCard] = []
+        var ignoredCardIDs = Set<UUID>()
+
+        for (_, topicCards) in cardsByTopic {
+            let processed = NoteCard.filterMarginNoteDocumentRootCard(from: topicCards)
+            if processed.count < topicCards.count {
+                let processedIDs = Set(processed.map(\.id))
+                for original in topicCards where !processedIDs.contains(original.id) {
+                    ignoredCardIDs.insert(original.id)
+                }
+            }
+            filteredCards.append(contentsOf: processed)
+        }
+        cards = filteredCards
+        if !ignoredCardIDs.isEmpty {
+            links.removeAll { ignoredCardIDs.contains($0.sourceCardId) || ignoredCardIDs.contains($0.targetCardId) }
+            reviewItems.removeAll { ignoredCardIDs.contains($0.cardId) }
+        }
+
         return MarginNoteImportResult(
             topics: topics,
             documents: documents,

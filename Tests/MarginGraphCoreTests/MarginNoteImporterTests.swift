@@ -647,4 +647,136 @@ final class MarginNoteImporterTests: XCTestCase {
         XCTAssertEqual(remainingTopics.count, 1)
         XCTAssertEqual(remainingTopics.first?.id, studyTopic.id)
     }
+
+    func testFilterMarginNoteDocumentRootCardPromotesDirectChildren() {
+        let topicId = UUID()
+        let docRootId = UUID()
+        let chapter1Id = UUID()
+        let chapter2Id = UUID()
+        let note1Id = UUID()
+
+        let docRoot = NoteCard(
+            id: docRootId,
+            topicId: topicId,
+            title: "Book Title",
+            highlightText: "",
+            notesText: "",
+            groupNoteId: nil,
+            startPage: nil
+        )
+        let chapter1 = NoteCard(
+            id: chapter1Id,
+            topicId: topicId,
+            title: "Chapter 1",
+            highlightText: "Heading 1",
+            groupNoteId: docRootId
+        )
+        let chapter2 = NoteCard(
+            id: chapter2Id,
+            topicId: topicId,
+            title: "Chapter 2",
+            highlightText: "Heading 2",
+            groupNoteId: docRootId
+        )
+        let note1 = NoteCard(
+            id: note1Id,
+            topicId: topicId,
+            title: "Note 1.1",
+            highlightText: "Detail text",
+            groupNoteId: chapter1Id
+        )
+
+        let cards = [docRoot, chapter1, chapter2, note1]
+        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+
+        XCTAssertEqual(filtered.count, 3)
+        XCTAssertFalse(filtered.contains(where: { $0.id == docRootId }), "Synthetic document root card must be ignored")
+
+        let ch1 = filtered.first(where: { $0.id == chapter1Id })
+        let ch2 = filtered.first(where: { $0.id == chapter2Id })
+        let n1 = filtered.first(where: { $0.id == note1Id })
+
+        XCTAssertNil(ch1?.groupNoteId, "Direct child of document root should be promoted to root (groupNoteId = nil)")
+        XCTAssertNil(ch2?.groupNoteId, "Direct child of document root should be promoted to root (groupNoteId = nil)")
+        XCTAssertEqual(n1?.groupNoteId, chapter1Id, "Sub-children retain their existing parent")
+    }
+
+    func testFilterMarginNoteDocumentRootCardPreservesRealUserRootCard() {
+        let topicId = UUID()
+        let userRootId = UUID()
+        let childId = UUID()
+
+        let userRoot = NoteCard(
+            id: userRootId,
+            topicId: topicId,
+            title: "Key Takeaways",
+            highlightText: "An essential quote from the book",
+            notesText: "My personal reflection",
+            groupNoteId: nil,
+            startPage: 5
+        )
+        let child = NoteCard(
+            id: childId,
+            topicId: topicId,
+            title: "Sub-point",
+            highlightText: "Another excerpt",
+            groupNoteId: userRootId
+        )
+
+        let cards = [userRoot, child]
+        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+
+        XCTAssertEqual(filtered.count, 2, "Real user root cards with highlights/notes must NOT be filtered")
+        XCTAssertTrue(filtered.contains(where: { $0.id == userRootId }))
+    }
+
+    func testFilterMarginNoteDocumentRootCardViaMindLinksReachability() {
+        let topicId = UUID()
+        let docRootId = UUID()
+        let card1Id = UUID()
+        let card2Id = UUID()
+        let card3Id = UUID()
+
+        let docRoot = NoteCard(
+            id: docRootId,
+            topicId: topicId,
+            title: "Document Overview",
+            highlightText: "",
+            notesText: "",
+            groupNoteId: nil,
+            mindLinks: [card1Id, card2Id],
+            startPage: nil
+        )
+        let card1 = NoteCard(
+            id: card1Id,
+            topicId: topicId,
+            title: "Concept A",
+            highlightText: "Text A",
+            groupNoteId: nil,
+            mindLinks: [card3Id]
+        )
+        let card2 = NoteCard(
+            id: card2Id,
+            topicId: topicId,
+            title: "Concept B",
+            highlightText: "Text B",
+            groupNoteId: nil
+        )
+        let card3 = NoteCard(
+            id: card3Id,
+            topicId: topicId,
+            title: "Concept C",
+            highlightText: "Text C",
+            groupNoteId: nil
+        )
+
+        let cards = [docRoot, card1, card2, card3]
+        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+
+        XCTAssertEqual(filtered.count, 3)
+        XCTAssertFalse(filtered.contains(where: { $0.id == docRootId }), "Synthetic document card reachable via mindLinks must be filtered")
+        XCTAssertTrue(filtered.contains(where: { $0.id == card1Id }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == card2Id }))
+        XCTAssertTrue(filtered.contains(where: { $0.id == card3Id }))
+    }
 }

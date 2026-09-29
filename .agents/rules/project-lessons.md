@@ -786,5 +786,25 @@ Structure each entry concisely with actionable rules:
     2. **Asynchronous Background Sync**:
        Dispatch `syncAvailableDocuments(libraryRoot: backupDir)` to `Task.detached(priority: .utility)`. Upon completion, hop back to `@MainActor` to call `reloadLibrary()` only if `self.activeDatabaseURL == backupDir`. The user experiences zero lag or modal interruption.
 
+- **MarginNote Synthetic Document Root Card Detection & MindLinks Reachability Pruning**:
+  - **Trap**:
+    In MarginNote external libraries (`MarginNotes.sqlite`, `.marginnotes`, `.marginbackupall`, and `.marginpkg`), MarginNote creates a synthetic "document note card" representing the document itself as the parent/ancestor of all other note cards in the topic. This card has empty highlight text, empty notes text, empty highlight rects, no start page, and no highlight pic hash. In MarginNote's underlying database, parent-child mindmap hierarchy is frequently stored in `ZMINDLINKS` (pipe-delimited child IDs) rather than `ZGROUPNOTEID`. Displaying this synthetic root card clutters the mindmap by wrapping all actual user note cards under a redundant document container card.
+  - **Rule**:
+    1. **Strict Synthetic Card Detection Invariants**:
+       Identify the synthetic document root card using `NoteCard.filterMarginNoteDocumentRootCard(from:)`:
+       - Must be a candidate root: `card.groupNoteId == nil`.
+       - Must be strictly synthetic: `card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty`, `card.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty`, `card.highlightRects.isEmpty`, `card.startPage == nil`, `card.highlightPicHash == nil`.
+       - Structural reachability validation:
+         - *Hierarchy via `groupNoteId`*: Card is the sole root and its descendants count equals `cards.count - 1`.
+         - *Hierarchy via `mindLinks`*: BFS reachability traversal through `mindLinks` reaches $\ge 80\%$ of all other cards, and no other card links to it (`isTargetOfOther == false`).
+    2. **Child Card Promotion & Reference Pruning**:
+       - When the synthetic document root card is excluded, promote all its direct children (`groupNoteId == rootCard.id`) to roots (`groupNoteId = nil`).
+       - Prune links (`mindLinks`) and review items referencing the removed card.
+    3. **Strict Scope Limitation**:
+       - ONLY apply this filtering to MarginNote libraries, `.marginbackupall`, and `.marginpkg` import (guarded by `isExternalDatabase == true` or inside the MarginNote importer).
+       - NEVER filter user-created root note cards (cards with text, excerpts, or page coordinates).
+       - NEVER apply this filtering to native MarginGraph notebooks.
+
+
 
 
