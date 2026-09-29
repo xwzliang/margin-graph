@@ -656,6 +656,9 @@ final class AppModel: ObservableObject {
         }
 
         studyDocuments = (try? database.documentsForTopic(id: topicID)) ?? []
+        if !cards.isEmpty {
+            backfillHighlightTextsFromDocuments(cards: &cards, documents: studyDocuments.isEmpty ? documents : studyDocuments)
+        }
         mindMapCards = cards
         links = topicLinks
         dueFlashcards = (try? database.dueCardsForTopic(id: topicID)) ?? []
@@ -674,6 +677,60 @@ final class AppModel: ObservableObject {
             activeDocument = nil
             manager = nil
             documentCards = []
+        }
+    }
+
+    private func backfillHighlightTextsFromDocuments(cards: inout [NoteCard], documents: [Document]) {
+        guard !documents.isEmpty else { return }
+        var docCache: [String: PDFDocument] = [:]
+        var updatedCards: [NoteCard] = []
+
+        for i in 0..<cards.count {
+            guard cards[i].highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !cards[i].highlightRects.isEmpty else { continue }
+
+            let cardMD5 = cards[i].bookMD5
+            let matchingDoc = documents.first(where: {
+                if let cardMD5 {
+                    return $0.md5 == cardMD5 || cardMD5.hasPrefix($0.md5) || $0.md5.hasPrefix(cardMD5)
+                }
+                return true
+            })
+            guard let matchingDoc, FileManager.default.fileExists(atPath: matchingDoc.filePath) else { continue }
+
+            let pdfDoc: PDFDocument
+            if let cached = docCache[matchingDoc.md5] {
+                pdfDoc = cached
+            } else if let loaded = PDFDocument(url: URL(fileURLWithPath: matchingDoc.filePath)) {
+                docCache[matchingDoc.md5] = loaded
+                pdfDoc = loaded
+            } else {
+                continue
+            }
+
+            var pieces: [String] = []
+            for r in cards[i].highlightRects {
+                guard let page = pdfDoc.page(at: r.page) else { continue }
+                let rect = CGRect(x: r.x, y: r.y, width: r.width, height: r.height)
+                if let sel = page.selection(for: rect),
+                   let str = sel.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !str.isEmpty {
+                    pieces.append(str)
+                }
+            }
+            let extracted = pieces.joined(separator: "\n")
+            if !extracted.isEmpty {
+                cards[i].highlightText = extracted
+                updatedCards.append(cards[i])
+            }
+        }
+
+        if !updatedCards.isEmpty {
+            try? database.transaction {
+                for card in updatedCards {
+                    try? database.updateCard(card)
+                }
+            }
         }
     }
 
@@ -848,6 +905,7 @@ final class AppModel: ObservableObject {
                         let newDb = try Database(url: url)
                         self.database = newDb
                         self.mediaStorage.fallbackDirectories.removeAll()
+                        self.mediaStorage.clearFallbackDatabase()
                         self.activeDatabaseName = url.lastPathComponent
                         self.activeDatabaseURL = url
                         self.isExternalDatabase = true
@@ -892,6 +950,7 @@ final class AppModel: ObservableObject {
                 } else {
                     self.mediaStorage.fallbackDirectories.removeAll()
                 }
+                self.mediaStorage.fallbackDatabaseURL = sqliteURL
 
                 self.database = newDb
                 self.activeDatabaseName = backupDir.lastPathComponent
@@ -939,6 +998,7 @@ final class AppModel: ObservableObject {
             } else {
                 self.mediaStorage.fallbackDirectories.removeAll()
             }
+            self.mediaStorage.fallbackDatabaseURL = sqliteURL
 
             self.database = newDb
             self.activeDatabaseName = backupDir.lastPathComponent
@@ -961,6 +1021,7 @@ final class AppModel: ObservableObject {
             let defaultDb = try Database()
             self.database = defaultDb
             self.mediaStorage.fallbackDirectories.removeAll()
+            self.mediaStorage.clearFallbackDatabase()
             self.activeDatabaseName = "Default Library"
             self.activeDatabaseURL = nil
             self.isExternalDatabase = false

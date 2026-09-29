@@ -74,6 +74,7 @@ public struct CardNodeView: View {
     public var body: some View {
         let hasExcerpt = !card.highlightText.isEmpty
         let hasNotes = !card.notesText.isEmpty
+        let hasImage = thumbnail != nil
 
         VStack(alignment: .leading, spacing: 0) {
             // 1. Accent Header Section (Title & chevron)
@@ -110,7 +111,7 @@ public struct CardNodeView: View {
                         .foregroundStyle(Color(white: 0.12))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
-                } else if !hasExcerpt && !hasNotes {
+                } else if !hasExcerpt && !hasNotes && !hasImage {
                     Text("Untitled Note")
                         .font(.system(size: 11.5, weight: .regular))
                         .italic()
@@ -125,7 +126,7 @@ public struct CardNodeView: View {
             }
             .padding(.leading, isEditingTitle ? 5 : 9)
             .padding(.trailing, 6)
-            .padding(.vertical, (!card.title.isEmpty || isEditingTitle || (!hasExcerpt && !hasNotes)) ? (isEditingTitle ? 5.5 : 8) : 4)
+            .padding(.vertical, (!card.title.isEmpty || isEditingTitle || (!hasExcerpt && !hasNotes && !hasImage)) ? (isEditingTitle ? 5.5 : 8) : 4)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .background(cardColors.accent)
 
@@ -148,7 +149,6 @@ public struct CardNodeView: View {
 
                 // 2. Cream Body Section (Excerpt & Notes)
                 let isVideo = card.mediaType == "video" || card.videoStartTime != nil
-                let hasImage = thumbnail != nil
                 let hasTags = !card.tags.isEmpty
 
                 if hasExcerpt || hasNotes || hasImage || hasTags || isVideo {
@@ -167,8 +167,8 @@ public struct CardNodeView: View {
                             .foregroundStyle(Color(white: 0.25))
                         }
 
-                        // Highlight / Excerpt text
-                        if hasExcerpt {
+                        // Highlight / Excerpt text (shown when card does not have an image thumbnail)
+                        if hasExcerpt && !hasImage {
                             Text(styledExcerptText)
                                 .font(.system(size: 11.5, weight: .regular))
                                 .foregroundStyle(Color(white: 0.20))
@@ -191,7 +191,7 @@ public struct CardNodeView: View {
                                 Image(nsImage: image)
                                     .resizable()
                                     .scaledToFit()
-                                    .frame(maxHeight: 82)
+                                    .frame(maxHeight: 120)
                                     .clipShape(RoundedRectangle(cornerRadius: 3))
 
                                 if isVideo {

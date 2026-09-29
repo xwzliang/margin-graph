@@ -804,7 +804,18 @@ Structure each entry concisely with actionable rules:
        - ONLY apply this filtering to MarginNote libraries, `.marginbackupall`, and `.marginpkg` import (guarded by `isExternalDatabase == true` or inside the MarginNote importer).
        - NEVER filter user-created root note cards (cards with text, excerpts, or page coordinates).
        - NEVER apply this filtering to native MarginGraph notebooks.
-
-
-
-
+- **MarginNote `ZMEDIA` Binary Plist Image Storage & Dynamic Fallback Media Resolution**:
+  - **Trap**:
+    In MarginNote libraries and `.marginbackupall` backups, rectangular / area / lasso excerpts (frequent in math, code, engineering, and science notebooks like Chapman & Hall ML) store `ZHIGHLIGHT_TEXT = NULL`, `ZNOTETITLE = NULL`, and `ZNOTES_TEXT = ""` while populating `ZHIGHLIGHT_PIC` (media hash) and `ZHIGHLIGHTS` (page coordinates).
+    1. **Loose Files vs Database Storage**: Out of thousands of excerpt images, the vast majority (e.g. 1,800+ of 2,500+) are stored exclusively in the CoreData SQLite database table `ZMEDIA.ZDATA`, rather than as loose files in `MarginNotes.sqlite.files`.
+    2. **`bplist00` NSKeyedArchiver Serialization**: MarginNote wraps raw image bytes in an Apple `NSKeyedArchiver` binary property list (`bplist00`). Passing raw `ZMEDIA.ZDATA` to `NSImage(data:)` fails completely because `NSImage` cannot decode binary plists.
+    3. **Blank Cards in MindMap**: If `card.title`, `card.highlightText`, and `card.notesText` are empty and `thumbnail` fails to load, `CardNodeView` rendered as an empty cream box with "Untitled Note", concealing the excerpt entirely.
+  - **Rule**:
+    1. **Universal Image Extraction (`extractImageData(from:)`)**:
+       Inspect blob magic bytes (`PNG`, `JPEG`, `GIF`, `TIFF`, `HEIC/AVIF`). If the payload starts with `bplist00`, parse the property list via `PropertyListSerialization` and extract the image `Data` object from the `$objects` array by validating inner magic bytes.
+    2. **Thread-Safe SQLite Database Fallback in `MediaStorage`**:
+       Configure `MediaStorage.fallbackDatabaseURL`. In `loadImage(hash:)`, if the file is not found in the local disk cache or fallback directories, query `SELECT ZDATA FROM ZMEDIA WHERE ZMD5 = ?` from the external SQLite database (using a thread-safe connection queue with `?immutable=1`). Unpack using `extractImageData` and populate memory cache (`NSCache<NSString, NSData>`).
+    3. **MindMap Card Node Visual Rendering**:
+       In `CardNodeView`, prioritize visual excerpt display: if `thumbnail != nil` (`hasImage`), display the visual crop in the card body with user notes (`notesText`) below it. Only show extracted text when `hasExcerpt && !hasImage`. Guard the "Untitled Note" fallback header behind `!hasExcerpt && !hasNotes && !hasImage`.
+    4. **PDF Text Backfill for Search & SRS**:
+       When area excerpt cards have empty `highlightText` but valid `highlightRects` and associated PDF documents, extract text from `PDFDocument` selections at `card.highlightRects` (both at import time and lazily upon topic load) and batch-update cards in SQLite. This ensures FTS5 full-text search, SRS review decks, and plain-text export function seamlessly for rectangular highlights.

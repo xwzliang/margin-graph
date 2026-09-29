@@ -639,6 +639,48 @@ public final class MarginNoteImporter {
             reviewItems.removeAll { ignoredCardIDs.contains($0.cardId) }
         }
 
+        // Backfill empty highlight texts from available documents
+        if !documents.isEmpty {
+            var docCache: [String: PDFDocument] = [:]
+            for i in 0..<cards.count {
+                guard cards[i].highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !cards[i].highlightRects.isEmpty else { continue }
+                let cardMD5 = cards[i].bookMD5
+                let matchingDoc = documents.first(where: {
+                    if let cardMD5 {
+                        return $0.md5 == cardMD5 || cardMD5.hasPrefix($0.md5) || $0.md5.hasPrefix(cardMD5)
+                    }
+                    return true
+                })
+                guard let matchingDoc, FileManager.default.fileExists(atPath: matchingDoc.filePath) else { continue }
+
+                let pdfDoc: PDFDocument
+                if let cached = docCache[matchingDoc.md5] {
+                    pdfDoc = cached
+                } else if let loaded = PDFDocument(url: URL(fileURLWithPath: matchingDoc.filePath)) {
+                    docCache[matchingDoc.md5] = loaded
+                    pdfDoc = loaded
+                } else {
+                    continue
+                }
+
+                var pieces: [String] = []
+                for r in cards[i].highlightRects {
+                    guard let page = pdfDoc.page(at: r.page) else { continue }
+                    let rect = CGRect(x: r.x, y: r.y, width: r.width, height: r.height)
+                    if let sel = page.selection(for: rect),
+                       let str = sel.string?.trimmingCharacters(in: .whitespacesAndNewlines),
+                       !str.isEmpty {
+                        pieces.append(str)
+                    }
+                }
+                let extracted = pieces.joined(separator: "\n")
+                if !extracted.isEmpty {
+                    cards[i].highlightText = extracted
+                }
+            }
+        }
+
         return MarginNoteImportResult(
             topics: topics,
             documents: documents,
@@ -1011,7 +1053,8 @@ public final class MarginNoteImporter {
             if let bytes = sqlite3_column_blob(stmt, 0) {
                 let count = Int(sqlite3_column_bytes(stmt, 0))
                 if count > 0 {
-                    return Data(bytes: bytes, count: count)
+                    let rawData = Data(bytes: bytes, count: count)
+                    return MediaStorage.extractImageData(from: rawData) ?? rawData
                 }
             }
         }

@@ -779,4 +779,69 @@ final class MarginNoteImporterTests: XCTestCase {
         XCTAssertTrue(filtered.contains(where: { $0.id == card2Id }))
         XCTAssertTrue(filtered.contains(where: { $0.id == card3Id }))
     }
+
+    func testMediaStorageExtractImageDataFromBplistAndRaw() throws {
+        // 1. Raw PNG bytes
+        let rawPNG = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00])
+        let extractedRaw = MediaStorage.extractImageData(from: rawPNG)
+        XCTAssertEqual(extractedRaw, rawPNG)
+
+        // 2. bplist wrapping raw PNG in $objects
+        let plistDict: [String: Any] = [
+            "$version": 100000,
+            "$archiver": "NSKeyedArchiver",
+            "$top": ["root": "test"],
+            "$objects": [
+                "$null",
+                rawPNG
+            ]
+        ]
+        let bplistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .binary, options: 0)
+        XCTAssertTrue(bplistData.starts(with: [0x62, 0x70, 0x6C, 0x69, 0x73, 0x74]))
+
+        let extractedBplist = MediaStorage.extractImageData(from: bplistData)
+        XCTAssertEqual(extractedBplist, rawPNG)
+    }
+
+    func testMediaStorageFallbackDatabaseLoading() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("test_media_db_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbURL = tempDir.appendingPathComponent("MarginNotes.sqlite")
+        var db: OpaquePointer?
+        guard sqlite3_open(dbURL.path, &db) == SQLITE_OK, let db else {
+            XCTFail("Failed to create test SQLite DB")
+            return
+        }
+        defer { sqlite3_close(db) }
+
+        sqlite3_exec(db, "CREATE TABLE ZMEDIA (Z_PK INTEGER PRIMARY KEY, ZMD5 TEXT, ZDATA BLOB);", nil, nil, nil)
+
+        let rawPNG = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x01])
+        let plistDict: [String: Any] = [
+            "$version": 100000,
+            "$archiver": "NSKeyedArchiver",
+            "$top": ["root": "test"],
+            "$objects": ["$null", rawPNG]
+        ]
+        let bplistData = try PropertyListSerialization.data(fromPropertyList: plistDict, format: .binary, options: 0)
+
+        var stmt: OpaquePointer?
+        sqlite3_prepare_v2(db, "INSERT INTO ZMEDIA (Z_PK, ZMD5, ZDATA) VALUES (1, ?, ?);", -1, &stmt, nil)
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_text(stmt, 1, "test_hash_123", -1, transient)
+        bplistData.withUnsafeBytes { rawBuf in
+            sqlite3_bind_blob(stmt, 2, rawBuf.baseAddress, Int32(bplistData.count), transient)
+        }
+        sqlite3_step(stmt)
+        sqlite3_finalize(stmt)
+
+        let mediaStorage = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))
+        mediaStorage.fallbackDatabaseURL = dbURL
+
+        let loadedData = mediaStorage.loadImage(hash: "test_hash_123")
+        XCTAssertNotNil(loadedData)
+        XCTAssertEqual(loadedData, rawPNG)
+    }
 }
