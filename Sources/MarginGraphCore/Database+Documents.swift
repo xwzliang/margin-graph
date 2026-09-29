@@ -153,14 +153,31 @@ public extension Database {
         var seenDirs = Set<String>()
         searchDirectories = searchDirectories.filter { seenDirs.insert($0.standardizedFileURL.path).inserted }
 
+        let existingDocsForScan = (try? allDocuments()) ?? []
+        var existingPaths = Set(existingDocsForScan.map(\.filePath))
+        let existingMD5s = Set(existingDocsForScan.map(\.md5))
+
         for dir in searchDirectories where FileManager.default.fileExists(atPath: dir.path) {
             guard let enumerator = FileManager.default.enumerator(
                 at: dir,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) else { continue }
 
             for case let fileURL as URL in enumerator {
+                if let res = try? fileURL.resourceValues(forKeys: [.isDirectoryKey]), res.isDirectory == true {
+                    let dirName = fileURL.lastPathComponent
+                    if dirName == "MarginNotes.sqlite.files" || dirName == "files" || dirName.hasPrefix(".") || dirName.hasSuffix(".marginnotes") || dirName.hasSuffix(".marginpkg") {
+                        enumerator.skipDescendants()
+                    }
+                    continue
+                }
+
+                // If document is already registered for this physical file path, skip all heavy checks immediately!
+                if existingPaths.contains(fileURL.path) {
+                    continue
+                }
+
                 let ext = fileURL.pathExtension.lowercased()
                 guard MediaDocumentHelper.isSupportedFile(url: fileURL) && ext != "marginpkg" && ext != "marginnotes" && ext != "sqlite" else { continue }
 
@@ -178,15 +195,9 @@ public extension Database {
                     md5 = content
                 }
 
-                // If already registered and points to an existing file, skip heavy loading!
-                if let md5, let existing = try? getDocumentByMD5(md5: md5),
-                   !existing.filePath.isEmpty, FileManager.default.fileExists(atPath: existing.filePath) {
-                    continue
-                }
-
-                // If document is already registered for this physical file path, skip re-adding!
-                if let existingByPath = try? getDocumentByPath(filePath: fileURL.path),
-                   !existingByPath.filePath.isEmpty, FileManager.default.fileExists(atPath: existingByPath.filePath) {
+                // If already registered by MD5, update our cached set and skip
+                if let md5, existingMD5s.contains(md5) {
+                    existingPaths.insert(fileURL.path)
                     continue
                 }
 
@@ -259,22 +270,54 @@ public extension Database {
         try repairDocumentFolders(libraryRoot: libraryRoot)
     }
 
-    func repairTopicBookMD5Lists() throws {
-        let validDocs: [Document] = try allDocuments().filter {
-            !$0.filePath.isEmpty && (isInMemory || FileManager.default.fileExists(atPath: $0.filePath))
+    func topicCardBookMD5s() throws -> [UUID: Set<String>] {
+        try withStatement("SELECT topic_id, book_md5 FROM cards WHERE book_md5 IS NOT NULL AND book_md5 != '' GROUP BY topic_id, book_md5") { stmt in
+            var map: [UUID: Set<String>] = [:]
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                if let tStr = text(stmt, 0), let tid = UUID(uuidString: tStr), let bMD5 = text(stmt, 1), !bMD5.isEmpty {
+                    map[tid, default: []].insert(bMD5)
+                }
+            }
+            return map
         }
+    }
+
+    func repairTopicBookMD5Lists() throws {
+        let validDocs: [Document] = try allDocuments().filter { !$0.filePath.isEmpty }
         let validMD5s = Set(validDocs.map(\.md5))
         let topics = try allTopics()
+        let topicMD5Map = try topicCardBookMD5s()
+
+        struct PreparedDoc {
+            let md5: String
+            let lowerTitle: String
+            let lowerFileName: String
+        }
+        let preparedDocs = validDocs.map { doc -> PreparedDoc in
+            let fn = (doc.filePath as NSString).lastPathComponent
+            let fnNoExt = (fn as NSString).deletingPathExtension.lowercased()
+            return PreparedDoc(
+                md5: doc.md5,
+                lowerTitle: doc.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                lowerFileName: fnNoExt
+            )
+        }
+
+        let docByMD5 = Dictionary(validDocs.map { ($0.md5, $0) }, uniquingKeysWith: { first, _ in first })
+        var topicsToUpdate: [Topic] = []
 
         for var topic in topics {
-            let cards = try cardsForTopic(id: topic.id)
-            let cardMD5s = Set(cards.compactMap { $0.bookMD5 }.filter { !$0.isEmpty })
+            let cardMD5s = topicMD5Map[topic.id] ?? []
 
             var newBookList: [String] = []
 
             // 1. If topic has cards with book_md5, use those book_md5s that exist in validMD5s
             for cmd5 in cardMD5s {
-                if let exact = validDocs.first(where: { $0.md5 == cmd5 || $0.md5.hasPrefix(cmd5) || cmd5.hasPrefix($0.md5) }) {
+                if let exact = docByMD5[cmd5] {
+                    if !newBookList.contains(exact.md5) {
+                        newBookList.append(exact.md5)
+                    }
+                } else if let exact = validDocs.first(where: { $0.md5.hasPrefix(cmd5) || cmd5.hasPrefix($0.md5) }) {
                     if !newBookList.contains(exact.md5) {
                         newBookList.append(exact.md5)
                     }
@@ -285,16 +328,14 @@ public extension Database {
 
             // 2. If topic has no cards or card MD5s didn't match a document, match by topic title
             if newBookList.isEmpty {
-                let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                if let match = validDocs.first(where: { doc in
-                    let dTitle = doc.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let dFileName = URL(fileURLWithPath: doc.filePath).deletingPathExtension().lastPathComponent
-                    return dTitle.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame ||
-                           dFileName.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame ||
-                           cleanTopicTitle.localizedCaseInsensitiveContains(dFileName) ||
-                           dFileName.localizedCaseInsensitiveContains(cleanTopicTitle) ||
-                           cleanTopicTitle.localizedCaseInsensitiveContains(dTitle) ||
-                           dTitle.localizedCaseInsensitiveContains(cleanTopicTitle)
+                let cleanLowerTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                if !cleanLowerTitle.isEmpty, let match = preparedDocs.first(where: { doc in
+                    doc.lowerTitle == cleanLowerTitle ||
+                    doc.lowerFileName == cleanLowerTitle ||
+                    cleanLowerTitle.contains(doc.lowerFileName) ||
+                    doc.lowerFileName.contains(cleanLowerTitle) ||
+                    cleanLowerTitle.contains(doc.lowerTitle) ||
+                    doc.lowerTitle.contains(cleanLowerTitle)
                 }) {
                     newBookList.append(match.md5)
                 }
@@ -309,7 +350,15 @@ public extension Database {
 
             if newBookList != topic.bookMD5List {
                 topic.bookMD5List = newBookList
-                try updateTopic(topic)
+                topicsToUpdate.append(topic)
+            }
+        }
+
+        if !topicsToUpdate.isEmpty {
+            try transaction {
+                for t in topicsToUpdate {
+                    try updateTopic(t)
+                }
             }
         }
     }

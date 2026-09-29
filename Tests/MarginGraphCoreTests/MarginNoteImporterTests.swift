@@ -584,7 +584,6 @@ final class MarginNoteImporterTests: XCTestCase {
         let localMediaFiles = (try? FileManager.default.contentsOfDirectory(atPath: tempLocalMediaDir.path)) ?? []
         XCTAssertEqual(localMediaFiles.count, 0, "No media should be copied locally when copyMedia is false")
 
-        // Verify every single document exists in place
         for doc in allDocs {
             XCTAssertTrue(FileManager.default.fileExists(atPath: doc.filePath), "Document missing at \(doc.filePath)")
         }

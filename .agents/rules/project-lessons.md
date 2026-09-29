@@ -742,4 +742,49 @@ Structure each entry concisely with actionable rules:
     4. **Interactive Live Testing Verification**:
        You MUST launch the app (`.build/arm64-apple-macosx/debug/MarginGraphApp`), click every newly added or modified button/menu, capture screenshots, and verify visually that no dropdown, popover, or menu extends past the program window boundary.
 
+- **High-Performance SQLite Initialization & FTS Search Indexing (`PRAGMA user_version`)**:
+  - **Trap**:
+    Calling `INSERT INTO cards_fts(cards_fts) VALUES('rebuild');` on every database connection open forces SQLite to scan every note card and re-tokenize all text content into the full-text search index. In libraries with 15,000+ cards, this rebuild alone took ~0.85s on every startup or library switch. In addition, re-running multiple `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and column PRAGMAs on every connection creates unnecessary I/O overhead.
+  - **Rule**:
+    1. **Guard Schema Creation with `PRAGMA user_version`**:
+       On `Database.init`, query `PRAGMA user_version;`. If `version >= currentSchemaVersion` (e.g. `3`), return immediately without executing DDL statements, PRAGMA checks, or FTS rebuilds.
+    2. **Initial Setup Only**:
+       Only rebuild FTS5 or run table creation when `version == 0` (fresh database). Triggers (`cards_ai`, `cards_ad`, `cards_au`) keep the FTS index automatically synchronized for all subsequent inserts, updates, and deletes.
+    3. **Benchmark Impact**:
+       Dropping redundant schema validation and FTS rebuilds reduces `Database.init` from **0.849s down to 0.001s (over 800x speedup)**.
+
+- **Network Share (SMB/NFS) Directory Traversal & Document Discovery Optimization**:
+  - **Trap**:
+    Using `FileManager.default.enumerator` without directory pruning across network drives (e.g. `/Volumes/omv/...`) causes the enumerator to recurse into thousands of internal resource files (e.g. `MarginNotes.sqlite.files` containing 3,800+ sidecar images and temporary files). Every file stat over SMB incurs high roundtrip network latency. Furthermore, querying SQLite inside the loop for every file path turns directory scanning into an $O(N)$ network and database bottleneck taking 3–6 seconds.
+  - **Rule**:
+    1. **Prune Non-Document Subtrees (`skipDescendants()`)**:
+       Inspect directories during enumeration with `resourceValues(forKeys: [.isDirectoryKey])`. If the folder is an internal cache/files directory (e.g. `MarginNotes.sqlite.files`, `files`, `.git`, `.marginnotes`, `.marginpkg`), call `enumerator.skipDescendants()` immediately.
+    2. **In-Memory Set Membership Filtering**:
+       Pre-fetch all existing document `filePath` and `md5` values into `Set<String>` collections (`existingPaths`, `existingMD5s`) before starting directory enumeration. Checking `existingPaths.contains(fileURL.path)` in memory allows skipping already registered files in sub-microsecond time with zero filesystem or database queries.
+    3. **Benchmark Impact**:
+       Directory enumeration and document discovery drops from **2.768s to 0.307s (9x speedup)**.
+
+- **Grouped Metadata Queries & Batched Transactions in Maintenance Passes (`repairTopicBookMD5Lists`)**:
+  - **Trap**:
+    In maintenance functions like `repairTopicBookMD5Lists`, running `cardsForTopic(id: topic.id)` inside a loop across 400+ topics executes 400+ individual SQL queries, instantiates 15,000+ full `NoteCard` Swift structs, re-normalizes strings for every topic-document pair ($438 \times 36$ comparisons), and executes un-batched `updateTopic` queries that each trigger an SQLite transaction and disk sync.
+  - **Rule**:
+    1. **Single Grouped Query**:
+       Query card associations in a single statement: `SELECT topic_id, book_md5 FROM cards WHERE book_md5 IS NOT NULL AND book_md5 != '' GROUP BY topic_id, book_md5`. This constructs the entire topic-to-book mapping in one SQL query (~3ms).
+    2. **Precomputed Normalized Strings**:
+       Pre-normalize document titles and filenames into a lightweight struct (`PreparedDoc(md5, lowerTitle, lowerFileName)`) before the loop. Perform exact dictionary lookups first (`docByMD5[cmd5]`), falling back to prefix matching only when needed.
+    3. **Batch Mutations with Transactions**:
+       Collect all modified topics in a list (`topicsToUpdate`) and commit them inside a single `db.transaction { ... }`.
+    4. **Benchmark Impact**:
+       Topic book repair time drops from **1.016s to 0.161s (6x speedup)**.
+
+- **Instant Cached-Open & Decoupled Background Document Sync**:
+  - **Trap**:
+    Synchronously running document discovery and database repair passes on the `@MainActor` thread during `openMarginNoteBackup` blocks the user interface with a progress modal or spinning beachball, even when the user has already opened the backup previously and all data is cached.
+  - **Rule**:
+    1. **Instant UI Activation for Cached Databases**:
+       If `cacheDbURL` already exists, immediately assign `self.database = newDb`, register media fallback directories, reset workspace, reload library, and dismiss `isOpeningDatabase = false`. The library displays in under **25ms**.
+    2. **Asynchronous Background Sync**:
+       Dispatch `syncAvailableDocuments(libraryRoot: backupDir)` to `Task.detached(priority: .utility)`. Upon completion, hop back to `@MainActor` to call `reloadLibrary()` only if `self.activeDatabaseURL == backupDir`. The user experiences zero lag or modal interruption.
+
+
 

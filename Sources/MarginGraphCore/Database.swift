@@ -51,7 +51,6 @@ public final class Database: @unchecked Sendable {
             db = nil
             throw DatabaseError.open(message)
         }
-
         try execute("PRAGMA foreign_keys = ON;")
         try execute("PRAGMA busy_timeout = 5000;")
         if resolvedPath != ":memory:" {
@@ -64,7 +63,19 @@ public final class Database: @unchecked Sendable {
         sqlite3_close(db)
     }
 
+    private static let currentSchemaVersion: Int32 = 3
+
     private func initializeSchema() throws {
+        var version: Int32 = 0
+        try withStatement("PRAGMA user_version;") { stmt in
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                version = sqlite3_column_int(stmt, 0)
+            }
+        }
+        if version >= Self.currentSchemaVersion {
+            return
+        }
+
         try execute("""
         CREATE TABLE IF NOT EXISTS documents(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, file_path TEXT NOT NULL,
@@ -229,8 +240,11 @@ public final class Database: @unchecked Sendable {
         if try !hasColumn("parent_id", in: "document_folders") {
             try execute("ALTER TABLE document_folders ADD COLUMN parent_id TEXT;")
         }
-        try? execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+        if version == 0 {
+            try? execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
+        }
         try repairDocumentIDs()
+        try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
     }
 
     private func hasColumn(_ column: String, in table: String) throws -> Bool {
@@ -252,6 +266,18 @@ public final class Database: @unchecked Sendable {
                 sqlite3_free(error)
                 throw DatabaseError.sqlite(message)
             }
+        }
+    }
+
+    public func transaction<T>(_ block: () throws -> T) throws -> T {
+        try execute("BEGIN TRANSACTION;")
+        do {
+            let result = try block()
+            try execute("COMMIT;")
+            return result
+        } catch {
+            try? execute("ROLLBACK;")
+            throw error
         }
     }
 

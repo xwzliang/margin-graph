@@ -869,10 +869,39 @@ final class AppModel: ObservableObject {
             if fileManager.fileExists(atPath: cacheDbURL.path) {
                 databaseOpeningStatus = "Opening cached database..."
                 newDb = try Database(url: cacheDbURL)
-                try? newDb.syncAvailableDocuments(libraryRoot: backupDir)
+
+                if fileManager.fileExists(atPath: mediaDir.path) {
+                    self.mediaStorage.fallbackDirectories = [mediaDir]
+                } else {
+                    self.mediaStorage.fallbackDirectories.removeAll()
+                }
+
+                self.database = newDb
+                self.activeDatabaseName = backupDir.lastPathComponent
+                self.activeDatabaseURL = backupDir
+                self.isExternalDatabase = true
+                saveRecentDatabase(path: backupDir.path)
+
+                resetWorkspaceForNewDatabase()
+                reloadLibrary()
+
+                // Dismiss opening modal immediately so the UI is active and responsive without delay
+                isOpeningDatabase = false
+
+                // Asynchronously sync any new documents in the background without blocking the UI
+                Task.detached(priority: .utility) { [weak self] in
+                    try? newDb.syncAvailableDocuments(libraryRoot: backupDir)
+                    await MainActor.run { [weak self] in
+                        guard let self, self.activeDatabaseURL == backupDir else { return }
+                        self.reloadLibrary()
+                    }
+                }
+                return
             } else {
                 databaseOpeningStatus = "Reading MarginNote database..."
-                newDb = try Database(url: cacheDbURL)
+                newDb = try await Task.detached(priority: .userInitiated) {
+                    try Database(url: cacheDbURL)
+                }.value
                 let importer = MarginNoteImporter(
                     url: sqliteURL,
                     documentsDestinationDirectory: backupDir,
@@ -883,7 +912,9 @@ final class AppModel: ObservableObject {
                 _ = try await Task.detached(priority: .userInitiated) {
                     try importer.importInto(newDb)
                 }.value
-                try? newDb.syncAvailableDocuments(libraryRoot: backupDir)
+                _ = try await Task.detached(priority: .userInitiated) {
+                    try newDb.syncAvailableDocuments(libraryRoot: backupDir)
+                }.value
             }
 
             if fileManager.fileExists(atPath: mediaDir.path) {
