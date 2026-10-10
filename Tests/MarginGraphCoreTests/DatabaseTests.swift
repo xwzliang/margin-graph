@@ -1,5 +1,6 @@
 import XCTest
 import CoreGraphics
+import SQLite3
 @testable import MarginGraphCore
 
 final class DatabaseTests: XCTestCase {
@@ -619,7 +620,49 @@ final class DatabaseTests: XCTestCase {
         XCTAssertTrue(try db.linksForTopic(id: topic.id).isEmpty)
         XCTAssertTrue(try db.cardsForDeck(deckId: deck.id).isEmpty)
     }
+
+    func testNetworkVolumeAndRollbackJournalCheckpoint() throws {
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("test_net_db_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let dbURL = tempDir.appendingPathComponent("test_journal.sqlite")
+        let db = try Database(url: dbURL)
+
+        // Local disk database defaults to WAL mode
+        var currentMode = ""
+        try db.withStatement("PRAGMA journal_mode;") { stmt in
+            if sqlite3_step(stmt) == SQLITE_ROW, let str = sqlite3_column_text(stmt, 0) {
+                currentMode = String(cString: str).lowercased()
+            }
+        }
+        XCTAssertEqual(currentMode, "wal")
+
+        // Insert some data in WAL mode
+        let topic = Topic(title: "WAL Topic")
+        try db.insertTopic(topic)
+
+        // Checkpoint and revert to DELETE mode
+        try db.checkpointAndRevertToRollbackJournal()
+
+        try db.withStatement("PRAGMA journal_mode;") { stmt in
+            if sqlite3_step(stmt) == SQLITE_ROW, let str = sqlite3_column_text(stmt, 0) {
+                currentMode = String(cString: str).lowercased()
+            }
+        }
+        XCTAssertEqual(currentMode, "delete")
+
+        // Re-read data to verify persistence
+        let loaded = try db.getTopic(id: topic.id)
+        XCTAssertEqual(loaded?.title, "WAL Topic")
+
+        // Verify isNetworkVolume detection
+        XCTAssertFalse(Database.isNetworkVolume(url: tempDir))
+        XCTAssertFalse(Database.isNetworkVolume(path: ":memory:"))
+        XCTAssertTrue(Database.isNetworkVolume(url: URL(fileURLWithPath: "/Volumes/omv/backups/marginnote")))
+    }
 }
+
 
 
 

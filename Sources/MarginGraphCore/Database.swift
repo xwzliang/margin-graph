@@ -45,22 +45,122 @@ public final class Database: @unchecked Sendable {
         }
         self.path = resolvedPath
 
+        // If database is on a network volume (SMB/NFS), sanitize it to DELETE mode if needed before opening
+        if resolvedPath != ":memory:" {
+            Self.sanitizeDatabaseForNetworkVolumeIfNeeded(atPath: resolvedPath)
+        }
+
         if sqlite3_open_v2(resolvedPath, &db, SQLITE_OPEN_CREATE | SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX, nil) != SQLITE_OK {
             let message = db.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown error"
             sqlite3_close(db)
             db = nil
             throw DatabaseError.open(message)
         }
-        try execute("PRAGMA foreign_keys = ON;")
-        try execute("PRAGMA busy_timeout = 5000;")
-        if resolvedPath != ":memory:" {
-            try? execute("PRAGMA journal_mode = WAL;")
+
+        do {
+            try execute("PRAGMA foreign_keys = ON;")
+            try execute("PRAGMA busy_timeout = 5000;")
+            if resolvedPath != ":memory:" {
+                if Self.isNetworkVolume(path: resolvedPath) {
+                    try? execute("PRAGMA journal_mode = DELETE;")
+                } else {
+                    try? execute("PRAGMA journal_mode = WAL;")
+                }
+            }
+            try initializeSchema()
+        } catch {
+            sqlite3_close(db)
+            db = nil
+            throw error
         }
-        try initializeSchema()
     }
 
     deinit {
         sqlite3_close(db)
+    }
+
+    // MARK: - Network Volume & Journal Mode Management
+
+    /// Detects whether a given file URL is situated on a remote/network volume (e.g. SMB, NFS, AFP).
+    public static func isNetworkVolume(url: URL) -> Bool {
+        var checkURL = url
+        let fm = FileManager.default
+        while !fm.fileExists(atPath: checkURL.path) && checkURL.path != "/" {
+            let parent = checkURL.deletingLastPathComponent()
+            if parent == checkURL { break }
+            checkURL = parent
+        }
+        if let values = try? checkURL.resourceValues(forKeys: [.volumeIsLocalKey]),
+           let isLocal = values.volumeIsLocal {
+            return !isLocal
+        }
+        return false
+    }
+
+    /// Detects whether a given file path is situated on a remote/network volume (e.g. SMB, NFS, AFP).
+    public static func isNetworkVolume(path: String) -> Bool {
+        guard path != ":memory:" else { return false }
+        return isNetworkVolume(url: URL(fileURLWithPath: path))
+    }
+
+    /// Checks if an existing database located on a network volume has WAL mode enabled in its file header.
+    /// Because SMB/NFS mounts do not support POSIX shared memory or mmap for WAL mode (-shm index),
+    /// SQLite fails immediately with error 14 (unable to open database file) if opened in WAL mode on a network share.
+    /// This method safely converts the database to standard DELETE rollback journal mode using a temporary local copy.
+    public static func sanitizeDatabaseForNetworkVolumeIfNeeded(atPath path: String) {
+        guard path != ":memory:", isNetworkVolume(path: path) else { return }
+        let fileURL = URL(fileURLWithPath: path)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: path) else { return }
+
+        // Inspect page 1 header bytes 18 & 19 (file format write/read version: 1 = rollback/delete, 2 = WAL)
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return }
+        let header = handle.readData(ofLength: 100)
+        try? handle.close()
+
+        guard header.count >= 100 else { return }
+        let isWAL = (header[18] == 2 || header[19] == 2)
+        guard isWAL else { return }
+
+        // Copy to local temporary directory where WAL checkpointing is fully supported by APFS
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("mg_wal_fix_\(UUID().uuidString)", isDirectory: true)
+        try? fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tempDir) }
+
+        let tempDB = tempDir.appendingPathComponent("temp.sqlite")
+        guard (try? fm.copyItem(at: fileURL, to: tempDB)) != nil else { return }
+
+        let walURL = URL(fileURLWithPath: path + "-wal")
+        let shmURL = URL(fileURLWithPath: path + "-shm")
+        if fm.fileExists(atPath: walURL.path) {
+            try? fm.copyItem(at: walURL, to: tempDir.appendingPathComponent("temp.sqlite-wal"))
+        }
+        if fm.fileExists(atPath: shmURL.path) {
+            try? fm.copyItem(at: shmURL, to: tempDir.appendingPathComponent("temp.sqlite-shm"))
+        }
+
+        // Open locally and checkpoint WAL completely into main database file, reverting to DELETE mode
+        var localDb: OpaquePointer?
+        if sqlite3_open_v2(tempDB.path, &localDb, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK, let localDb {
+            sqlite3_exec(localDb, "PRAGMA wal_checkpoint(TRUNCATE);", nil, nil, nil)
+            sqlite3_exec(localDb, "PRAGMA journal_mode = DELETE;", nil, nil, nil)
+            sqlite3_close(localDb)
+        }
+
+        // Atomically replace the network database with the converted DELETE-mode database
+        do {
+            let tempFinal = tempDir.appendingPathComponent("clean.sqlite")
+            try fm.moveItem(at: tempDB, to: tempFinal)
+            _ = try fm.replaceItemAt(fileURL, withItemAt: tempFinal)
+            try? fm.removeItem(at: walURL)
+            try? fm.removeItem(at: shmURL)
+        } catch {
+            // Fallback overwrite if replaceItemAt fails on network filesystem
+            try? fm.removeItem(at: fileURL)
+            try? fm.copyItem(at: tempDB, to: fileURL)
+            try? fm.removeItem(at: walURL)
+            try? fm.removeItem(at: shmURL)
+        }
     }
 
     private static let currentSchemaVersion: Int32 = 3
@@ -258,7 +358,12 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    internal func execute(_ sql: String) throws {
+    public func checkpointAndRevertToRollbackJournal() throws {
+        try execute("PRAGMA wal_checkpoint(TRUNCATE);")
+        try execute("PRAGMA journal_mode = DELETE;")
+    }
+
+    public func execute(_ sql: String) throws {
         try queue.sync {
             var error: UnsafeMutablePointer<CChar>?
             guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {

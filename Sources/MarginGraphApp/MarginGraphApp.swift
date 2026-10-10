@@ -971,6 +971,12 @@ final class AppModel: ObservableObject {
             targetDbURL = workingDbURL
             // If legacy cache exists but workingDbURL does not, migrate into sidecar folder
             if !fileManager.fileExists(atPath: workingDbURL.path) && fileManager.fileExists(atPath: legacyCacheDbURL.path) {
+                if Database.isNetworkVolume(url: sidecarFolderURL) {
+                    if let localDb = try? Database(url: legacyCacheDbURL) {
+                        try? localDb.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+                        try? localDb.execute("PRAGMA journal_mode = DELETE;")
+                    }
+                }
                 try? fileManager.copyItem(at: legacyCacheDbURL, to: workingDbURL)
             }
         } else {
@@ -982,9 +988,21 @@ final class AppModel: ObservableObject {
 
         do {
             let newDb: Database
+            var actualDbURL = targetDbURL
             if fileManager.fileExists(atPath: targetDbURL.path) {
                 databaseOpeningStatus = "Opening cached database..."
-                newDb = try Database(url: targetDbURL)
+                do {
+                    newDb = try Database(url: targetDbURL)
+                } catch {
+                    // Fallback to local cache if opening sidecar on external/network volume fails
+                    if targetDbURL != legacyCacheDbURL && fileManager.fileExists(atPath: legacyCacheDbURL.path) {
+                        print("Warning: failed to open sidecar database at \(targetDbURL.path): \(error). Falling back to local cache.")
+                        actualDbURL = legacyCacheDbURL
+                        newDb = try Database(url: legacyCacheDbURL)
+                    } else {
+                        throw error
+                    }
+                }
 
                 if fileManager.fileExists(atPath: mediaDir.path) {
                     self.mediaStorage.fallbackDirectories = [mediaDir]
@@ -997,7 +1015,7 @@ final class AppModel: ObservableObject {
                 self.activeDatabaseName = entry.displayName
                 self.activeDatabaseURL = backupDir
                 self.isExternalDatabase = true
-                libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: sidecarFolderURL.path)
+                libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: actualDbURL.deletingLastPathComponent().path)
                 libManager.touchLastOpened(path: backupDir.path)
                 saveRecentDatabase(path: backupDir.path)
 
@@ -1018,9 +1036,27 @@ final class AppModel: ObservableObject {
                 return
             } else {
                 databaseOpeningStatus = "Reading MarginNote database..."
-                newDb = try await Task.detached(priority: .userInitiated) {
-                    try Database(url: targetDbURL)
-                }.value
+                var createdDb: Database?
+                var initError: Error?
+                do {
+                    createdDb = try await Task.detached(priority: .userInitiated) {
+                        try Database(url: targetDbURL)
+                    }.value
+                } catch {
+                    initError = error
+                    if targetDbURL != legacyCacheDbURL && fileManager.fileExists(atPath: legacyCacheDbURL.path) {
+                        print("Warning: failed to create sidecar database at \(targetDbURL.path): \(error). Falling back to local cache.")
+                        actualDbURL = legacyCacheDbURL
+                        createdDb = try? await Task.detached(priority: .userInitiated) {
+                            try Database(url: legacyCacheDbURL)
+                        }.value
+                    }
+                }
+                guard let validDb = createdDb else {
+                    throw initError ?? DatabaseError.open("Failed to initialize database")
+                }
+                newDb = validDb
+
                 let importer = MarginNoteImporter(
                     url: sqliteURL,
                     documentsDestinationDirectory: backupDir,
@@ -1047,7 +1083,7 @@ final class AppModel: ObservableObject {
             self.activeDatabaseName = entry.displayName
             self.activeDatabaseURL = backupDir
             self.isExternalDatabase = true
-            libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: sidecarFolderURL.path)
+            libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: actualDbURL.deletingLastPathComponent().path)
             libManager.touchLastOpened(path: backupDir.path)
             saveRecentDatabase(path: backupDir.path)
 

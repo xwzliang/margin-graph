@@ -857,3 +857,17 @@ Structure each entry concisely with actionable rules:
   - **Rule**:
     Always place sheet and modal presentation states on the `@MainActor` `AppModel` (`@Published var isShowingManageLibraries = false`). Bind sheets using `.sheet(isPresented: $model.isShowingManageLibraries)` and invoke from menus or views with `model.isShowingManageLibraries = true`.
 
+- **SQLite WAL Mode Incompatibility on SMB / NFS Network Volumes**:
+  - **Trap**:
+    SQLite's Write-Ahead Logging (WAL) mode requires POSIX shared memory / `mmap` for the shared memory index file (`<db>-shm`). Network filesystems such as SMB, NFS, and AFP do not support shared memory mapping or POSIX file locks suitable for WAL indexing. Opening or querying a WAL-mode SQLite database located on an SMB network share fails immediately with `SQLITE_CANTOPEN` (14) (`"unable to open database file"`), preventing external backup databases (e.g. sidecar databases on NAS storage) from loading. Furthermore, if a database file was created locally in WAL mode and then copied to an SMB share, its page 1 header bytes 18 & 19 retain version `2` (WAL mode), which causes SQLite to fail on open before executing any user `PRAGMA`.
+  - **Rule**:
+    1. **Network Volume Detection**:
+       Check whether database URLs reside on remote filesystems using `URLResourceValues.volumeIsLocalKey` (traversing up parent directories if the target path does not yet exist).
+    2. **Rollback Journal Mode for Network Volumes**:
+       When opening databases on remote/network filesystems, strictly enforce `PRAGMA journal_mode = DELETE;` (or `TRUNCATE`). Only use `PRAGMA journal_mode = WAL;` on local volumes (`volumeIsLocal == true`).
+    3. **Page 1 Header Sanitization & Local Temp Checkpointing**:
+       Before opening an existing database on a network volume, inspect the first 100 bytes of the file. If bytes 18 or 19 equal `2` (indicating WAL format), copy the database and its `-wal` / `-shm` sidecars to a local temporary directory on APFS, open it locally, execute `PRAGMA wal_checkpoint(TRUNCATE);` followed by `PRAGMA journal_mode = DELETE;`, close it, and replace the network file with the sanitized rollback-journal database.
+    4. **Defensive Fallback to Local Cache**:
+       When opening external backup sidecars on external/network drives, wrap sidecar database initialization in a fallback block that reverts to the local `Application Support` cache if remote filesystem permissions or I/O fail.
+
+
