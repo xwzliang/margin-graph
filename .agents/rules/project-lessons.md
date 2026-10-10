@@ -965,3 +965,30 @@ Structure each entry concisely with actionable rules:
     3. **Graceful Card Cover Fallback**:
        When no thumbnail is cached or available, display the native document cover card featuring the document title, format badge (`EPUB`, `MOBI`, `AZW3`, `DOCX`, etc.), and icon. Format conversions are deferred strictly until the user actively opens the document to read it.
 
+- **Topic Hijacking by Eager Topic Selection & Default `attachToTopic: true`**:
+  - **Trap**:
+    `reloadLibrary()` eagerly defaulted `selectedTopicID = topics.first?.id` even during normal bookshelf browsing. If topics were sorted alphabetically, any topic starting with a whitespace (e.g. `" Balkrishna M Sadekar..."`) became `topics.first`. When opening documents or manually triggering highlight imports with `attachToTopic: true` (the previous default), all cards and the document's MD5 were added into `selectedTopicID`, renaming or misattributing unrelated topics.
+  - **Rule**:
+    1. **Guard Eager Selection**: Only set `selectedTopicID = topics.first?.id` when `isInStudyWorkspace` is actively true, preventing bookshelf browsing from pinning background topic state.
+    2. **Default `attachToTopic: false`**: Default `attachToTopic` to `false` when opening or picker-importing documents unless explicitly requested from inside an active study set.
+    3. **Topic Matching & Auto-Repair**: In `handlePDFHighlightImport` and `openDocumentInReader`, match existing topics by MD5 or title before creating new topics, and auto-repair/rename single-book topics (`bookMD5List.count == 1`) whose titles mismatch `cleanDocTitle`.
+    4. **Cascade Document Deletion**: When deleting a document, clean up `doc.md5` from all topics' `bookMD5List` and delete empty orphaned topics with 0 books and 0 cards.
+
+- **Consecutive Highlight Merging with Footnote Links and Early Line Breaks (`isIgnorableBetweenText`)**:
+  - **Trap**:
+    Naive text checks between highlights rejected merging when highlights spanned across footnote link citations (e.g. `germs.[20] Scientists` or `cells.[21] Microorganisms`) or lines with early line breaks (ragged right margin with trailing whitespace/newlines). This broke large continuous highlights into fragments whenever a footnote number or line break occurred.
+  - **Rule**:
+    1. **`isIgnorableBetweenText(text:rect:on:)`**:
+       Ignore whitespace, em/en-dashes, regex-matched footnote citations (`\d+`, bracketed numbers, footnote symbols `*`, `†`), and PDF link annotations covering the gap (`annot.type == "Link"`).
+    2. **Line Break & Indent Geometry**:
+       For multi-line highlights, check the rest of the previous line, the vertical gap, and the indentation of the next line using `isIgnorableBetweenText`.
+    3. **Paragraph Preservation with `\n\n`**:
+       When merging consecutive highlights across true paragraph boundaries, join the text using `\n\n` so paragraph breaks remain cleanly formatted inside the resulting note card.
+
+- **Multi-Display macOS UI Automation & Negative Coordinate Traps**:
+  - **Trap**:
+    Secondary displays (e.g. AirPlay displays or extended monitors positioned to the left of the main screen) have negative coordinate origins (e.g. `X: -1711, Y: 50`). CLI tools like `cliclick` fail to parse negative coordinates, misinterpreting them as CLI flags or screen 0 coordinates, accidentally clicking Display 0 and disrupting user workflows.
+  - **Rule**:
+    Use AppKit's Accessibility API (`AXUIElementCreateApplication`, `AXUIElementPerformAction(..., kAXPressAction)`) to programmatically trigger buttons and UI actions without mouse click simulation or coordinate translation. When window movement is necessary, set `kAXPositionAttribute` directly via `AXValueCreate(.cgPoint, &pt)`. Always use `screencapture -D <displayIndex>` with the specific display index to inspect and verify secondary screens.
+
+

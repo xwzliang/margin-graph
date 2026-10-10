@@ -546,10 +546,43 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         return results
     }
 
+    /// Determines whether the text in a region between highlights represents an ignorable link, footnote citation, or whitespace.
+    public static func isIgnorableBetweenText(
+        _ text: String,
+        rect: CGRect,
+        on page: PDFPage
+    ) -> Bool {
+        let ignorableChars = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "-‐‑‒–—"))
+        let trimmed = text.trimmingCharacters(in: ignorableChars)
+        if trimmed.isEmpty { return true }
+
+        // 1. Footnote citation regex: digits, bracketed digits, parens, footnote symbols (*, †, ‡, §)
+        // e.g. "19", "20", "[20]", "(20)", "19, 20", "19–21", "*", "†"
+        let citationPattern = #"^\[?(\d+|[a-zA-Z]|\*|\†|\‡|\§)([\s,–—\-\.]+(\d+|[a-zA-Z]|\*|\†|\‡|\§))*\]?$"#
+        if trimmed.range(of: citationPattern, options: .regularExpression) != nil && trimmed.count <= 25 {
+            return true
+        }
+
+        // 2. Link annotations: check if a link annotation covers/intersects this gap
+        let linkAnnots = page.annotations.filter { annot in
+            annot.type == "Link" || annot.url != nil || annot.destination != nil || annot.action != nil
+        }
+        for link in linkAnnots {
+            if rect.insetBy(dx: -4.0, dy: -4.0).intersects(link.bounds) {
+                let linkText = page.selection(for: link.bounds)?.string?.trimmingCharacters(in: ignorableChars) ?? ""
+                if linkText.isEmpty || trimmed == linkText || linkText.contains(trimmed) || trimmed.contains(linkText) {
+                    return true
+                }
+            }
+        }
+
+        return false
+    }
+
     /// Determines whether two adjacent highlights in reading order are consecutive:
     /// 1. Have the same color pen in the PDF and map to the same palette color
-    /// 2. Have no text between them on the same page, or flow continuously across adjacent pages.
-    /// 3. Are not separated by paragraph endings.
+    /// 2. Have no unhighlighted body text between them on the same page (whitespace, early line breaks,
+    ///    and footnote links/citations are allowed), or flow continuously across adjacent pages.
     public static func areConsecutive(
         h1: ExtractedHighlight,
         h2: ExtractedHighlight,
@@ -570,42 +603,67 @@ public final class PDFHighlightImporter: @unchecked Sendable {
 
             guard let lastLine1 = rects1.last, let firstLine2 = rects2.first else { return false }
 
-            let endPt1 = CGPoint(x: lastLine1.x + lastLine1.width, y: lastLine1.y + lastLine1.height / 2.0)
-            let startPt2 = CGPoint(x: firstLine2.x, y: firstLine2.y + firstLine2.height / 2.0)
-
-            // Paragraph break check:
-            // If h1 ends with sentence punctuation on a short line, or if the next line is indented,
-            // they are distinct paragraphs and should NOT be merged into a single card.
-            let trimmed1 = h1.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let closingChars = CharacterSet(charactersIn: "”\"'’)]}）】」』”’")
-            let cleanPunct = trimmed1.trimmingCharacters(in: closingChars)
-            let endsWithPunct = cleanPunct.hasSuffix(".") || cleanPunct.hasSuffix("!") || cleanPunct.hasSuffix("?") ||
-                                cleanPunct.hasSuffix(";") || cleanPunct.hasSuffix(":") ||
-                                cleanPunct.hasSuffix("。") || cleanPunct.hasSuffix("！") || cleanPunct.hasSuffix("？")
             let crop = page.bounds(for: .cropBox)
-            let isShortLine = lastLine1.x + lastLine1.width < crop.maxX - 60.0
-            let isNextIndented = (firstLine2.x > lastLine1.x + 10.0) || (firstLine2.x > crop.minX + 80.0)
-            let isParagraphGap = (lastLine1.y - firstLine2.y) > max(lastLine1.height, firstLine2.height) * 1.35
+            let lastRect1 = CGRect(x: lastLine1.x, y: lastLine1.y, width: lastLine1.width, height: lastLine1.height)
+            let firstRect2 = CGRect(x: firstLine2.x, y: firstLine2.y, width: firstLine2.width, height: firstLine2.height)
+            let maxLineH = max(lastRect1.height, firstRect2.height)
 
-            if endsWithPunct && (isShortLine || isNextIndented || isParagraphGap) {
+            // Direct line proximity check: line 1 must be on the same line or above line 2
+            guard lastRect1.minY >= firstRect2.minY - 4.0 else { return false }
+
+            // Subcase A1: Same physical line
+            if abs(lastRect1.minY - firstRect2.minY) <= 4.0 {
+                // In reading order, firstRect2 must be to the right of lastRect1
+                guard firstRect2.minX >= lastRect1.maxX - 4.0 else { return false }
+                let gapRect = CGRect(
+                    x: lastRect1.maxX,
+                    y: min(lastRect1.minY, firstRect2.minY),
+                    width: max(0, firstRect2.minX - lastRect1.maxX),
+                    height: maxLineH
+                )
+                let gapText = page.selection(for: gapRect)?.string ?? ""
+                if gapRect.width <= 25.0 || isIgnorableBetweenText(gapText, rect: gapRect, on: page) {
+                    return true
+                }
                 return false
             }
 
-            // Direct line proximity check: line 1 should be on the same line or above line 2
-            let isVerticallyAdjacent = (lastLine1.y >= firstLine2.y - 4.0) && ((lastLine1.y - firstLine2.y) < max(lastLine1.height, firstLine2.height) * 2.2)
-            if let sel = page.selection(from: endPt1, to: startPt2) {
-                let between = sel.string?.trimmingCharacters(in: ignorableChars) ?? ""
-                if between.isEmpty && isVerticallyAdjacent {
-                    return true
-                }
-            } else {
-                // If selection is nil, check for adjacent words/characters on the same line
-                if abs(lastLine1.y - firstLine2.y) <= 4.0 {
-                    let gap = firstLine2.x - (lastLine1.x + lastLine1.width)
-                    if gap >= -4.0 && gap <= 25.0 {
-                        return true
-                    }
-                }
+            // Subcase A2: Line 2 is below Line 1
+            let dy = lastRect1.minY - firstRect2.minY
+            // Limit vertical separation to reasonable line / paragraph spacing (up to ~3.5 lines)
+            guard dy <= maxLineH * 3.5 else { return false }
+
+            // Check if there is any unhighlighted body text between lastRect1 and firstRect2:
+            // 1. After lastRect1 on line 1 (early line break area)
+            let restOfLine1 = CGRect(
+                x: lastRect1.maxX,
+                y: lastRect1.minY,
+                width: max(0, crop.maxX - lastRect1.maxX),
+                height: lastRect1.height
+            )
+            // 2. Intermediate gap between lines (if any body lines exist between them)
+            let gapBetweenLines = CGRect(
+                x: crop.minX,
+                y: firstRect2.maxY,
+                width: crop.width,
+                height: max(0, lastRect1.minY - firstRect2.maxY)
+            )
+            // 3. Before firstRect2 on line 2 (indent / leading text area)
+            let startOfLine2 = CGRect(
+                x: crop.minX,
+                y: firstRect2.minY,
+                width: max(0, firstRect2.minX - crop.minX),
+                height: firstRect2.height
+            )
+
+            let textRest1 = page.selection(for: restOfLine1)?.string ?? ""
+            let textGap = page.selection(for: gapBetweenLines)?.string ?? ""
+            let textStart2 = page.selection(for: startOfLine2)?.string ?? ""
+
+            if isIgnorableBetweenText(textRest1, rect: restOfLine1, on: page) &&
+               isIgnorableBetweenText(textGap, rect: gapBetweenLines, on: page) &&
+               isIgnorableBetweenText(textStart2, rect: startOfLine2, on: page) {
+                return true
             }
 
             return false
@@ -618,36 +676,88 @@ public final class PDFHighlightImporter: @unchecked Sendable {
             let crop1 = p1.bounds(for: .cropBox)
             let crop2 = p2.bounds(for: .cropBox)
 
-            // Paragraph break check across pages:
-            let trimmed1 = h1.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            let closingChars = CharacterSet(charactersIn: "”\"'’)]}）】」』”’")
-            let cleanPunct = trimmed1.trimmingCharacters(in: closingChars)
-            let endsWithPunct = cleanPunct.hasSuffix(".") || cleanPunct.hasSuffix("!") || cleanPunct.hasSuffix("?") ||
-                                cleanPunct.hasSuffix(";") || cleanPunct.hasSuffix(":") ||
-                                cleanPunct.hasSuffix("。") || cleanPunct.hasSuffix("！") || cleanPunct.hasSuffix("？")
-
             let rects1 = h1.lineRects.isEmpty ? [HighlightRect(page: h1.pageIndex, x: h1.bounds.minX, y: h1.bounds.minY, width: h1.bounds.width, height: h1.bounds.height)] : h1.lineRects
             let rects2 = h2.lineRects.isEmpty ? [HighlightRect(page: h2.pageIndex, x: h2.bounds.minX, y: h2.bounds.minY, width: h2.bounds.width, height: h2.bounds.height)] : h2.lineRects
 
-            if let last1 = rects1.last, let first2 = rects2.first {
-                let isShortLine = last1.x + last1.width < crop1.maxX - 60.0
-                let isNextIndented = first2.x > crop2.minX + 80.0
-                if endsWithPunct && (isShortLine || isNextIndented) {
-                    return false
-                }
-            }
+            guard let last1 = rects1.last, let first2 = rects2.first else { return false }
+            let lastRect1 = CGRect(x: last1.x, y: last1.y, width: last1.width, height: last1.height)
+            let firstRect2 = CGRect(x: first2.x, y: first2.y, width: first2.width, height: first2.height)
 
-            // Check if there is body text below h1 on page 1
-            let boxBelow = CGRect(x: crop1.minX, y: crop1.minY, width: crop1.width, height: max(0, h1.bounds.minY - crop1.minY))
-            let textBelow = p1.selection(for: boxBelow)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Check 1: Rest of line 1 on page 1
+            let rest1 = CGRect(x: lastRect1.maxX, y: lastRect1.minY, width: max(0, crop1.maxX - lastRect1.maxX), height: lastRect1.height)
+            let textRest1 = p1.selection(for: rest1)?.string ?? ""
+            guard isIgnorableBetweenText(textRest1, rect: rest1, on: p1) else { return false }
+
+            // Check 2: Area below h1 on page 1 (excluding page footer/page numbers)
+            let boxBelow = CGRect(x: crop1.minX, y: crop1.minY, width: crop1.width, height: max(0, lastRect1.minY - crop1.minY))
+            let textBelow = p1.selection(for: boxBelow)?.string?.trimmingCharacters(in: ignorableChars) ?? ""
             let isOnlyFooter = textBelow.isEmpty || Int(textBelow) != nil || textBelow.count <= 6
 
-            // Check if there is body text above h2 on page 2
-            let boxAbove = CGRect(x: crop2.minX, y: h2.bounds.maxY, width: crop2.width, height: max(0, crop2.maxY - h2.bounds.maxY))
-            let textAbove = p2.selection(for: boxAbove)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            // Check 3: Area above h2 on page 2 (excluding page header/chapter titles)
+            let boxAbove = CGRect(x: crop2.minX, y: firstRect2.maxY, width: crop2.width, height: max(0, crop2.maxY - firstRect2.maxY))
+            let textAbove = p2.selection(for: boxAbove)?.string?.trimmingCharacters(in: ignorableChars) ?? ""
             let isOnlyHeader = textAbove.isEmpty || Int(textAbove) != nil || textAbove.count <= 6
 
+            // Check 4: Leading text before h2 on its first line
+            let start2 = CGRect(x: crop2.minX, y: firstRect2.minY, width: max(0, firstRect2.minX - crop2.minX), height: firstRect2.height)
+            let textStart2 = p2.selection(for: start2)?.string ?? ""
+            guard isIgnorableBetweenText(textStart2, rect: start2, on: p2) else { return false }
+
             return isOnlyFooter && isOnlyHeader
+        }
+
+        return false
+    }
+
+    /// Determines whether there is a paragraph boundary between two consecutive highlights.
+    public static func isParagraphBreakBetween(
+        prev: ExtractedHighlight,
+        next: ExtractedHighlight
+    ) -> Bool {
+        if prev.text.hasSuffix("\n") || next.text.hasPrefix("\n") {
+            return true
+        }
+
+        guard let last1 = prev.lineRects.last, let first2 = next.lineRects.first else {
+            return false
+        }
+
+        let prevText = prev.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let closingChars = CharacterSet(charactersIn: "”\"'’)]}）】」』”’")
+        let cleanPunct = prevText.trimmingCharacters(in: closingChars)
+        let endsWithPunct = cleanPunct.hasSuffix(".") || cleanPunct.hasSuffix("!") || cleanPunct.hasSuffix("?") ||
+                            cleanPunct.hasSuffix(";") || cleanPunct.hasSuffix(":") ||
+                            cleanPunct.hasSuffix("。") || cleanPunct.hasSuffix("！") || cleanPunct.hasSuffix("？")
+
+        // Subcase 1: Same page
+        if prev.pageIndex == next.pageIndex {
+            // Same physical line -> never a paragraph break
+            if abs(last1.y - first2.y) <= 4.0 {
+                return false
+            }
+
+            // Line 2 is below Line 1
+            if last1.y > first2.y + 4.0 {
+                let allWidths = (prev.lineRects + next.lineRects).map(\.width)
+                let maxLineWidth = allWidths.max() ?? 400.0
+
+                let isShortLine = last1.width < maxLineWidth - 35.0
+                let isNextIndented = first2.x > last1.x + 8.0
+                let isVerticalGap = (last1.y - first2.y) > max(last1.height, first2.height) * 1.35
+
+                if endsWithPunct && (isShortLine || isNextIndented || isVerticalGap) {
+                    return true
+                }
+            }
+        } else if next.pageIndex == prev.pageIndex + 1 {
+            // Cross-page: if prev ends with sentence punctuation and was a short line
+            let allWidths = (prev.lineRects + next.lineRects).map(\.width)
+            let maxLineWidth = allWidths.max() ?? 400.0
+            let isShortLine = last1.width < maxLineWidth - 35.0
+
+            if endsWithPunct && isShortLine {
+                return true
+            }
         }
 
         return false
@@ -684,7 +794,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         for cluster in clusters {
             guard let first = cluster.first, let last = cluster.last else { continue }
 
-            // Join text with hyphenation and sentence/paragraph awareness
+            // Join text with hyphenation, sentence, and paragraph awareness
             var joinedText = ""
             let noSpaceBeforeChars: Set<Character> = [
                 "’", "'", "”", "\"", ")", "]", "}", "）", "】", "」", "』",
@@ -698,7 +808,12 @@ public final class PDFHighlightImporter: @unchecked Sendable {
                 if idx == 0 {
                     joinedText = partText
                 } else {
-                    if joinedText.hasSuffix("-") && !joinedText.hasSuffix("--") {
+                    let prevPart = cluster[idx - 1]
+                    let isParagraphBreak = isParagraphBreakBetween(prev: prevPart, next: part)
+
+                    if isParagraphBreak {
+                        joinedText += "\n\n" + partText
+                    } else if joinedText.hasSuffix("-") && !joinedText.hasSuffix("--") {
                         joinedText = String(joinedText.dropLast()) + partText
                     } else if joinedText.hasSuffix("\n") || partText.hasPrefix("\n") {
                         joinedText += partText

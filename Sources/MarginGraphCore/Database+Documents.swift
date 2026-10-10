@@ -10,12 +10,36 @@ public extension Database {
         // First find the document's md5 to clean up associated cards
         if let doc = try allDocuments().first(where: { $0.id == id }) {
             try deleteCardsForDocument(md5: doc.md5)
+            let topics = try allTopics()
+            for var topic in topics where topic.bookMD5List.contains(doc.md5) {
+                topic.bookMD5List.removeAll { $0 == doc.md5 }
+                if topic.bookMD5List.isEmpty {
+                    let remaining = (try? cardsForTopic(id: topic.id))?.count ?? 0
+                    if remaining == 0 {
+                        try? deleteTopic(id: topic.id)
+                        continue
+                    }
+                }
+                try? updateTopic(topic)
+            }
         }
         try execute("DELETE FROM documents WHERE id = '\(id.uuidString)';")
     }
 
     func deleteDocument(md5: String) throws {
         try deleteCardsForDocument(md5: md5)
+        let topics = try allTopics()
+        for var topic in topics where topic.bookMD5List.contains(md5) {
+            topic.bookMD5List.removeAll { $0 == md5 }
+            if topic.bookMD5List.isEmpty {
+                let remaining = (try? cardsForTopic(id: topic.id))?.count ?? 0
+                if remaining == 0 {
+                    try? deleteTopic(id: topic.id)
+                    continue
+                }
+            }
+            try? updateTopic(topic)
+        }
         try execute("DELETE FROM documents WHERE md5 = '\(md5)';")
     }
 

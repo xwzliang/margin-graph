@@ -440,8 +440,10 @@ final class AppModel: ObservableObject {
             }
         }
 
-        if selectedTopicID == nil || !topics.contains(where: { $0.id == selectedTopicID }) {
-            selectedTopicID = topics.first?.id
+        if isInStudyWorkspace {
+            if selectedTopicID == nil || !topics.contains(where: { $0.id == selectedTopicID }) {
+                selectedTopicID = topics.first?.id
+            }
         }
     }
 
@@ -539,6 +541,12 @@ final class AppModel: ObservableObject {
         let matchingTopic = candidatesWithCards.max(by: { (allCounts[$0.id] ?? 0) < (allCounts[$1.id] ?? 0) }) ?? candidates.first
 
         if let matchingTopic {
+            let cleanTopicTitle = matchingTopic.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if matchingTopic.bookMD5List.count <= 1 && !cleanDocTitle.isEmpty &&
+                !cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) &&
+                !cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle) {
+                try? database.renameTopic(id: matchingTopic.id, newTitle: cleanDocTitle)
+            }
             try? database.updateTopicUpdatedAt(id: matchingTopic.id, date: now)
             if !matchingTopic.bookMD5List.contains(document.md5) {
                 try? database.addDocument(to: matchingTopic.id, md5: document.md5)
@@ -592,6 +600,7 @@ final class AppModel: ObservableObject {
         handledHighlightImportMD5s.remove(document.md5)
         try? database.deleteDocument(id: document.id)
         reloadLibrary()
+        reloadStudySet()
     }
 
     func createFolder(name: String, parentId: UUID? = nil) {
@@ -1296,11 +1305,11 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func openPDFPicker(attachToTopic: Bool = true) {
+    func openPDFPicker(attachToTopic: Bool = false) {
         openDocumentPicker(attachToTopic: attachToTopic)
     }
 
-    func openDocument(url: URL, attachToTopic: Bool = true) {
+    func openDocument(url: URL, attachToTopic: Bool = false) {
         let docType = MediaDocumentHelper.documentType(for: url)
 
         var loadedPDFManager: PDFDocumentManager? = nil
@@ -1404,10 +1413,37 @@ final class AppModel: ObservableObject {
                 try? database.addDocument(to: targetTopic.id, md5: document.md5)
             }
         } else if let matching = topics.first(where: { $0.bookMD5List.contains(document.md5) }) {
-            targetTopic = matching
+            let cleanDocTitle = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanTopicTitle = matching.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            if matching.bookMD5List.count == 1 && !cleanDocTitle.isEmpty &&
+                !cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) &&
+                !cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle) {
+                try? database.renameTopic(id: matching.id, newTitle: cleanDocTitle)
+                var updated = matching
+                updated.title = cleanDocTitle
+                targetTopic = updated
+            } else {
+                targetTopic = matching
+            }
+        } else if let matchingByTitle = topics.first(where: {
+            let cleanTopicTitle = $0.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanDocTitle = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let docFileName = URL(fileURLWithPath: document.filePath).deletingPathExtension().lastPathComponent
+            return !cleanTopicTitle.isEmpty && (
+                cleanTopicTitle.localizedCaseInsensitiveCompare(cleanDocTitle) == .orderedSame ||
+                cleanTopicTitle.localizedCaseInsensitiveCompare(docFileName) == .orderedSame
+            )
+        }) {
+            if !matchingByTitle.bookMD5List.contains(document.md5) {
+                try? database.addDocument(to: matchingByTitle.id, md5: document.md5)
+            }
+            targetTopic = matchingByTitle
         } else {
             let now = Date()
-            let newTopic = Topic(title: document.title, bookMD5List: [document.md5], createdAt: now, updatedAt: now)
+            let title = !document.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? document.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                : URL(fileURLWithPath: document.filePath).deletingPathExtension().lastPathComponent
+            let newTopic = Topic(title: title, bookMD5List: [document.md5], createdAt: now, updatedAt: now)
             try? database.insertTopic(newTopic)
             targetTopic = newTopic
         }
@@ -1449,10 +1485,10 @@ final class AppModel: ObservableObject {
             alert.runModal()
             return
         }
-        handlePDFHighlightImport(for: document, pdfDocument: pdfDoc, attachToTopic: selectedTopicID != nil)
+        handlePDFHighlightImport(for: document, pdfDocument: pdfDoc, attachToTopic: false)
     }
 
-    func openPDF(url: URL, attachToTopic: Bool = true) {
+    func openPDF(url: URL, attachToTopic: Bool = false) {
         openDocument(url: url, attachToTopic: attachToTopic)
     }
 

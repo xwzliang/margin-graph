@@ -1466,54 +1466,30 @@ final class PDFTests: XCTestCase {
         print("Total extracted highlights: \(extracted.count)")
         let clusters = PDFHighlightImporter.groupConsecutiveHighlights(extracted, in: doc)
         let cards = PDFHighlightImporter.buildCards(from: clusters, topicId: UUID(), bookMD5: "homo_deus")
-        XCTAssertGreaterThanOrEqual(cards.count, 10)
+        XCTAssertGreaterThanOrEqual(cards.count, 5)
+
+        // Card 0 merges the 5 consecutive yellow paragraphs from page 5 to page 6
         XCTAssertTrue(cards[0].highlightText.hasPrefix("At the dawn of the third millennium"))
-        XCTAssertTrue(cards[0].highlightText.hasSuffix("‘Let’s see what’s on the agenda today.’"))
+        XCTAssertTrue(cards[0].highlightText.hasSuffix("What will we do with all that power?"))
         XCTAssertEqual(cards[0].startPage, 5)
-        XCTAssertEqual(cards[0].endPage, 5)
+        XCTAssertEqual(cards[0].endPage, 6)
 
-        XCTAssertTrue(cards[1].highlightText.hasPrefix("For thousands of years"))
-        XCTAssertTrue(cards[1].highlightText.hasSuffix("free us from them."))
-        XCTAssertEqual(cards[1].startPage, 5)
+        // Verify that paragraph line breaks are preserved with \n\n
+        XCTAssertTrue(cards[0].highlightText.contains("‘Let’s see what’s on the agenda today.’\n\nFor thousands of years"))
+        XCTAssertTrue(cards[0].highlightText.contains("free us from them.\n\nYet at the dawn of the third millennium"))
+        XCTAssertTrue(cards[0].highlightText.contains("succeed in doing it.\n\nTrue, there are still notable failures;"))
 
-        XCTAssertTrue(cards[2].highlightText.hasPrefix("Yet at the dawn of the third millennium"))
-        XCTAssertTrue(cards[2].highlightText.hasSuffix("succeed in doing it."))
-        XCTAssertEqual(cards[2].startPage, 5)
+        // Card 1 merges the consecutive highlights on pages 13-15 (including footnotes/links 17, 18, 19, 20, 21)
+        XCTAssertTrue(cards[1].highlightText.hasPrefix("Despite the horrendous toll AIDS"))
+        XCTAssertEqual(cards[1].startPage, 13)
+        XCTAssertEqual(cards[1].endPage, 15)
 
-        XCTAssertTrue(cards[3].highlightText.hasPrefix("True, there are still notable failures;"))
-        XCTAssertTrue(cards[3].highlightText.hasSuffix("al-Qaeda attack."))
-        XCTAssertEqual(cards[3].startPage, 5)
-        XCTAssertEqual(cards[3].endPage, 6)
+        // Verify that footnote links 20 & 21 on the same line merged seamlessly without breaking
+        XCTAssertTrue(cards[1].highlightText.contains("against highly resistant germs. Scientists are also developing"))
+        XCTAssertTrue(cards[1].highlightText.contains("pathogens and cancerous cells. Microorganisms may have"))
 
-        XCTAssertTrue(cards[4].highlightText.hasPrefix("Hence even though presidents,"))
-        XCTAssertTrue(cards[4].highlightText.hasSuffix("all that power?"))
-        XCTAssertEqual(cards[4].startPage, 6)
-
-        XCTAssertTrue(cards[5].highlightText.hasPrefix("Despite the horrendous toll AIDS"))
-        XCTAssertTrue(cards[5].highlightText.hasSuffix("simply from old age."))
-        XCTAssertEqual(cards[5].startPage, 13)
-        XCTAssertEqual(cards[5].endPage, 13)
-
-        // Card 7 must be the cross-page note from P13 to P14 strictly isolated without bleeding into the next paragraph
-        XCTAssertTrue(cards[6].highlightText.hasPrefix("(Incidentally cancer and heart disease"))
-        XCTAssertTrue(cards[6].highlightText.hasSuffix("die from them.)"))
-        XCTAssertEqual(cards[6].startPage, 13)
-        XCTAssertEqual(cards[6].endPage, 14)
-        XCTAssertEqual(cards[6].highlightRects.count, 4)
-
-        // Card 8 must be the new paragraph on P14
-        XCTAssertTrue(cards[7].highlightText.hasPrefix("Many fear that this is only a temporary victory,"))
-        XCTAssertTrue(cards[7].highlightText.hasSuffix("impact on the environment."))
-        XCTAssertEqual(cards[7].startPage, 14)
-        XCTAssertEqual(cards[7].endPage, 14)
-
-        // Card 9
-        XCTAssertTrue(cards[8].highlightText.hasPrefix("Yet in the race against medicine"))
-        XCTAssertEqual(cards[8].startPage, 14)
-
-        // Card 10
-        XCTAssertTrue(cards[9].highlightText.hasPrefix("Doctors, in contrast, count on more than mere luck."))
-        XCTAssertEqual(cards[9].startPage, 14)
+        // Verify that paragraph breaks in Card 1 are preserved with \n\n
+        XCTAssertTrue(cards[1].highlightText.contains("deal with them more efficiently than today.\n\nIn 2015 doctors announced"))
     }
 
     func testDiagnoseDuplicationIssues() throws {
@@ -1545,6 +1521,29 @@ final class PDFTests: XCTestCase {
                 extracted.firstIndex(where: { $0.id == h.id }) ?? -1
             }
             log("  CLUSTER[\(ci)] size=\(cluster.count) rawIndices=\(rawIndices) pages=\(cluster.first?.pageIndex ?? -1)-\(cluster.last?.pageIndex ?? -1)")
+        }
+
+        log("\n=== ARE CONSECUTIVE DIAGNOSTICS ===")
+        for i in 0..<min(extracted.count - 1, 20) {
+            let h1 = extracted[i]
+            let h2 = extracted[i + 1]
+            let res = PDFHighlightImporter.areConsecutive(h1: h1, h2: h2, in: doc)
+            log("  RAW[\(i)] + RAW[\(i+1)] (pages \(h1.pageIndex)->\(h2.pageIndex)): areConsecutive = \(res)")
+            if h1.pageIndex == h2.pageIndex, let page = doc.page(at: h1.pageIndex) {
+                let rects1 = h1.lineRects
+                let rects2 = h2.lineRects
+                if let last1 = rects1.last, let first2 = rects2.first {
+                    let endPt1 = CGPoint(x: last1.x + last1.width, y: last1.y + last1.height / 2.0)
+                    let startPt2 = CGPoint(x: first2.x, y: first2.y + first2.height / 2.0)
+                    let sel = page.selection(from: endPt1, to: startPt2)
+                    let betweenStr = sel?.string ?? "nil"
+                    let dy = last1.y - first2.y
+                    log("    lastLine1: (\(Int(last1.x)),\(Int(last1.y)),\(Int(last1.width)),\(Int(last1.height))) maxX=\(Int(last1.x + last1.width))")
+                    log("    firstLine2: (\(Int(first2.x)),\(Int(first2.y)),\(Int(first2.width)),\(Int(first2.height))) minX=\(Int(first2.x))")
+                    log("    dy = \(dy), maxH = \(max(last1.height, first2.height))")
+                    log("    between string: [\(betweenStr.replacingOccurrences(of: "\n", with: "↵"))]")
+                }
+            }
         }
         
         // Dump first 15 cards with full text to check for line breaks
