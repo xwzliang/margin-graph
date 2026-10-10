@@ -59,8 +59,9 @@ public final class LibraryManager: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: userDefaultsKey),
            let entries = try? JSONDecoder().decode([LibraryEntry].self, from: data),
            !entries.isEmpty {
-            self.libraries = entries
+            self.libraries = consolidateDuplicateEntries(entries)
             ensureBuiltInDefaultPresent()
+            saveLibraries()
             return
         }
 
@@ -91,7 +92,8 @@ public final class LibraryManager: ObservableObject {
             ))
         }
 
-        self.libraries = initialList
+        self.libraries = consolidateDuplicateEntries(initialList)
+        ensureBuiltInDefaultPresent()
         saveLibraries()
     }
 
@@ -118,9 +120,76 @@ public final class LibraryManager: ObservableObject {
         }
     }
 
+    private func consolidateDuplicateEntries(_ entries: [LibraryEntry]) -> [LibraryEntry] {
+        var result: [LibraryEntry] = []
+        for entry in entries {
+            if entry.isBuiltIn {
+                if let existingBuiltInIndex = result.firstIndex(where: { $0.isBuiltIn }) {
+                    if entry.isDefault {
+                        result[existingBuiltInIndex].isDefault = true
+                    }
+                } else {
+                    result.append(entry)
+                }
+                continue
+            }
+            let entryClean = URL(fileURLWithPath: entry.path).deletingPathExtension().path
+            if let idx = result.firstIndex(where: {
+                guard !$0.isBuiltIn else { return false }
+                if $0.path == entry.path { return true }
+                if let w1 = $0.workingFolderPath, let w2 = entry.workingFolderPath, !w1.isEmpty && w1 == w2 { return true }
+                if let w1 = $0.workingFolderPath, w1 == entry.path { return true }
+                if let w2 = entry.workingFolderPath, w2 == $0.path { return true }
+                let existingClean = URL(fileURLWithPath: $0.path).deletingPathExtension().path
+                return existingClean == entryClean
+            }) {
+                if !entry.alias.isEmpty && result[idx].alias.isEmpty {
+                    result[idx].alias = entry.alias
+                }
+                if entry.isDefault {
+                    result[idx].isDefault = true
+                }
+                if let working = entry.workingFolderPath, result[idx].workingFolderPath == nil {
+                    result[idx].workingFolderPath = working
+                }
+                if let d2 = entry.lastOpened {
+                    let d1 = result[idx].lastOpened ?? Date.distantPast
+                    if d2 > d1 { result[idx].lastOpened = d2 }
+                }
+            } else {
+                result.append(entry)
+            }
+        }
+        // Ensure at most one default entry is marked
+        if let defaultIdx = result.firstIndex(where: { $0.isDefault }) {
+            for i in 0..<result.count where i != defaultIdx {
+                result[i].isDefault = false
+            }
+        } else if !result.isEmpty {
+            // Default to built-in if none selected
+            if let builtInIdx = result.firstIndex(where: { $0.isBuiltIn }) {
+                result[builtInIdx].isDefault = true
+            } else {
+                result[0].isDefault = true
+            }
+        }
+        return result
+    }
+
+    public func isLibrary(entry: LibraryEntry, matchesPath path: String) -> Bool {
+        if entry.isBuiltIn {
+            return path.isEmpty || path == "default"
+        }
+        if entry.path == path { return true }
+        if let working = entry.workingFolderPath, working == path { return true }
+        let entryClean = URL(fileURLWithPath: entry.path).deletingPathExtension().path
+        let pathClean = URL(fileURLWithPath: path).deletingPathExtension().path
+        return entryClean == pathClean
+    }
+
     @discardableResult
     public func addOrUpdateLibrary(path: String, alias: String = "", setAsDefault: Bool = false) -> LibraryEntry {
-        if let idx = libraries.firstIndex(where: { $0.path == path }) {
+        if let idx = libraries.firstIndex(where: { isLibrary(entry: $0, matchesPath: path) }) {
             if !alias.isEmpty {
                 libraries[idx].alias = alias
             }
@@ -200,7 +269,7 @@ public final class LibraryManager: ObservableObject {
     }
 
     public func touchLastOpened(path: String) {
-        guard let idx = libraries.firstIndex(where: { $0.path == path }) else { return }
+        guard let idx = libraries.firstIndex(where: { isLibrary(entry: $0, matchesPath: path) }) else { return }
         libraries[idx].lastOpened = Date()
         saveLibraries()
     }
@@ -210,7 +279,7 @@ public final class LibraryManager: ObservableObject {
     }
 
     public func entry(forPath path: String) -> LibraryEntry? {
-        libraries.first(where: { $0.path == path })
+        libraries.first(where: { isLibrary(entry: $0, matchesPath: path) })
     }
 
     public func entry(forId id: UUID) -> LibraryEntry? {

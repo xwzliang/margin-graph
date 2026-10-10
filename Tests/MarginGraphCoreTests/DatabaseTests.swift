@@ -661,7 +661,56 @@ final class DatabaseTests: XCTestCase {
         XCTAssertFalse(Database.isNetworkVolume(path: ":memory:"))
         XCTAssertTrue(Database.isNetworkVolume(url: URL(fileURLWithPath: "/Volumes/omv/backups/marginnote")))
     }
+
+    func testRepairBogusPackageFoldersAndConsolidation() throws {
+        let db = try Database(inMemory: true)
+
+        // Create bogus package folder and root folders
+        let bogusFolder = DocumentFolder(name: ".marginbackupall")
+        try db.insertFolder(bogusFolder)
+
+        let rootML = DocumentFolder(name: "Machine Learning")
+        try db.insertFolder(rootML)
+
+        let childML = DocumentFolder(parentId: bogusFolder.id, name: "Machine Learning")
+        try db.insertFolder(childML)
+
+        // Insert documents
+        let rootDoc = Document(
+            title: "Root Book",
+            filePath: "/test/backup.marginbackupall/Root Book.pdf",
+            md5: "doc_root_123",
+            totalPages: 10,
+            folderId: bogusFolder.id
+        )
+        try db.insertDocument(rootDoc)
+
+        let childDoc = Document(
+            title: "ML Chapter",
+            filePath: "/test/backup.marginbackupall/Machine Learning/ML Chapter.pdf",
+            md5: "doc_ml_456",
+            totalPages: 10,
+            folderId: childML.id
+        )
+        try db.insertDocument(childDoc)
+
+        // Run repairDocumentFolders
+        try db.repairDocumentFolders()
+
+        let foldersAfter = try db.allFolders()
+        // Bogus folder must be gone
+        XCTAssertFalse(foldersAfter.contains(where: { $0.name == ".marginbackupall" }))
+        // Child folder must be merged into rootML
+        XCTAssertEqual(foldersAfter.filter { $0.name == "Machine Learning" }.count, 1)
+
+        let updatedRootDoc = try db.getDocument(id: rootDoc.id)
+        XCTAssertNil(updatedRootDoc?.folderId, "Root document should have nil folderId")
+
+        let updatedChildDoc = try db.getDocument(id: childDoc.id)
+        XCTAssertEqual(updatedChildDoc?.folderId, rootML.id, "Child doc should be in root ML folder")
+    }
 }
+
 
 
 

@@ -58,7 +58,7 @@ struct LibraryManagementView: View {
                     ForEach(libraryManager.libraries) { entry in
                         let isCurrent = entry.isBuiltIn
                             ? !model.isExternalDatabase
-                            : (model.isExternalDatabase && model.activeDatabaseURL?.path == entry.path)
+                            : (model.isExternalDatabase && libraryManager.isLibrary(entry: entry, matchesPath: model.activeDatabaseURL?.path ?? ""))
 
                         libraryRow(entry: entry, isCurrent: isCurrent)
                     }
@@ -107,27 +107,25 @@ struct LibraryManagementView: View {
                 // Name / Alias Row
                 HStack(spacing: 8) {
                     if editingAliasID == entry.id {
-                        TextField("Short alias name", text: $aliasDraft)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(maxWidth: 220)
-                            .onSubmit {
+                        HStack(spacing: 6) {
+                            TextField("Library alias name", text: $aliasDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: 220)
+                                .onSubmit {
+                                    commitAlias(entry: entry)
+                                }
+                            Button("Save") {
                                 commitAlias(entry: entry)
                             }
-                        Button {
-                            commitAlias(entry: entry)
-                        } label: {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                        }
-                        .buttonStyle(.plain)
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
 
-                        Button {
-                            editingAliasID = nil
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
+                            Button("Cancel") {
+                                editingAliasID = nil
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-                        .buttonStyle(.plain)
                     } else {
                         Text(entry.displayName)
                             .font(.system(size: 13, weight: .semibold))
@@ -138,17 +136,6 @@ struct LibraryManagementView: View {
                                 .font(.system(size: 11.5))
                                 .foregroundStyle(.secondary)
                         }
-
-                        Button {
-                            aliasDraft = entry.alias
-                            editingAliasID = entry.id
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Set or edit short alias name")
                     }
 
                     Spacer()
@@ -206,6 +193,19 @@ struct LibraryManagementView: View {
 
                 // Actions row
                 HStack(spacing: 8) {
+                    if editingAliasID != entry.id {
+                        Button {
+                            aliasDraft = entry.alias.isEmpty ? entry.name : entry.alias
+                            editingAliasID = entry.id
+                        } label: {
+                            Label("Rename Library", systemImage: "pencil")
+                                .font(.system(size: 11))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .help("Set or edit short alias name for this library")
+                    }
+
                     if !entry.isDefault {
                         Button {
                             libraryManager.setDefault(id: entry.id)
@@ -273,7 +273,7 @@ struct LibraryManagementView: View {
         editingAliasID = nil
 
         // If this is currently active, update display name
-        if model.activeDatabaseURL?.path == entry.path {
+        if model.isExternalDatabase && libraryManager.isLibrary(entry: entry, matchesPath: model.activeDatabaseURL?.path ?? "") {
             model.activeDatabaseName = entry.displayName
         }
 
@@ -293,7 +293,7 @@ struct LibraryManagementView: View {
 
     private func switchToLibrary(entry: LibraryEntry) {
         if entry.isBuiltIn {
-            model.switchToDefaultDatabase()
+            model.switchToBuiltInDatabase()
         } else {
             Task { @MainActor in
                 await model.openMarginNoteBackup(at: URL(fileURLWithPath: entry.path))
@@ -302,7 +302,7 @@ struct LibraryManagementView: View {
     }
 
     private func deleteLibrary(entry: LibraryEntry) {
-        let wasActive = (model.activeDatabaseURL?.path == entry.path)
+        let wasActive = model.isExternalDatabase && libraryManager.isLibrary(entry: entry, matchesPath: model.activeDatabaseURL?.path ?? "")
         libraryManager.deleteLibrary(id: entry.id)
         if wasActive {
             model.switchToDefaultDatabase()

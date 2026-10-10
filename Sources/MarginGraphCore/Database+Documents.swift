@@ -364,42 +364,123 @@ public extension Database {
     }
 
     func repairDocumentFolders(libraryRoot: URL? = nil) throws {
-        let allDocs = try allDocuments()
-        let existingFolders = try allFolders()
+        // 0. Cleanup bogus package folders (e.g. named ".marginbackupall", ending with ".marginbackupall" / ".marginpkg")
+        let foldersBefore = try allFolders()
+        let bogusFolders = foldersBefore.filter { f in
+            let name = f.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return name == ".marginbackupall" || name == ".marginpkg" || name.hasSuffix(".marginbackupall") || name.hasSuffix(".marginpkg")
+        }
+        for bogus in bogusFolders {
+            let children = foldersBefore.filter { $0.parentId == bogus.id }
+            for child in children {
+                // If a matching root folder already exists, merge documents into it and remove the child
+                if let existingRoot = foldersBefore.first(where: {
+                    $0.parentId == nil && $0.id != bogus.id && $0.id != child.id &&
+                    $0.name.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(child.name.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+                }) {
+                    try execute("UPDATE documents SET folder_id = '\(existingRoot.id.uuidString)' WHERE folder_id = '\(child.id.uuidString)';")
+                    try execute("DELETE FROM document_folders WHERE id = '\(child.id.uuidString)';")
+                } else {
+                    // Otherwise promote to root
+                    try execute("UPDATE document_folders SET parent_id = NULL WHERE id = '\(child.id.uuidString)';")
+                }
+            }
+            // Move documents directly under the bogus folder back to root
+            try execute("UPDATE documents SET folder_id = NULL WHERE folder_id = '\(bogus.id.uuidString)';")
+            try execute("DELETE FROM document_folders WHERE id = '\(bogus.id.uuidString)';")
+        }
+
+        // Deduplicate any root folders with identical names
+        let foldersAfterBogus = try allFolders()
+        let groupedRootFolders = Dictionary(grouping: foldersAfterBogus.filter { $0.parentId == nil }) {
+            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        for (_, group) in groupedRootFolders where group.count > 1 {
+            let keeper = group.max { a, b in
+                let aCount = (try? allDocuments().filter { $0.folderId == a.id }.count) ?? 0
+                let bCount = (try? allDocuments().filter { $0.folderId == b.id }.count) ?? 0
+                return aCount < bCount
+            } ?? group[0]
+            for dup in group where dup.id != keeper.id {
+                try execute("UPDATE documents SET folder_id = '\(keeper.id.uuidString)' WHERE folder_id = '\(dup.id.uuidString)';")
+                try execute("DELETE FROM document_folders WHERE id = '\(dup.id.uuidString)';")
+            }
+        }
+
+        let currentFolders = try allFolders()
         var folderMap: [String: DocumentFolder] = [:]
-        for folder in existingFolders {
-            let key = "\(folder.parentId?.uuidString ?? "root"):\(folder.name.lowercased())"
+        for folder in currentFolders {
+            let key = "\(folder.parentId?.uuidString ?? "root"):\(folder.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())"
             folderMap[key] = folder
         }
 
+        let allDocs = try allDocuments()
         for doc in allDocs {
             guard !doc.filePath.isEmpty else { continue }
-            let docURL = URL(fileURLWithPath: doc.filePath)
-            let parentDirURL = docURL.deletingLastPathComponent()
-            let parentDir = parentDirURL.standardizedFileURL.path
-            let parentName = parentDirURL.lastPathComponent
-
+            let docPath = doc.filePath
+            let pathComponents = (docPath as NSString).pathComponents
             var folderPath: String? = nil
 
-            if let libraryRoot {
+            // 1. Check if the document path is within a package bundle (*.marginbackupall or *.marginpkg)
+            if let pkgIndex = pathComponents.firstIndex(where: {
+                let lower = $0.lowercased()
+                return lower.hasSuffix(".marginbackupall") || lower.hasSuffix(".marginpkg")
+            }) {
+                // Any subdirectories between the package bundle and the filename are user folders
+                if pkgIndex + 1 < pathComponents.count - 1 {
+                    let folderSegments = pathComponents[(pkgIndex + 1)..<(pathComponents.count - 1)]
+                    let valid = folderSegments.filter { seg in
+                        let lower = seg.lowercased()
+                        return !lower.isEmpty &&
+                            lower != "marginnotes.sqlite.files" &&
+                            lower != "files" &&
+                            lower != "documents" &&
+                            !lower.hasPrefix(".") &&
+                            !lower.hasSuffix(".marginbackupall") &&
+                            !lower.hasSuffix(".marginpkg")
+                    }
+                    if !valid.isEmpty {
+                        folderPath = valid.joined(separator: "/")
+                    }
+                }
+            } else if let libraryRoot {
                 let libPath = libraryRoot.standardizedFileURL.path
-                if parentDir != libPath && parentDir.hasPrefix(libPath) {
-                    let relative = String(parentDir.dropFirst(libPath.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                    if !relative.isEmpty && relative != "MarginNotes.sqlite.files" && relative != "files" && relative != "Documents" {
-                        folderPath = relative
+                let docURL = URL(fileURLWithPath: docPath)
+                let parentDirURL = docURL.deletingLastPathComponent()
+                let parentDir = parentDirURL.standardizedFileURL.path
+                if parentDir == libPath {
+                    folderPath = nil
+                } else if parentDir.hasPrefix(libPath + "/") {
+                    let relative = String(parentDir.dropFirst(libPath.count + 1))
+                    let segments = relative.components(separatedBy: "/").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { seg in
+                        let lower = seg.lowercased()
+                        return !lower.isEmpty &&
+                            lower != "marginnotes.sqlite.files" &&
+                            lower != "files" &&
+                            lower != "documents" &&
+                            !lower.hasPrefix(".") &&
+                            !lower.hasSuffix(".marginbackupall") &&
+                            !lower.hasSuffix(".marginpkg")
                     }
+                    if !segments.isEmpty {
+                        folderPath = segments.joined(separator: "/")
+                    }
+                }
+            } else if doc.documentType == "video" || doc.documentType == "audio" {
+                let docURL = URL(fileURLWithPath: docPath)
+                let parentName = docURL.deletingLastPathComponent().lastPathComponent
+                if !parentName.isEmpty && parentName != "Documents" && parentName != "MarginGraph" && !parentName.hasSuffix(".marginbackupall") && !parentName.hasSuffix(".marginpkg") && !parentName.hasPrefix(".") {
+                    folderPath = parentName
                 }
             }
 
-            if folderPath == nil {
-                if doc.documentType == "video" || doc.documentType == "audio" {
-                    if !parentName.isEmpty && parentName != "Documents" && parentName != "MarginGraph" && !parentName.hasSuffix(".marginbackupall") && !parentName.hasSuffix(".marginpkg") {
-                        folderPath = parentName
-                    }
+            guard let folderPath, !folderPath.isEmpty else {
+                // Document belongs at root: if it currently has a folderId, clear it!
+                if doc.folderId != nil {
+                    try updateDocumentFolder(documentID: doc.id, folderID: nil)
                 }
+                continue
             }
-
-            guard let folderPath, !folderPath.isEmpty else { continue }
 
             let segments = folderPath.components(separatedBy: "/").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
             var currentParentID: UUID? = nil
@@ -409,7 +490,10 @@ public extension Database {
                 let folder: DocumentFolder
                 if let existing = folderMap[key] {
                     folder = existing
-                } else if let matchInDb = existingFolders.first(where: { $0.parentId == currentParentID && $0.name.localizedCaseInsensitiveCompare(segment) == .orderedSame }) {
+                } else if let matchInDb = (try allFolders()).first(where: {
+                    $0.parentId == currentParentID &&
+                    $0.name.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(segment) == .orderedSame
+                }) {
                     folder = matchInDb
                     folderMap[key] = folder
                 } else {

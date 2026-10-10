@@ -257,9 +257,12 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 await self.openMarginNoteBackup(at: URL(fileURLWithPath: backupPath))
             }
-        } else if let defaultLib = LibraryManager.shared.defaultLibrary, !defaultLib.isBuiltIn, FileManager.default.fileExists(atPath: defaultLib.path) {
-            Task { @MainActor in
-                await self.openMarginNoteBackup(at: URL(fileURLWithPath: defaultLib.path))
+        } else if let defaultLib = LibraryManager.shared.defaultLibrary, !defaultLib.isBuiltIn {
+            let targetPath = FileManager.default.fileExists(atPath: defaultLib.path) ? defaultLib.path : (defaultLib.workingFolderPath ?? "")
+            if !targetPath.isEmpty && FileManager.default.fileExists(atPath: targetPath) {
+                Task { @MainActor in
+                    await self.openMarginNoteBackup(at: URL(fileURLWithPath: targetPath))
+                }
             }
         }
 
@@ -888,22 +891,52 @@ final class AppModel: ObservableObject {
         let backupDir: URL
         let sqliteURL: URL
 
+        let companionURL: URL?
         if isDir.boolValue {
-            backupDir = url
-            let cand1 = url.appendingPathComponent("MarginNotes.sqlite")
-            let cand2 = url.appendingPathComponent("MarginNotes.marginnotes")
-            if fileManager.fileExists(atPath: cand1.path) {
-                sqliteURL = cand1
-            } else if fileManager.fileExists(atPath: cand2.path) {
-                sqliteURL = cand2
-            } else if let items = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil),
-                      let found = items.first(where: { ["sqlite", "marginnotes"].contains($0.pathExtension.lowercased()) }) {
-                sqliteURL = found
+            // Check if this directory is actually a sidecar working folder with a companion .marginbackupall
+            let companion1 = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".marginbackupall")
+            let companion2 = url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".marginpkg")
+            let comp = fileManager.fileExists(atPath: companion1.path) ? companion1 : (fileManager.fileExists(atPath: companion2.path) ? companion2 : nil)
+            companionURL = comp
+
+            if let companion = comp {
+                backupDir = companion
+                let cand1 = companion.appendingPathComponent("MarginNotes.sqlite")
+                let cand2 = companion.appendingPathComponent("MarginNotes.marginnotes")
+                if fileManager.fileExists(atPath: cand1.path) {
+                    sqliteURL = cand1
+                } else if fileManager.fileExists(atPath: cand2.path) {
+                    sqliteURL = cand2
+                } else if let items = try? fileManager.contentsOfDirectory(at: companion, includingPropertiesForKeys: nil),
+                          let found = items.first(where: {
+                              let name = $0.lastPathComponent
+                              return !name.hasPrefix(".") && ["sqlite", "marginnotes"].contains($0.pathExtension.lowercased())
+                          }) {
+                    sqliteURL = found
+                } else {
+                    sqliteURL = companion.appendingPathComponent("MarginNotes.sqlite")
+                }
             } else {
-                databaseErrorMessage = "No SQLite database found inside \(url.lastPathComponent)"
-                return
+                backupDir = url
+                let cand1 = url.appendingPathComponent("MarginNotes.sqlite")
+                let cand2 = url.appendingPathComponent("MarginNotes.marginnotes")
+                if fileManager.fileExists(atPath: cand1.path) {
+                    sqliteURL = cand1
+                } else if fileManager.fileExists(atPath: cand2.path) {
+                    sqliteURL = cand2
+                } else if let items = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: nil),
+                          let found = items.first(where: {
+                              let name = $0.lastPathComponent
+                              return !name.hasPrefix(".") && ["sqlite", "marginnotes"].contains($0.pathExtension.lowercased())
+                          }) {
+                    sqliteURL = found
+                } else {
+                    databaseErrorMessage = "No SQLite database found inside \(url.lastPathComponent)"
+                    return
+                }
             }
         } else {
+            companionURL = nil
             if url.lastPathComponent.lowercased().contains("marginnotes") {
                 backupDir = url.deletingLastPathComponent()
                 sqliteURL = url
@@ -950,7 +983,12 @@ final class AppModel: ObservableObject {
         let alias = entry.alias
 
         // Resolve sidecar working folder next to backup file (named after alias or backup bundle)
-        let sidecarFolderURL = LibraryManager.resolveSidecarFolderURL(for: backupDir, alias: alias)
+        let sidecarFolderURL: URL
+        if isDir.boolValue && url.pathExtension.isEmpty && companionURL != nil {
+            sidecarFolderURL = url
+        } else {
+            sidecarFolderURL = LibraryManager.resolveSidecarFolderURL(for: backupDir, alias: alias)
+        }
         try? fileManager.createDirectory(at: sidecarFolderURL, withIntermediateDirectories: true)
 
         let workingDbURL = sidecarFolderURL.appendingPathComponent("MarginGraph.sqlite")
@@ -1160,6 +1198,25 @@ final class AppModel: ObservableObject {
     }
 
     func switchToDefaultDatabase() {
+        flushPendingPositions()
+        guard let defaultLib = LibraryManager.shared.defaultLibrary else {
+            switchToBuiltInDatabase()
+            return
+        }
+        if defaultLib.isBuiltIn {
+            switchToBuiltInDatabase()
+        } else {
+            let currentPath = activeDatabaseURL?.path ?? ""
+            if isExternalDatabase && LibraryManager.shared.isLibrary(entry: defaultLib, matchesPath: currentPath) {
+                return
+            }
+            Task { @MainActor in
+                await self.openMarginNoteBackup(at: URL(fileURLWithPath: defaultLib.path))
+            }
+        }
+    }
+
+    func switchToBuiltInDatabase() {
         guard isExternalDatabase else { return }
         flushPendingPositions()
         do {
@@ -1173,7 +1230,7 @@ final class AppModel: ObservableObject {
             resetWorkspaceForNewDatabase()
             reloadLibrary()
         } catch {
-            databaseErrorMessage = "Failed to switch to default database: \(error.localizedDescription)"
+            databaseErrorMessage = "Failed to switch to built-in database: \(error.localizedDescription)"
         }
     }
 
@@ -3333,7 +3390,9 @@ struct StudyWorkspaceView: View {
 
 struct ExternalDatabaseBannerView: View {
     let databaseName: String
+    var isCurrentDefault: Bool = false
     let onSwitchToDefault: () -> Void
+    var onSwitchToBuiltIn: (() -> Void)? = nil
     let onOpenAnother: () -> Void
     var onManageLibraries: (() -> Void)? = nil
 
@@ -3351,8 +3410,21 @@ struct ExternalDatabaseBannerView: View {
                     Text(databaseName)
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.primary)
+
+                    if isCurrentDefault {
+                        HStack(spacing: 3) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 8))
+                            Text("DEFAULT")
+                                .font(.system(size: 9, weight: .bold))
+                        }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.blue, in: Capsule())
+                    }
                 }
-                Text("Using documents directly in-place without copying • Default database preserved")
+                Text("Using documents directly in-place without copying • Modifications saved to sidecar folder")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
             }
@@ -3367,11 +3439,19 @@ struct ExternalDatabaseBannerView: View {
                 .controlSize(.small)
             }
 
-            Button("Switch to Default Library") {
-                onSwitchToDefault()
+            if !isCurrentDefault {
+                Button("Switch to Default Library") {
+                    onSwitchToDefault()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            } else if let onSwitchToBuiltIn {
+                Button("Switch to Built-in Library") {
+                    onSwitchToBuiltIn()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
 
             Button("Open Another Backup…") {
                 onOpenAnother()
@@ -3461,10 +3541,17 @@ struct MarginGraphApp: App {
                     // Main Content View
                     VStack(spacing: 0) {
                         if model.isExternalDatabase {
+                            let isCurDef = LibraryManager.shared.defaultLibrary.map {
+                                LibraryManager.shared.isLibrary(entry: $0, matchesPath: model.activeDatabaseURL?.path ?? "")
+                            } ?? false
                             ExternalDatabaseBannerView(
                                 databaseName: model.activeDatabaseName,
+                                isCurrentDefault: isCurDef,
                                 onSwitchToDefault: {
                                     model.switchToDefaultDatabase()
+                                },
+                                onSwitchToBuiltIn: {
+                                    model.switchToBuiltInDatabase()
                                 },
                                 onOpenAnother: {
                                     model.openMarginNoteBackupPicker()
@@ -3528,6 +3615,9 @@ struct MarginGraphApp: App {
                                 },
                                 onExportFolderMarginPkg: { folder in
                                     model.exportFolderAsMarginPkg(folder: folder)
+                                },
+                                onManageLibraries: {
+                                    model.isShowingManageLibraries = true
                                 }
                             )
                         case .study:
@@ -3734,10 +3824,14 @@ struct MarginGraphApp: App {
 
                 Divider()
 
+                let isAlreadyInDefault = model.isExternalDatabase
+                    ? (LibraryManager.shared.defaultLibrary != nil && LibraryManager.shared.isLibrary(entry: LibraryManager.shared.defaultLibrary!, matchesPath: model.activeDatabaseURL?.path ?? ""))
+                    : (LibraryManager.shared.defaultLibrary?.isBuiltIn ?? true)
+
                 Button("Switch to Default Library") {
                     model.switchToDefaultDatabase()
                 }
-                .disabled(!model.isExternalDatabase)
+                .disabled(isAlreadyInDefault)
 
                 Divider()
 

@@ -867,7 +867,21 @@ Structure each entry concisely with actionable rules:
        When opening databases on remote/network filesystems, strictly enforce `PRAGMA journal_mode = DELETE;` (or `TRUNCATE`). Only use `PRAGMA journal_mode = WAL;` on local volumes (`volumeIsLocal == true`).
     3. **Page 1 Header Sanitization & Local Temp Checkpointing**:
        Before opening an existing database on a network volume, inspect the first 100 bytes of the file. If bytes 18 or 19 equal `2` (indicating WAL format), copy the database and its `-wal` / `-shm` sidecars to a local temporary directory on APFS, open it locally, execute `PRAGMA wal_checkpoint(TRUNCATE);` followed by `PRAGMA journal_mode = DELETE;`, close it, and replace the network file with the sanitized rollback-journal database.
-    4. **Defensive Fallback to Local Cache**:
-       When opening external backup sidecars on external/network drives, wrap sidecar database initialization in a fallback block that reverts to the local `Application Support` cache if remote filesystem permissions or I/O fail.
+- **Package Container Boundary Invariant vs Relative Path Prefix Delimiter Trap in `repairDocumentFolders`**:
+  - **Trap**:
+    When repairing document folder assignments by matching physical subdirectories against the library path, using `parentDir.hasPrefix(libPath)` without ensuring a path delimiter (`/`) causes false matches when companion sidecar folders share names with `.marginbackupall` bundles (e.g. `parentDir` = `/path/MarginNoteBackup.marginbackupall` matched `libPath` = `/path/MarginNoteBackup`). Stripping the prefix produced `.marginbackupall`, which created a bogus folder named `.marginbackupall` and trapped root documents inside it. Furthermore, `.marginbackupall` and `.marginpkg` files are bundle archives/packages, never user folders.
+  - **Rule**:
+    1. **Strict Path Delimiter Boundary**: Always enforce path component boundaries (e.g. ensuring `parentDir == libPath || parentDir.hasPrefix(libPath.hasSuffix("/") ? libPath : libPath + "/")`) before computing relative paths.
+    2. **Package Container Invariant**: Any path component matching `*.marginbackupall` or `*.marginpkg` is a package archive container, NEVER a user folder. Any document directory directly inside that component represents the library root (`folder_id = nil`).
+    3. **Automated Folder Repair**: In `repairDocumentFolders()`, detect and eliminate bogus folders named `.marginbackupall` or ending in `.marginbackupall` / `.marginpkg`, reset their documents to `folder_id = nil`, and merge child folders into existing root folders.
+
+- **LibraryManager Companion Consolidation & Dual-Mode Default Switching**:
+  - **Trap**:
+    Users can open or register either the `.marginbackupall` package or the extracted sidecar working directory in `LibraryManager`. Both point to the same library and sidecar SQLite database. Registering both created duplicate entries, conflicted user-set `isDefault` flags, and caused "Switch to Default Library" to revert to built-in storage instead of the user's chosen default library.
+  - **Rule**:
+    1. **Companion Entry Consolidation**: In `LibraryManager`, consolidate companion entries (`.marginbackupall` bundles and matching sidecar directories) into a single unified record, preserving user aliases, working folder paths, and `isDefault` flags.
+    2. **Dual-Mode Default Library Switching**: `AppModel.init()` and `switchToDefaultDatabase()` must check `LibraryManager.shared.defaultLibrary`. If the default library is external, open `defaultLib.path`; if built-in, open Application Support. The top banner must dynamically show a blue `DEFAULT` badge and `Switch to Built-in Library` when the active external library is the default.
+    3. **Explicit Action Labels & Universal Shelf Access**: Always provide a prominent `[Manage Libraries…]` button in the document shelf header bar across all libraries. In modal management cards, avoid ambiguous icon-only buttons; use explicit text buttons (`[Rename Library]`) with inline editing fields.
+
 
 

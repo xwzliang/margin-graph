@@ -22,6 +22,7 @@ public struct DocumentShelfView: View {
     public var onAddToStudy: (([Document], UUID?, String?) -> Void)?
     public var onExportDocumentMarginPkg: ((Document) -> Void)?
     public var onExportFolderMarginPkg: ((DocumentFolder) -> Void)?
+    public var onManageLibraries: (() -> Void)?
     @Binding public var isSearchPresented: Bool
     @Binding public var searchQuery: String
 
@@ -67,7 +68,8 @@ public struct DocumentShelfView: View {
         onMoveFolder: ((DocumentFolder, UUID?) -> Void)? = nil,
         onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil,
         onExportDocumentMarginPkg: ((Document) -> Void)? = nil,
-        onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil
+        onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil,
+        onManageLibraries: (() -> Void)? = nil
     ) {
         self.documents = documents
         self.folders = folders
@@ -88,6 +90,7 @@ public struct DocumentShelfView: View {
         self.onAddToStudy = onAddToStudy
         self.onExportDocumentMarginPkg = onExportDocumentMarginPkg
         self.onExportFolderMarginPkg = onExportFolderMarginPkg
+        self.onManageLibraries = onManageLibraries
     }
 
     public init(
@@ -109,7 +112,8 @@ public struct DocumentShelfView: View {
         onMoveFolder: ((DocumentFolder, UUID?) -> Void)? = nil,
         onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil,
         onExportDocumentMarginPkg: ((Document) -> Void)? = nil,
-        onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil
+        onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil,
+        onManageLibraries: (() -> Void)? = nil
     ) {
         self.init(
             documents: documents,
@@ -130,7 +134,8 @@ public struct DocumentShelfView: View {
             onMoveFolder: onMoveFolder,
             onAddToStudy: onAddToStudy,
             onExportDocumentMarginPkg: onExportDocumentMarginPkg,
-            onExportFolderMarginPkg: onExportFolderMarginPkg
+            onExportFolderMarginPkg: onExportFolderMarginPkg,
+            onManageLibraries: onManageLibraries
         )
     }
 
@@ -598,6 +603,24 @@ public struct DocumentShelfView: View {
                 .foregroundStyle(.primary)
             }
             .buttonStyle(.plain)
+
+            // Manage Libraries Button (Always available in document view)
+            if let onManageLibraries {
+                Button(action: onManageLibraries) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "books.vertical")
+                            .font(.system(size: 13))
+                        Text("Manage Libraries…")
+                            .font(.system(size: 13, weight: .medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+                .help("Manage libraries, set startup default library, and aliases")
+            }
 
             Spacer()
 
