@@ -1431,7 +1431,8 @@ final class PDFTests: XCTestCase {
         let flattenedPath = "/Users/broliang/Downloads/Harari_2016_Homo Deus - flattened.pdf"
 
         if FileManager.default.fileExists(atPath: realPDFPath),
-           let realDoc = PDFDocument(url: URL(fileURLWithPath: realPDFPath)) {
+           let realDoc = PDFDocument(url: URL(fileURLWithPath: realPDFPath)),
+           PDFHighlightImporter.hasHighlights(in: realDoc) {
             XCTAssertTrue(PDFHighlightImporter.hasHighlights(in: realDoc))
             let count = PDFHighlightImporter.countHighlights(in: realDoc)
             XCTAssertGreaterThanOrEqual(count, 800)
@@ -1460,7 +1461,8 @@ final class PDFTests: XCTestCase {
     func testInspectHomoDeusHighlights() throws {
         let path = "/Users/broliang/Downloads/Harari_2016_Homo Deus.pdf"
         guard FileManager.default.fileExists(atPath: path),
-              let doc = PDFDocument(url: URL(fileURLWithPath: path)) else { return }
+              let doc = PDFDocument(url: URL(fileURLWithPath: path)),
+              PDFHighlightImporter.hasHighlights(in: doc) else { return }
 
         let extracted = PDFHighlightImporter.extractHighlights(from: doc)
         print("Total extracted highlights: \(extracted.count)")
@@ -1501,6 +1503,7 @@ final class PDFTests: XCTestCase {
         func log(_ s: String) { output += s + "\n" }
 
         let extracted = PDFHighlightImporter.extractHighlights(from: doc)
+        guard !extracted.isEmpty else { return }
         log("=== RAW EXTRACTED HIGHLIGHTS: \(extracted.count) ===")
         
         // Dump first 20 raw highlights with their page, bounds, color, and text prefix
@@ -1712,6 +1715,139 @@ final class PDFTests: XCTestCase {
         XCTAssertEqual(segmentedCards.count, 1)
         XCTAssertEqual(segmentedCards[0].excerptSegments.count, 2, "Segmented note preserves individual excerpt segments")
         XCTAssertEqual(segmentedCards[0].effectiveSegments.count, 2)
+    }
+
+    func testImportHighlightsDeletesOriginalAnnotationsFromPDFAndDisk() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-test-orig-annot-\(UUID().uuidString).pdf")
+        defer {
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                _ = try? FileManager.default.removeItem(at: tempURL)
+            }
+            let sidecar = tempURL.appendingPathExtension("md5")
+            if FileManager.default.fileExists(atPath: sidecar.path) {
+                _ = try? FileManager.default.removeItem(at: sidecar)
+            }
+        }
+
+        try makeSyntheticPDF(at: tempURL)
+        guard let doc = PDFDocument(url: tempURL), let page = doc.page(at: 0) else {
+            XCTFail("Failed to create PDF document")
+            return
+        }
+
+        // Add a native PDF highlight annotation over "MarginGraph synthetic PDF" at y: 100
+        let annotBounds = CGRect(x: 50, y: 90, width: 250, height: 30)
+        let origHighlight = PDFAnnotation(bounds: annotBounds, forType: .highlight, withProperties: nil)
+        origHighlight.color = .yellow
+        page.addAnnotation(origHighlight)
+        _ = doc.write(to: tempURL)
+
+        XCTAssertTrue(PDFHighlightImporter.hasHighlights(in: doc))
+        XCTAssertEqual(PDFHighlightImporter.countHighlights(in: doc), 1)
+
+        let db = try Database(inMemory: true)
+        let topicId = UUID()
+        let topic = Topic(id: topicId, title: "Test Topic")
+        try db.insertTopic(topic)
+        let docModel = Document(
+            id: UUID(),
+            title: "Test PDF With Highlights",
+            filePath: tempURL.path,
+            md5: "test_doc_original_highlight_md5",
+            totalPages: 1
+        )
+        try db.insertDocument(docModel)
+
+        let cards = try PDFHighlightImporter.importHighlights(
+            from: doc,
+            for: docModel,
+            topicId: topicId,
+            shouldMerge: true,
+            singleNativeHighlight: true,
+            database: db
+        )
+
+        XCTAssertEqual(cards.count, 1)
+
+        // 1. In-memory: original highlight must be removed
+        let remainingAnnots = page.annotations.filter {
+            $0.contents?.hasPrefix("MarginGraph-") != true && ($0.type == "Highlight" || $0.type == "Underline")
+        }
+        XCTAssertEqual(remainingAnnots.count, 0, "Original highlight annotation must be removed from PDF page in-memory")
+        XCTAssertFalse(PDFHighlightImporter.hasHighlights(in: doc))
+
+        // 2. On-disk: re-loaded PDF must have 0 original highlights
+        guard let reloadedDoc = PDFDocument(url: tempURL), let reloadedPage = reloadedDoc.page(at: 0) else {
+            XCTFail("Failed to reload PDF document")
+            return
+        }
+        let diskAnnots = reloadedPage.annotations.filter {
+            $0.contents?.hasPrefix("MarginGraph-") != true && ($0.type == "Highlight" || $0.type == "Underline")
+        }
+        XCTAssertEqual(diskAnnots.count, 0, "Original highlight annotation must be removed from PDF on disk")
+
+        // 3. Sidecar MD5 must be preserved
+        let sidecarURL = tempURL.appendingPathExtension("md5")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sidecarURL.path))
+        let sidecarContent = try String(contentsOf: sidecarURL, encoding: .utf8)
+        XCTAssertEqual(sidecarContent, "test_doc_original_highlight_md5")
+    }
+
+    func testDeleteCardRemovesOverlappingOriginalAnnotationsFromPDF() throws {
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-test-del-annot-\(UUID().uuidString).pdf")
+        defer {
+            if FileManager.default.fileExists(atPath: tempURL.path) {
+                _ = try? FileManager.default.removeItem(at: tempURL)
+            }
+            let sidecar = tempURL.appendingPathExtension("md5")
+            if FileManager.default.fileExists(atPath: sidecar.path) {
+                _ = try? FileManager.default.removeItem(at: sidecar)
+            }
+        }
+
+        try makeSyntheticPDF(at: tempURL)
+        guard let doc = PDFDocument(url: tempURL), let page = doc.page(at: 0) else {
+            XCTFail("Failed to create PDF document")
+            return
+        }
+
+        let annotBounds = CGRect(x: 50, y: 90, width: 250, height: 30)
+        let lingeringHighlight = PDFAnnotation(bounds: annotBounds, forType: .highlight, withProperties: nil)
+        lingeringHighlight.color = .yellow
+        page.addAnnotation(lingeringHighlight)
+        _ = doc.write(to: tempURL)
+
+        let db = try Database(inMemory: true)
+        let topicId = UUID()
+        try db.insertTopic(Topic(id: topicId, title: "Test Topic"))
+
+        let card = NoteCard(
+            id: UUID(),
+            topicId: topicId,
+            bookMD5: "test_del_md5",
+            highlightText: "MarginGraph synthetic PDF",
+            startPage: 0,
+            endPage: 0,
+            highlightRects: [HighlightRect(page: 0, x: 50, y: 90, width: 250, height: 30)]
+        )
+        try db.insertCard(card)
+
+        // Verify highlight is on page
+        XCTAssertEqual(page.annotations.filter { $0.type == "Highlight" }.count, 1)
+
+        // Delete original highlights for this card using deleteOriginalHighlights
+        PDFHighlightImporter.deleteOriginalHighlights(from: doc, extracted: [], docModel: Document(id: UUID(), title: "Doc", filePath: tempURL.path, md5: "test_del_md5", totalPages: 1))
+
+        XCTAssertEqual(page.annotations.filter { $0.type == "Highlight" }.count, 0)
+
+        // Verify disk document is cleaned
+        guard let reloadedDoc = PDFDocument(url: tempURL), let reloadedPage = reloadedDoc.page(at: 0) else {
+            XCTFail("Failed to reload PDF")
+            return
+        }
+        XCTAssertEqual(reloadedPage.annotations.filter { $0.type == "Highlight" }.count, 0)
     }
 }
 

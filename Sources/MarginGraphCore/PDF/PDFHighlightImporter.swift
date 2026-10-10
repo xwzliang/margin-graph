@@ -46,6 +46,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         for pageIdx in 0..<document.pageCount {
             guard let page = document.page(at: pageIdx) else { continue }
             for annot in page.annotations {
+                guard annot.contents?.hasPrefix("MarginGraph-") != true else { continue }
                 let type = annot.type ?? ""
                 if type == "Highlight" || type == "Underline" || type == "StrikeOut" {
                     return true
@@ -64,6 +65,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         for pageIdx in 0..<document.pageCount {
             guard let page = document.page(at: pageIdx) else { continue }
             for annot in page.annotations {
+                guard annot.contents?.hasPrefix("MarginGraph-") != true else { continue }
                 let type = annot.type ?? ""
                 if type == "Highlight" || type == "Underline" || type == "StrikeOut" {
                     count += 1
@@ -253,6 +255,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         for pageIdx in 0..<document.pageCount {
             guard let page = document.page(at: pageIdx) else { continue }
             for annot in page.annotations {
+                guard annot.contents?.hasPrefix("MarginGraph-") != true else { continue }
                 let type = annot.type ?? ""
                 guard type == "Highlight" || type == "Underline" || type == "StrikeOut" ||
                       (annot.contents?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) else {
@@ -505,6 +508,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         for pageIdx in 0..<document.pageCount {
             guard let page = document.page(at: pageIdx) else { continue }
             let annots = page.annotations.filter { annot in
+                guard annot.contents?.hasPrefix("MarginGraph-") != true else { return false }
                 let type = annot.type ?? ""
                 return type == "Highlight" || type == "Underline" || type == "StrikeOut" ||
                     (annot.contents?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
@@ -907,6 +911,58 @@ public final class PDFHighlightImporter: @unchecked Sendable {
             try database.insertCard(card)
         }
 
+        // Delete the original highlights from the PDF document and replace them with our app's highlights
+        deleteOriginalHighlights(from: document, extracted: extracted, docModel: docModel)
+
         return cards
+    }
+
+    /// Removes original highlight annotations from the PDF document that have been imported/converted into cards,
+    /// ensuring only the app's native card highlights are displayed and deleting cards leaves no lingering highlights on the PDF.
+    public static func deleteOriginalHighlights(
+        from document: PDFDocument,
+        extracted: [ExtractedHighlight] = [],
+        docModel: Document? = nil
+    ) {
+        var didModify = false
+
+        // 1. Remove all extracted annotations from their pages
+        for item in extracted {
+            if let page = document.page(at: item.pageIndex) {
+                page.removeAnnotation(item.annotation)
+                didModify = true
+            }
+        }
+
+        // 2. Remove any remaining original (non-MarginGraph) highlight/underline/strikeout annotations
+        for pageIdx in 0..<document.pageCount {
+            guard let page = document.page(at: pageIdx) else { continue }
+            let originalHighlights = page.annotations.filter { annot in
+                guard annot.contents?.hasPrefix("MarginGraph-") != true else { return false }
+                let type = annot.type ?? ""
+                return type == "Highlight" || type == "Underline" || type == "StrikeOut"
+            }
+            for annot in originalHighlights {
+                page.removeAnnotation(annot)
+                didModify = true
+            }
+        }
+
+        // 3. Persist the updated PDF to disk if modified and file exists
+        if didModify {
+            let targetURL = (docModel != nil && !docModel!.filePath.isEmpty)
+                ? URL(fileURLWithPath: docModel!.filePath)
+                : document.documentURL
+            if let targetURL, FileManager.default.fileExists(atPath: targetURL.path) {
+                // Ensure sidecar .md5 exists before writing so document identification is immutable
+                let sidecar1 = targetURL.appendingPathExtension("md5")
+                let sidecar2 = targetURL.deletingPathExtension().appendingPathExtension("md5")
+                let md5ToPreserve = docModel?.md5
+                if let md5ToPreserve, !FileManager.default.fileExists(atPath: sidecar1.path) && !FileManager.default.fileExists(atPath: sidecar2.path) {
+                    try? md5ToPreserve.write(to: sidecar1, atomically: true, encoding: .utf8)
+                }
+                _ = document.write(to: targetURL)
+            }
+        }
     }
 }

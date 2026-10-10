@@ -1533,6 +1533,9 @@ final class AppModel: ObservableObject {
             return
         }
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
+        if let existingCards = try? database.cardsForDocument(md5: document.md5), !existingCards.isEmpty {
+            PDFHighlightImporter.deleteOriginalHighlights(from: loaded.document, extracted: [], docModel: document)
+        }
         activeDocument = document
         manager = loaded
         let now = Date()
@@ -1947,10 +1950,21 @@ final class AppModel: ObservableObject {
         guard let oldCard = try? database.getCard(id: cardID) else { return }
         var card = oldCard
         var segments = card.effectiveSegments
+        let removedSegment = segments.first(where: { $0.id == segmentID })
         segments.removeAll(where: { $0.id == segmentID })
         if segments.isEmpty {
             delete(cardID: cardID)
             return
+        }
+        if let removed = removedSegment, let mgr = self.manager {
+            let dummyCard = NoteCard(
+                id: UUID(),
+                topicId: card.topicId,
+                highlightText: removed.text,
+                startPage: removed.rects.first?.page,
+                highlightRects: removed.rects
+            )
+            removeOriginalAnnotations(for: dummyCard, in: mgr.document, fileURL: mgr.url, bookMD5: mgr.md5)
         }
         card.excerptSegments = segments
         card.highlightText = segments.map(\.text).joined(separator: "\n\n")
@@ -2235,6 +2249,11 @@ final class AppModel: ObservableObject {
                 }
             }
             undoManager.setActionName("Delete Note")
+
+            // Remove any lingering original highlight annotations on the PDF for this card
+            if let mgr = self.manager {
+                removeOriginalAnnotations(for: oldCard, in: mgr.document, fileURL: mgr.url, bookMD5: mgr.md5)
+            }
         }
         try? database.deleteCard(id: cardID)
         if selectedCardID == cardID {
@@ -2243,6 +2262,56 @@ final class AppModel: ObservableObject {
         }
         reloadStudySet()
         objectWillChange.send()
+    }
+
+    private func removeOriginalAnnotations(for card: NoteCard, in document: PDFDocument, fileURL: URL, bookMD5: String) {
+        var didRemove = false
+        let cardRects = card.effectiveSegments.flatMap(\.rects).isEmpty ? card.highlightRects : card.effectiveSegments.flatMap(\.rects)
+        let pagesToCheck = Set(cardRects.map(\.page) + [card.startPage, card.endPage].compactMap { $0 })
+
+        for pageIdx in pagesToCheck {
+            guard pageIdx >= 0 && pageIdx < document.pageCount,
+                  let page = document.page(at: pageIdx) else { continue }
+
+            let pageRects = cardRects.filter { $0.page == pageIdx }.map { CGRect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+
+            let annotsToRemove = page.annotations.filter { annot in
+                guard annot.contents?.hasPrefix("MarginGraph-") != true else { return false }
+                let type = annot.type ?? ""
+                guard type == "Highlight" || type == "Underline" || type == "StrikeOut" else { return false }
+
+                if pageRects.isEmpty {
+                    if let start = card.startPos, let end = card.endPos {
+                        let spanBox = CGRect(
+                            x: min(start.x, end.x),
+                            y: min(start.y, end.y),
+                            width: max(abs(end.x - start.x), 10),
+                            height: max(abs(end.y - start.y), 10)
+                        )
+                        return annot.bounds.intersects(spanBox.insetBy(dx: -5, dy: -5))
+                    }
+                    return false
+                }
+
+                return pageRects.contains { r in
+                    annot.bounds.intersects(r.insetBy(dx: -4, dy: -4))
+                }
+            }
+
+            for annot in annotsToRemove {
+                page.removeAnnotation(annot)
+                didRemove = true
+            }
+        }
+
+        if didRemove {
+            let sidecar1 = fileURL.appendingPathExtension("md5")
+            let sidecar2 = fileURL.deletingPathExtension().appendingPathExtension("md5")
+            if !FileManager.default.fileExists(atPath: sidecar1.path) && !FileManager.default.fileExists(atPath: sidecar2.path) {
+                try? bookMD5.write(to: sidecar1, atomically: true, encoding: .utf8)
+            }
+            _ = document.write(to: fileURL)
+        }
     }
 
     func changeCardColor(cardID: UUID, colorIndex: Int) {

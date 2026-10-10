@@ -1007,5 +1007,12 @@ Structure each entry concisely with actionable rules:
     2. **Contiguous Rect Unification**: For `singleNativeHighlight == true`, merge overlapping or contiguous line rects across lines and pages into unified line rects via `PDFHighlightResolver.mergeContiguousLineRects(allRects)` and set `excerptSegments = []`.
     3. **Single Native Note Semantics**: When `excerptSegments` is empty, `card.effectiveSegments` produces a single unified `ExcerptSegment(id: id, text: highlightText, rects: highlightRects)`. In `PDFReaderView`, the entire merged text acts as a single continuous native highlight note with one set of handles and brackets.
 
-
-
+- **Replacing Original PDF Highlight Annotations with App Native Highlights & Sidecar MD5 Invariant**:
+  - **Trap**:
+    When PDF highlights are turned into notebook cards, if the original PDF annotations (`Highlight`, `Underline`, `StrikeOut`) remain embedded in the PDF document, deleting a card or excerpt segment in MarginGraph removes the app's dynamic highlight but leaves the original PDF annotation permanently visible on the page.
+    Furthermore, if original annotations are stripped and the PDF is saved to disk via `PDFDocument.write(to:)`, the file's raw byte SHA-256/MD5 changes. If `PDFDocumentManager` recomputes the MD5 from raw bytes upon the next application launch, all database linkages (`documents`, `topics`, `cards` matching `bookMD5`) break, orphaning all notes.
+  - **Rule**:
+    1. **Strict Distinction Between App & Original Annotations**: `PDFReaderView` paints dynamic card highlights with `contents = "MarginGraph-card-highlight"` or `"MarginGraph-card-emphasis"`. When detecting, counting, extracting, or deleting original PDF annotations, always filter out annotations where `annot.contents?.hasPrefix("MarginGraph-") == true`.
+    2. **Strip Original Annotations on Import & Document Load**: When turning highlights into cards (or opening an existing document with cards), call `PDFHighlightImporter.deleteOriginalHighlights(from:extracted:docModel:)` to remove original highlight/underline/strikeout annotations from all pages in-memory and persist the cleaned PDF.
+    3. **Guarantee Sidecar `.md5` Before Rewriting PDF**: Whenever saving a modified PDF to disk, ALWAYS compute/retrieve the authoritative document MD5 and write it to `<fileURL.path>.md5` (and `<fileURL.path>.pdf.md5`) *before* executing `document.write(to: targetURL)`. This permanently anchors document MD5 immutability and protects database integrity.
+    4. **Failsafe Overlap Cleanup on Delete**: In `delete(cardID:)` and `deleteSegment(cardID:segmentID:)`, scan the `PDFDocument` for any lingering non-MarginGraph annotations intersecting the deleted card/segment's line rects, remove them from the page, ensure the sidecar `.md5` exists, and write the document to disk.
