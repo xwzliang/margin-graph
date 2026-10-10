@@ -20,6 +20,8 @@ public struct DocumentShelfView: View {
     public var onMoveDocument: ((Document, UUID?) -> Void)?
     public var onMoveFolder: ((DocumentFolder, UUID?) -> Void)?
     public var onAddToStudy: (([Document], UUID?, String?) -> Void)?
+    public var onExportDocumentMarginPkg: ((Document) -> Void)?
+    public var onExportFolderMarginPkg: ((DocumentFolder) -> Void)?
     @Binding public var isSearchPresented: Bool
     @Binding public var searchQuery: String
 
@@ -63,7 +65,9 @@ public struct DocumentShelfView: View {
         onDeleteFolder: ((UUID) -> Void)? = nil,
         onMoveDocument: ((Document, UUID?) -> Void)? = nil,
         onMoveFolder: ((DocumentFolder, UUID?) -> Void)? = nil,
-        onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil
+        onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil,
+        onExportDocumentMarginPkg: ((Document) -> Void)? = nil,
+        onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil
     ) {
         self.documents = documents
         self.folders = folders
@@ -82,6 +86,8 @@ public struct DocumentShelfView: View {
         self.onMoveDocument = onMoveDocument
         self.onMoveFolder = onMoveFolder
         self.onAddToStudy = onAddToStudy
+        self.onExportDocumentMarginPkg = onExportDocumentMarginPkg
+        self.onExportFolderMarginPkg = onExportFolderMarginPkg
     }
 
     public init(
@@ -101,7 +107,9 @@ public struct DocumentShelfView: View {
         onDeleteFolder: ((UUID) -> Void)? = nil,
         onMoveDocument: ((Document, UUID?) -> Void)? = nil,
         onMoveFolder: ((DocumentFolder, UUID?) -> Void)? = nil,
-        onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil
+        onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil,
+        onExportDocumentMarginPkg: ((Document) -> Void)? = nil,
+        onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil
     ) {
         self.init(
             documents: documents,
@@ -120,7 +128,9 @@ public struct DocumentShelfView: View {
             onDeleteFolder: onDeleteFolder,
             onMoveDocument: onMoveDocument,
             onMoveFolder: onMoveFolder,
-            onAddToStudy: onAddToStudy
+            onAddToStudy: onAddToStudy,
+            onExportDocumentMarginPkg: onExportDocumentMarginPkg,
+            onExportFolderMarginPkg: onExportFolderMarginPkg
         )
     }
 
@@ -415,7 +425,8 @@ public struct DocumentShelfView: View {
                                         selectedFolderIDs = [folder.id]
                                         selectedDocumentIDs = []
                                         isShowingAddToStudySheet = true
-                                    }
+                                    },
+                                    onExportMarginPkg: onExportFolderMarginPkg.map { fn in { fn(folder) } }
                                 )
                             }
 
@@ -448,7 +459,8 @@ public struct DocumentShelfView: View {
                                         selectedDocumentIDs = [doc.id]
                                         selectedFolderIDs = []
                                         isShowingAddToStudySheet = true
-                                    }
+                                    },
+                                    onExportMarginPkg: onExportDocumentMarginPkg.map { fn in { fn(doc) } }
                                 )
                             }
                         }
@@ -649,6 +661,12 @@ public struct DocumentShelfView: View {
                     }
 
                     Menu {
+                        if let onExportFolderMarginPkg {
+                            Button("Export Folder to MarginNote Package (.marginpkg)…") {
+                                onExportFolderMarginPkg(current)
+                            }
+                            Divider()
+                        }
                         Button("Rename Folder…") {
                             renameFolderName = current.name
                             folderToRename = current
@@ -1362,6 +1380,7 @@ public struct DocumentActionCardView: View {
     public var onMoveToFolder: (UUID?) -> Void
     public var onRename: (() -> Void)?
     public var onDelete: () -> Void
+    public var onExportMarginPkg: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
     @State private var showingMoveDestinations: Bool = false
@@ -1397,7 +1416,8 @@ public struct DocumentActionCardView: View {
         onAddToStudy: @escaping () -> Void,
         onMoveToFolder: @escaping (UUID?) -> Void,
         onRename: (() -> Void)? = nil,
-        onDelete: @escaping () -> Void
+        onDelete: @escaping () -> Void,
+        onExportMarginPkg: (() -> Void)? = nil
     ) {
         self.document = document
         self.folders = folders
@@ -1405,6 +1425,7 @@ public struct DocumentActionCardView: View {
         self.onMoveToFolder = onMoveToFolder
         self.onRename = onRename
         self.onDelete = onDelete
+        self.onExportMarginPkg = onExportMarginPkg
     }
 
     public var body: some View {
@@ -1584,6 +1605,30 @@ public struct DocumentActionCardView: View {
                 Divider()
                     .padding(.vertical, 2)
 
+                if let onExportMarginPkg {
+                    Button(action: onExportMarginPkg) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .frame(width: 16)
+                            Text("Export to MarginNote Package (.marginpkg)…")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "export_marginpkg" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "export_marginpkg" : nil }
+
+                    Divider()
+                        .padding(.vertical, 2)
+                }
+
                 // Delete
                 Button(role: .destructive, action: onDelete) {
                     HStack(spacing: 8) {
@@ -1618,6 +1663,7 @@ public struct FolderActionCardView: View {
     public var onMoveToFolder: (UUID?) -> Void
     public var onRename: () -> Void
     public var onDelete: () -> Void
+    public var onExportMarginPkg: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
     @State private var showingMoveDestinations: Bool = false
@@ -1629,7 +1675,8 @@ public struct FolderActionCardView: View {
         onAddToStudy: @escaping () -> Void,
         onMoveToFolder: @escaping (UUID?) -> Void,
         onRename: @escaping () -> Void,
-        onDelete: @escaping () -> Void
+        onDelete: @escaping () -> Void,
+        onExportMarginPkg: (() -> Void)? = nil
     ) {
         self.folder = folder
         self.allFolders = allFolders
@@ -1638,6 +1685,7 @@ public struct FolderActionCardView: View {
         self.onMoveToFolder = onMoveToFolder
         self.onRename = onRename
         self.onDelete = onDelete
+        self.onExportMarginPkg = onExportMarginPkg
     }
 
     private func isDescendant(candidateChildID: UUID, of ancestorID: UUID) -> Bool {
@@ -1857,6 +1905,30 @@ public struct FolderActionCardView: View {
                 Divider()
                     .padding(.vertical, 2)
 
+                if let onExportMarginPkg {
+                    Button(action: onExportMarginPkg) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "square.and.arrow.up")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .frame(width: 16)
+                            Text("Export to MarginNote Package (.marginpkg)…")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "export_marginpkg" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "export_marginpkg" : nil }
+
+                    Divider()
+                        .padding(.vertical, 2)
+                }
+
                 // Delete Folder
                 Button(role: .destructive, action: onDelete) {
                     HStack(spacing: 8) {
@@ -1897,6 +1969,7 @@ public struct FolderCardView: View {
     public var onDelete: () -> Void
     public var onMoveToFolder: ((UUID?) -> Void)?
     public var onAddToStudy: (() -> Void)?
+    public var onExportMarginPkg: (() -> Void)?
 
     @State private var isShowingActionPopover: Bool = false
 
@@ -1911,7 +1984,8 @@ public struct FolderCardView: View {
         onRename: @escaping () -> Void,
         onDelete: @escaping () -> Void,
         onMoveToFolder: ((UUID?) -> Void)? = nil,
-        onAddToStudy: (() -> Void)? = nil
+        onAddToStudy: (() -> Void)? = nil,
+        onExportMarginPkg: (() -> Void)? = nil
     ) {
         self.folder = folder
         self.itemCount = itemCount
@@ -1924,6 +1998,7 @@ public struct FolderCardView: View {
         self.onDelete = onDelete
         self.onMoveToFolder = onMoveToFolder
         self.onAddToStudy = onAddToStudy
+        self.onExportMarginPkg = onExportMarginPkg
     }
 
     public var body: some View {
@@ -2059,6 +2134,12 @@ public struct FolderCardView: View {
                         onDelete: {
                             isShowingActionPopover = false
                             onDelete()
+                        },
+                        onExportMarginPkg: onExportMarginPkg.map { fn in
+                            {
+                                isShowingActionPopover = false
+                                fn()
+                            }
                         }
                     )
                 }
@@ -2069,6 +2150,10 @@ public struct FolderCardView: View {
         .contextMenu {
             Button("Open Folder") { onOpen() }
             Divider()
+            if let onExportMarginPkg {
+                Button("Export to MarginNote Package (.marginpkg)…") { onExportMarginPkg() }
+                Divider()
+            }
             if let onAddToStudy {
                 Button("Add to Study…") { onAddToStudy() }
             }
@@ -2093,6 +2178,7 @@ public struct DocumentCardView: View {
     public var onDelete: (() -> Void)?
     public var onRename: (() -> Void)?
     public var onAddToStudy: (() -> Void)?
+    public var onExportMarginPkg: (() -> Void)?
 
     @State private var isShowingActionPopover: Bool = false
 
@@ -2107,7 +2193,8 @@ public struct DocumentCardView: View {
         onMoveToFolder: ((UUID?) -> Void)? = nil,
         onDelete: (() -> Void)? = nil,
         onRename: (() -> Void)? = nil,
-        onAddToStudy: (() -> Void)? = nil
+        onAddToStudy: (() -> Void)? = nil,
+        onExportMarginPkg: (() -> Void)? = nil
     ) {
         self.document = document
         self.folders = folders
@@ -2120,6 +2207,7 @@ public struct DocumentCardView: View {
         self.onDelete = onDelete
         self.onRename = onRename
         self.onAddToStudy = onAddToStudy
+        self.onExportMarginPkg = onExportMarginPkg
     }
 
     @State private var loadedThumbnail: NSImage? = nil
@@ -2457,6 +2545,12 @@ public struct DocumentCardView: View {
                         onDelete: {
                             isShowingActionPopover = false
                             onDelete?()
+                        },
+                        onExportMarginPkg: onExportMarginPkg.map { fn in
+                            {
+                                isShowingActionPopover = false
+                                fn()
+                            }
                         }
                     )
                 }
@@ -2468,6 +2562,10 @@ public struct DocumentCardView: View {
             if !isSelectionMode {
                 Button("Open") { onOpen() }
                 Divider()
+                if let onExportMarginPkg {
+                    Button("Export to MarginNote Package (.marginpkg)…") { onExportMarginPkg() }
+                    Divider()
+                }
                 Button("Rename…") { onRename?() }
                 if let onAddToStudy {
                     Button("Add to Study…") { onAddToStudy() }

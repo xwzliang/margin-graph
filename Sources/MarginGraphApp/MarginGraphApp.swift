@@ -226,6 +226,7 @@ final class AppModel: ObservableObject {
     @Published var databaseOpeningStatus: String = ""
     @Published var databaseErrorMessage: String? = nil
     @Published var recentDatabasePaths: [String] = []
+    @Published var isShowingManageLibraries: Bool = false
 
     var canUndo: Bool { undoManager.canUndo }
     var canRedo: Bool { undoManager.canRedo }
@@ -255,6 +256,10 @@ final class AppModel: ObservableObject {
             let backupPath = CommandLine.arguments[backupArgIndex + 1]
             Task { @MainActor in
                 await self.openMarginNoteBackup(at: URL(fileURLWithPath: backupPath))
+            }
+        } else if let defaultLib = LibraryManager.shared.defaultLibrary, !defaultLib.isBuiltIn, FileManager.default.fileExists(atPath: defaultLib.path) {
+            Task { @MainActor in
+                await self.openMarginNoteBackup(at: URL(fileURLWithPath: defaultLib.path))
             }
         }
 
@@ -817,15 +822,25 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func openMarginNoteBackupPicker() {
+    func openMarginNoteBackupPicker(completion: ((URL) -> Void)? = nil) {
         let panel = NSOpenPanel()
         panel.title = "Open MarginNote Database or Backup"
         panel.prompt = "Open"
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
+        panel.allowsOtherFileTypes = true
 
-        var types: [UTType] = [.folder, .database]
+        var types: [UTType] = [.folder, .package, .database]
+        if let mnBackupAll = UTType("com.qreader.marginnote.marginbackupall") {
+            types.append(mnBackupAll)
+        }
+        if let mnBackup = UTType("com.qreader.marginnote.marginbackup") {
+            types.append(mnBackup)
+        }
+        if let mnPkg = UTType("com.qreader.marginnote.marginpkg") {
+            types.append(mnPkg)
+        }
         for ext in ["marginbackupall", "marginbackup", "marginpkg", "sqlite", "marginnotes"] {
             if let t = UTType(filenameExtension: ext), !types.contains(t) {
                 types.append(t)
@@ -834,8 +849,12 @@ final class AppModel: ObservableObject {
         panel.allowedContentTypes = types
 
         if panel.runModal() == .OK, let selectedURL = panel.url {
-            Task { @MainActor in
-                await self.openMarginNoteBackup(at: selectedURL)
+            if let completion {
+                completion(selectedURL)
+            } else {
+                Task { @MainActor in
+                    await self.openMarginNoteBackup(at: selectedURL)
+                }
             }
         }
     }
@@ -926,6 +945,16 @@ final class AppModel: ObservableObject {
             }
         }
 
+        let libManager = LibraryManager.shared
+        let entry = libManager.addOrUpdateLibrary(path: backupDir.path)
+        let alias = entry.alias
+
+        // Resolve sidecar working folder next to backup file (named after alias or backup bundle)
+        let sidecarFolderURL = LibraryManager.resolveSidecarFolderURL(for: backupDir, alias: alias)
+        try? fileManager.createDirectory(at: sidecarFolderURL, withIntermediateDirectories: true)
+
+        let workingDbURL = sidecarFolderURL.appendingPathComponent("MarginGraph.sqlite")
+
         let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         let extDatabasesDir = appSupport.appendingPathComponent("MarginGraph/ExternalDatabases", isDirectory: true)
         try? fileManager.createDirectory(at: extDatabasesDir, withIntermediateDirectories: true)
@@ -935,15 +964,27 @@ final class AppModel: ObservableObject {
             .filter { !$0.isEmpty }
             .joined(separator: "_")
         let cacheName = safeBaseName.isEmpty ? "backup_\(UUID().uuidString.prefix(8))" : safeBaseName
-        let cacheDbURL = extDatabasesDir.appendingPathComponent("\(cacheName).sqlite")
+        let legacyCacheDbURL = extDatabasesDir.appendingPathComponent("\(cacheName).sqlite")
+
+        let targetDbURL: URL
+        if fileManager.fileExists(atPath: workingDbURL.path) || fileManager.isWritableFile(atPath: sidecarFolderURL.path) {
+            targetDbURL = workingDbURL
+            // If legacy cache exists but workingDbURL does not, migrate into sidecar folder
+            if !fileManager.fileExists(atPath: workingDbURL.path) && fileManager.fileExists(atPath: legacyCacheDbURL.path) {
+                try? fileManager.copyItem(at: legacyCacheDbURL, to: workingDbURL)
+            }
+        } else {
+            // Fallback to Application Support cache if sidecar parent is not writable
+            targetDbURL = legacyCacheDbURL
+        }
 
         let mediaDir = backupDir.appendingPathComponent("MarginNotes.sqlite.files")
 
         do {
             let newDb: Database
-            if fileManager.fileExists(atPath: cacheDbURL.path) {
+            if fileManager.fileExists(atPath: targetDbURL.path) {
                 databaseOpeningStatus = "Opening cached database..."
-                newDb = try Database(url: cacheDbURL)
+                newDb = try Database(url: targetDbURL)
 
                 if fileManager.fileExists(atPath: mediaDir.path) {
                     self.mediaStorage.fallbackDirectories = [mediaDir]
@@ -953,9 +994,11 @@ final class AppModel: ObservableObject {
                 self.mediaStorage.fallbackDatabaseURL = sqliteURL
 
                 self.database = newDb
-                self.activeDatabaseName = backupDir.lastPathComponent
+                self.activeDatabaseName = entry.displayName
                 self.activeDatabaseURL = backupDir
                 self.isExternalDatabase = true
+                libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: sidecarFolderURL.path)
+                libManager.touchLastOpened(path: backupDir.path)
                 saveRecentDatabase(path: backupDir.path)
 
                 resetWorkspaceForNewDatabase()
@@ -976,7 +1019,7 @@ final class AppModel: ObservableObject {
             } else {
                 databaseOpeningStatus = "Reading MarginNote database..."
                 newDb = try await Task.detached(priority: .userInitiated) {
-                    try Database(url: cacheDbURL)
+                    try Database(url: targetDbURL)
                 }.value
                 let importer = MarginNoteImporter(
                     url: sqliteURL,
@@ -1001,9 +1044,11 @@ final class AppModel: ObservableObject {
             self.mediaStorage.fallbackDatabaseURL = sqliteURL
 
             self.database = newDb
-            self.activeDatabaseName = backupDir.lastPathComponent
+            self.activeDatabaseName = entry.displayName
             self.activeDatabaseURL = backupDir
             self.isExternalDatabase = true
+            libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: sidecarFolderURL.path)
+            libManager.touchLastOpened(path: backupDir.path)
             saveRecentDatabase(path: backupDir.path)
 
             resetWorkspaceForNewDatabase()
@@ -1011,6 +1056,70 @@ final class AppModel: ObservableObject {
         } catch {
             databaseErrorMessage = "Failed to load backup: \(error.localizedDescription)"
             print("Error loading MarginNote backup: \(error)")
+        }
+    }
+
+    func exportDocumentAsMarginPkg(document: Document) {
+        let panel = NSSavePanel()
+        panel.title = "Export to MarginNote Package"
+        panel.prompt = "Export"
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        let timestamp = dateFormatter.string(from: Date())
+        panel.nameFieldStringValue = "\(document.title)(\(timestamp)).marginpkg"
+        if let type = UTType(filenameExtension: "marginpkg") {
+            panel.allowedContentTypes = [type]
+        }
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        do {
+            try MarginPackageExporter.exportDocument(
+                document: document,
+                database: self.database,
+                mediaStorage: self.mediaStorage,
+                destinationURL: destinationURL
+            )
+            NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Export Failed"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .critical
+            alert.runModal()
+        }
+    }
+
+    func exportFolderAsMarginPkg(folder: DocumentFolder) {
+        let panel = NSSavePanel()
+        panel.title = "Export Folder to MarginNote Package"
+        panel.prompt = "Export"
+        let dateFormatter = DateFormatter()
+        dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
+        dateFormatter.locale = Locale(identifier: "en_US_POSIX")
+        let timestamp = dateFormatter.string(from: Date())
+        panel.nameFieldStringValue = "\(folder.name)(\(timestamp)).marginpkg"
+        if let type = UTType(filenameExtension: "marginpkg") {
+            panel.allowedContentTypes = [type]
+        }
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+
+        do {
+            try MarginPackageExporter.exportFolder(
+                folder: folder,
+                allFolders: self.documentFolders,
+                allDocuments: self.documents,
+                database: self.database,
+                mediaStorage: self.mediaStorage,
+                destinationURL: destinationURL
+            )
+            NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Export Failed"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .critical
+            alert.runModal()
         }
     }
 
@@ -3190,6 +3299,7 @@ struct ExternalDatabaseBannerView: View {
     let databaseName: String
     let onSwitchToDefault: () -> Void
     let onOpenAnother: () -> Void
+    var onManageLibraries: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -3212,6 +3322,14 @@ struct ExternalDatabaseBannerView: View {
             }
 
             Spacer()
+
+            if let onManageLibraries {
+                Button("Manage Libraries…") {
+                    onManageLibraries()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
 
             Button("Switch to Default Library") {
                 onSwitchToDefault()
@@ -3259,6 +3377,7 @@ struct MarginGraphApp: App {
                             isMenuPresented: $isShowingSidebarMenu,
                             isSearchActive: model.isShelfSearchPresented,
                             recentBackupPaths: model.recentDatabasePaths,
+                            libraries: LibraryManager.shared.libraries,
                             isExternalDatabase: model.isExternalDatabase,
                             activeDatabaseName: model.activeDatabaseName,
                             onSearch: {
@@ -3274,6 +3393,18 @@ struct MarginGraphApp: App {
                                 Task { @MainActor in
                                     await model.openMarginNoteBackup(at: URL(fileURLWithPath: path))
                                 }
+                            },
+                            onSelectLibrary: { entry in
+                                if entry.isBuiltIn {
+                                    model.switchToDefaultDatabase()
+                                } else {
+                                    Task { @MainActor in
+                                        await model.openMarginNoteBackup(at: URL(fileURLWithPath: entry.path))
+                                    }
+                                }
+                            },
+                            onManageLibraries: {
+                                model.isShowingManageLibraries = true
                             },
                             onSwitchToDefaultDatabase: {
                                 model.switchToDefaultDatabase()
@@ -3301,6 +3432,9 @@ struct MarginGraphApp: App {
                                 },
                                 onOpenAnother: {
                                     model.openMarginNoteBackupPicker()
+                                },
+                                onManageLibraries: {
+                                    model.isShowingManageLibraries = true
                                 }
                             )
                         }
@@ -3352,6 +3486,12 @@ struct MarginGraphApp: App {
                                 },
                                 onAddToStudy: { docs, topicID, newTitle in
                                     model.addDocumentsToStudy(documents: docs, targetTopicID: topicID, newTopicTitle: newTitle)
+                                },
+                                onExportDocumentMarginPkg: { doc in
+                                    model.exportDocumentAsMarginPkg(document: doc)
+                                },
+                                onExportFolderMarginPkg: { folder in
+                                    model.exportFolderAsMarginPkg(folder: folder)
                                 }
                             )
                         case .study:
@@ -3496,6 +3636,9 @@ struct MarginGraphApp: App {
                 Text(model.databaseErrorMessage ?? "")
             }
             .navigationTitle("MarginGraph" + (model.isExternalDatabase ? " — \(model.activeDatabaseName) [External Backup]" : ""))
+            .sheet(isPresented: $model.isShowingManageLibraries) {
+                LibraryManagementView(model: model)
+            }
             .sheet(isPresented: $model.isReviewPresented) {
                 FlashcardReviewView(
                     cards: model.activeReviewCards.isEmpty ? (model.dueFlashcards.isEmpty ? model.mindMapCards : model.dueFlashcards) : model.activeReviewCards,
@@ -3559,6 +3702,13 @@ struct MarginGraphApp: App {
                     model.switchToDefaultDatabase()
                 }
                 .disabled(!model.isExternalDatabase)
+
+                Divider()
+
+                Button("Manage Libraries…") {
+                    model.isShowingManageLibraries = true
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
 
                 if !model.recentDatabasePaths.isEmpty {
                     Menu("Open Recent Library") {

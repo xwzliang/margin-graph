@@ -819,3 +819,41 @@ Structure each entry concisely with actionable rules:
        In `CardNodeView`, prioritize visual excerpt display: if `thumbnail != nil` (`hasImage`), display the visual crop in the card body with user notes (`notesText`) below it. Only show extracted text when `hasExcerpt && !hasImage`. Guard the "Untitled Note" fallback header behind `!hasExcerpt && !hasNotes && !hasImage`.
     4. **PDF Text Backfill for Search & SRS**:
        When area excerpt cards have empty `highlightText` but valid `highlightRects` and associated PDF documents, extract text from `PDFDocument` selections at `card.highlightRects` (both at import time and lazily upon topic load) and batch-update cards in SQLite. This ensures FTS5 full-text search, SRS review decks, and plain-text export function seamlessly for rectangular highlights.
+
+- **`.marginbackupall` UTI Type & `NSOpenPanel` Package Selection Trap**:
+  - **Trap**:
+    MarginNote backup bundles (`.marginbackupall`) are package directories declared under UTI `com.qreader.marginnote.marginbackupall`. In Apple Uniform Type Identifiers, this conforms to `com.apple.package` (`UTType.package`), NOT `.folder`.
+    When configuring `NSOpenPanel.allowedContentTypes = [.folder]`, macOS greys out `.marginbackupall` bundles in the file picker, preventing users from opening external backups.
+  - **Rule**:
+    In file pickers opening MarginNote databases or backups, always include:
+    `[UTType.package, UTType.folder, UTType.database, UTType.sqlite3, UTType("com.qreader.marginnote.marginbackupall"), UTType("com.qreader.marginnote.marginbackup"), UTType("com.qreader.marginnote.marginpkg")]` (compact-mapped), and set `panel.allowsOtherFileTypes = true`.
+
+- **Sidecar Working Directory Pattern for External Backup Preservations**:
+  - **Trap**:
+    Overwriting or modifying the original `.marginbackupall` archive or file bundle when users create notes, edit titles, or modify notebooks is inefficient, slow, and risks corrupting original user backups.
+  - **Rule**:
+    1. **Strictly Immutable Source Backup**:
+       Treat the original `.marginbackupall` file or directory as strictly read-only.
+    2. **Sidecar Working Folder**:
+       Resolve a sidecar directory next to the `.marginbackupall` file named after the backup (or user-defined library alias):
+       `backupURL.deletingLastPathComponent().appendingPathComponent(alias.isEmpty ? backupURL.deletingPathExtension().lastPathComponent : alias)`.
+    3. **Isolated Working Database**:
+       Place `MarginGraph.sqlite` inside the sidecar folder. On first launch, initialize it from the backup or legacy cache. Connect `self.database` directly to `workingDbURL`. If the user updates the library alias in Library Management, automatically rename the sidecar folder on disk to match.
+
+- **MarginNote Package Exporter (`MarginPackageExporter`) CoreData Architecture**:
+  - **Trap**:
+    Attempting to construct a MarginNote `.marginpkg` from scratch by writing ad-hoc tables fails because MarginNote requires strict CoreData metadata (`Z_METADATA`, `Z_PRIMARYKEY`, `Z_MODELCACHE`, NSStoreUUID, entities `ZBOOKCONFIG`, `ZTOPIC`, `ZBOOKNOTE`, `ZMEDIA`). Furthermore, zip archives without Mac OS X extended attributes (`__MACOSX`) or zipped with standard tools can fail MarginNote checksum checks.
+  - **Rule**:
+    1. **Embedded Template SQLite Database**:
+       Embed a clean, minimal, gzipped `.marginnotes` CoreData SQLite template in code. At export time, decompress to a temporary folder, and populate using standard SQLite queries.
+    2. **Coordinate & Page Number Mapping**:
+       MarginNote page numbers in `ZSTARTPAGE` and `ZENDPAGE` are 1-based (add 1 to 0-based page indexes). Encode `highlightRects` into binary property lists (`ZHIGHLIGHTS`) matching MarginNote's `{{x, y}, {w, h}}` string array schema.
+    3. **Ditto Archiving**:
+       Archive `.marginpkg` using `ditto -c -k --sequesterRsrc <stagingDir> <targetPkgURL.path>` to produce valid, MarginNote-compatible PKZip archives with resource fork safety.
+
+- **AppModel Single Source of Truth for Menu Bar Commands and Modal Sheets**:
+  - **Trap**:
+    In SwiftUI on macOS, declaring modal presentation state as `@State` inside the `App` struct (`@State private var isShowingManageLibraries = false`) creates a disconnected state slice. Menu bar commands in `CommandGroup` modifying that `@State` or views calling closures can fail to trigger SwiftUI scene updates or dismiss sheets unpredictably.
+  - **Rule**:
+    Always place sheet and modal presentation states on the `@MainActor` `AppModel` (`@Published var isShowingManageLibraries = false`). Bind sheets using `.sheet(isPresented: $model.isShowingManageLibraries)` and invoke from menus or views with `model.isShowingManageLibraries = true`.
+
