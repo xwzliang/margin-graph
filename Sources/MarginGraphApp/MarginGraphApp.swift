@@ -675,14 +675,12 @@ final class AppModel: ObservableObject {
         var cards = (try? database.cardsForTopic(id: topicID)) ?? []
         var topicLinks = (try? database.linksForTopic(id: topicID)) ?? []
 
-        if isExternalDatabase {
-            let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
-            if filtered.count < cards.count {
-                let filteredIDs = Set(filtered.map(\.id))
-                let removedIDs = Set(cards.map(\.id)).subtracting(filteredIDs)
-                topicLinks.removeAll { removedIDs.contains($0.sourceCardId) || removedIDs.contains($0.targetCardId) }
-                cards = filtered
-            }
+        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+        if filtered.count < cards.count {
+            let filteredIDs = Set(filtered.map(\.id))
+            let removedIDs = Set(cards.map(\.id)).subtracting(filteredIDs)
+            topicLinks.removeAll { removedIDs.contains($0.sourceCardId) || removedIDs.contains($0.targetCardId) }
+            cards = filtered
         }
 
         studyDocuments = (try? database.documentsForTopic(id: topicID)) ?? []
@@ -692,7 +690,7 @@ final class AppModel: ObservableObject {
         mindMapCards = cards
         links = topicLinks
         dueFlashcards = (try? database.dueCardsForTopic(id: topicID)) ?? []
-        if isExternalDatabase && !mindMapCards.isEmpty {
+        if !mindMapCards.isEmpty {
             let validIDs = Set(mindMapCards.map(\.id))
             dueFlashcards.removeAll { !validIDs.contains($0.id) }
         }
@@ -1533,9 +1531,6 @@ final class AppModel: ObservableObject {
             return
         }
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
-        if let existingCards = try? database.cardsForDocument(md5: document.md5), !existingCards.isEmpty {
-            PDFHighlightImporter.deleteOriginalHighlights(from: loaded.document, extracted: [], docModel: document)
-        }
         activeDocument = document
         manager = loaded
         let now = Date()
@@ -2345,9 +2340,7 @@ final class AppModel: ObservableObject {
         guard let parent = mindMapCards.first(where: { $0.id == parentID }) ?? (try? database.getCard(id: parentID)) else { return }
 
         var allCardsInTopic = (try? database.cardsForTopic(id: parent.topicId)) ?? mindMapCards
-        if isExternalDatabase {
-            allCardsInTopic = NoteCard.filterMarginNoteDocumentRootCard(from: allCardsInTopic)
-        }
+        allCardsInTopic = NoteCard.filterMarginNoteDocumentRootCard(from: allCardsInTopic)
         let existingChildren = allCardsInTopic
             .filter { $0.groupNoteId == parentID }
             .sorted(by: TreeLayout.cardOrder)
@@ -2398,9 +2391,7 @@ final class AppModel: ObservableObject {
             ?? (try? database.getCard(id: siblingID)) else { return }
 
         var allCardsInTopic = (try? database.cardsForTopic(id: sibling.topicId)) ?? mindMapCards
-        if isExternalDatabase {
-            allCardsInTopic = NoteCard.filterMarginNoteDocumentRootCard(from: allCardsInTopic)
-        }
+        allCardsInTopic = NoteCard.filterMarginNoteDocumentRootCard(from: allCardsInTopic)
         let siblings = allCardsInTopic
             .filter { $0.groupNoteId == sibling.groupNoteId }
             .sorted(by: TreeLayout.cardOrder)
@@ -2690,7 +2681,8 @@ final class AppModel: ObservableObject {
             documentCards = []
             return
         }
-        documentCards = (try? database.cardsForDocument(md5: md5)) ?? []
+        let rawCards = (try? database.cardsForDocument(md5: md5)) ?? []
+        documentCards = NoteCard.filterMarginNoteDocumentRootCard(from: rawCards)
     }
 }
 

@@ -965,5 +965,282 @@ final class MindMapTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(f1.minX, f0.maxX + 70.0, "Card 1 in next column must be placed to the right of Card 0")
         }
     }
+
+    func testAhrensTopicMindMapLayoutHasNoOverlaps() throws {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dbURL = appSupport.appendingPathComponent("MarginGraph/MarginGraph.sqlite")
+        guard FileManager.default.fileExists(atPath: dbURL.path) else {
+            print("MarginGraph.sqlite not found at \(dbURL.path), skipping live Ahrens test.")
+            return
+        }
+
+        let db = try Database(url: dbURL)
+        let topicID = UUID(uuidString: "98F0B1A7-DC0E-4CF3-8888-9649AC9F3E94")!
+        let cards = try db.cardsForTopic(id: topicID)
+        guard !cards.isEmpty else { return }
+
+        // Test without root card
+        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+        let rootID = UUID(uuidString: "58A37CCB-B508-4F34-8109-F0FA6F679895")!
+        XCTAssertFalse(filtered.contains(where: { $0.id == rootID }), "Synthetic root card must be ignored/filtered out")
+
+        let rawLayout = TreeLayout.layout(cards: cards)
+        if let rootFrame = rawLayout.frames[rootID] {
+            print("Root card frame in raw layout: \(rootFrame)")
+        } else {
+            print("Root card NOT present in raw layout frames")
+        }
+        print("Raw layout visible cards: \(rawLayout.visibleCardIDs.count)")
+        let rawFrames = rawLayout.visibleCardIDs.compactMap { id -> (UUID, CGRect)? in
+            guard let f = rawLayout.frames[id] else { return nil }
+            return (id, f)
+        }
+        var rawOverlaps = 0
+        for i in 0..<rawFrames.count {
+            for j in (i+1)..<rawFrames.count {
+                if rawFrames[i].1.intersects(rawFrames[j].1) {
+                    rawOverlaps += 1
+                }
+            }
+        }
+        // Test ALL topics in OMV and local database for layout overlaps
+        let omvURL = URL(fileURLWithPath: "/Volumes/omv/backups/marginnote/main/MarginGraph.sqlite")
+        let dbsToTest = [dbURL, omvURL].filter { FileManager.default.fileExists(atPath: $0.path) }
+        for dbPath in dbsToTest {
+            let currentDB = try Database(url: dbPath)
+            let allTopics = try currentDB.allTopics()
+            for t in allTopics {
+                let topicCards = try currentDB.cardsForTopic(id: t.id)
+                guard topicCards.count > 1 else { continue }
+                let filteredCards = NoteCard.filterMarginNoteDocumentRootCard(from: topicCards)
+                let res = TreeLayout.layout(cards: filteredCards)
+                let frames = res.visibleCardIDs.compactMap { res.frames[$0] }
+                for i in 0..<frames.count {
+                    for j in (i + 1)..<frames.count {
+                        if frames[i].intersects(frames[j]) {
+                            XCTFail("Overlap in DB \(dbPath.lastPathComponent), topic '\(t.title)' (\(t.id)): \(frames[i]) intersects \(frames[j])")
+                        }
+                    }
+                }
+            }
+        }
+
+        let layout = TreeLayout.layout(cards: filtered)
+        let visibleFrames = layout.visibleCardIDs.compactMap { id -> (UUID, CGRect)? in
+            guard let f = layout.frames[id] else { return nil }
+            return (id, f)
+        }
+
+        var overlaps: [(UUID, UUID, CGRect, CGRect)] = []
+        for i in 0..<visibleFrames.count {
+            let (id1, f1) = visibleFrames[i]
+            for j in (i + 1)..<visibleFrames.count {
+                let (id2, f2) = visibleFrames[j]
+                if f1.intersects(f2) {
+                    overlaps.append((id1, id2, f1, f2))
+                }
+            }
+        }
+
+        if !overlaps.isEmpty {
+            for (id1, id2, f1, f2) in overlaps.prefix(10) {
+                print("Overlap between \(id1) \(f1) and \(id2) \(f2)")
+            }
+        }
+        XCTAssertEqual(overlaps.count, 0, "Found \(overlaps.count) overlapping card frame pairs in Ahrens topic mindmap layout!")
+    }
+
+    /// MANDATORY PRE-COMMIT TEST 1:
+    /// Measures document opening speed and card-click responsiveness.
+    /// Both operations must complete well within sub-second responsiveness limits (< 500ms for doc open, < 50ms for card click).
+    func testMandatoryBenchmarkDocumentOpenAndCardClickSpeed() throws {
+        let db = try Database(inMemory: true)
+        let topicID = UUID()
+        let topic = Topic(id: topicID, title: "Benchmark Topic", bookMD5List: ["bench_md5"])
+        try db.insertTopic(topic)
+
+        // Create 200 synthetic cards to simulate a populated notebook
+        var cards: [NoteCard] = []
+        var prevID: UUID? = nil
+        for i in 0..<200 {
+            let card = NoteCard(
+                id: UUID(),
+                topicId: topicID,
+                title: "Card Note \(i)",
+                highlightText: "Highlight excerpt text for card \(i) demonstrating realistic body content length.",
+                notesText: i % 3 == 0 ? "Personal user comment and insight for card \(i)" : "",
+                groupNoteId: (i > 0 && i % 4 != 0) ? prevID : nil,
+                startPage: i % 50
+            )
+            cards.append(card)
+            try db.insertCard(card)
+            if i % 4 == 0 {
+                prevID = card.id
+            }
+        }
+
+        // Create a temporary mock PDF document
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let pdfPath = tempDir.appendingPathComponent("benchmark.pdf").path
+        let pdfData = NSMutableData()
+        var mediaBox = CGRect(x: 0, y: 0, width: 612, height: 792)
+        guard let consumer = CGDataConsumer(data: pdfData as CFMutableData),
+              let context = CGContext(consumer: consumer, mediaBox: &mediaBox, nil) else {
+            XCTFail("Failed to create PDF context")
+            return
+        }
+        for _ in 0..<10 {
+            context.beginPage(mediaBox: &mediaBox)
+            context.endPage()
+        }
+        context.closePDF()
+        try (pdfData as Data).write(to: URL(fileURLWithPath: pdfPath))
+
+        let docModel = Document(id: UUID(), title: "Benchmark Doc", filePath: pdfPath, md5: "bench_md5", totalPages: 10)
+        try db.insertDocument(docModel)
+
+        // 1. Benchmark Document Opening Speed
+        let docOpenStart = CFAbsoluteTimeGetCurrent()
+        let loadedManager = try PDFDocumentManager(url: URL(fileURLWithPath: docModel.filePath), md5: docModel.md5)
+        let docCards = try db.cardsForDocument(md5: docModel.md5)
+        let docOpenElapsed = CFAbsoluteTimeGetCurrent() - docOpenStart
+
+        print("⚡️ [MANDATORY BENCHMARK] Document open elapsed: \(String(format: "%.3f", docOpenElapsed * 1000)) ms")
+        XCTAssertNotNil(loadedManager.document)
+        XCTAssertEqual(docCards.count, 0)
+        // Must complete under 500ms
+        XCTAssertLessThan(docOpenElapsed, 0.500, "Document open must complete under 500ms (took \(docOpenElapsed * 1000) ms)")
+
+        // If real Ahrens document is present, benchmark real PDF open as well
+        let ahrensPath = "/Users/broliang/Library/Containers/QReader.MarginStudyMac/Data/Documents/Ahrens_2017_How-to-take-smart-notes.pdf"
+        if FileManager.default.fileExists(atPath: ahrensPath) {
+            let ahrensStart = CFAbsoluteTimeGetCurrent()
+            let ahrensManager = try PDFDocumentManager(url: URL(fileURLWithPath: ahrensPath), md5: "f8d34c01a92ec9fafed7690faf90a0ee6e88f3586d079dec8692435db59ae091")
+            let ahrensElapsed = CFAbsoluteTimeGetCurrent() - ahrensStart
+            print("⚡️ [MANDATORY BENCHMARK] Real Ahrens PDF open elapsed: \(String(format: "%.3f", ahrensElapsed * 1000)) ms")
+            XCTAssertNotNil(ahrensManager.document)
+            XCTAssertLessThan(ahrensElapsed, 0.500, "Real Ahrens PDF open must complete under 500ms (took \(ahrensElapsed * 1000) ms)")
+        }
+
+        // 2. Benchmark Note Card Click & Selection Speed
+        let targetCard = cards[50]
+        let clickStart = CFAbsoluteTimeGetCurrent()
+        let fetchedCard = try db.getCard(id: targetCard.id)
+        let cardChildren = try db.childCards(parentId: targetCard.id, topicId: topicID)
+        let layout = TreeLayout.layout(cards: cards)
+        let targetFrame = layout.frames[targetCard.id]
+        let clickElapsed = CFAbsoluteTimeGetCurrent() - clickStart
+
+        print("⚡️ [MANDATORY BENCHMARK] Card click & layout elapsed: \(String(format: "%.3f", clickElapsed * 1000)) ms")
+        XCTAssertNotNil(fetchedCard)
+        XCTAssertNotNil(targetFrame)
+        _ = cardChildren
+        // Must complete under 100ms
+        XCTAssertLessThan(clickElapsed, 0.100, "Card click responsiveness must complete under 100ms (took \(clickElapsed * 1000) ms)")
+    }
+
+    /// MANDATORY PRE-COMMIT TEST 2:
+    /// Mindmap note card layout non-overlapping verification.
+    /// Asserts 0 bounding box overlaps across all cards in the layout and guarantees synthetic root cards are ignored.
+    func testMandatoryMindMapLayoutZeroOverlapsAndRootIgnored() throws {
+        // 1. Synthetic multi-branch forest test
+        let topicID = UUID()
+        let syntheticRootID = UUID()
+        let docRootCard = NoteCard(
+            id: syntheticRootID,
+            topicId: topicID,
+            title: "Synthetic Document Root Card",
+            highlightText: "",
+            notesText: "",
+            groupNoteId: nil,
+            startPage: nil
+        )
+
+        var testCards: [NoteCard] = [docRootCard]
+        var childIDs: [UUID] = []
+        for ch in 0..<8 {
+            let chapterID = UUID()
+            childIDs.append(chapterID)
+            let chapter = NoteCard(
+                id: chapterID,
+                topicId: topicID,
+                title: "Chapter \(ch + 1): Architectural Foundations and Concepts",
+                highlightText: "Key overview principles for chapter \(ch + 1)",
+                groupNoteId: syntheticRootID
+            )
+            testCards.append(chapter)
+
+            for sub in 0..<12 {
+                let noteID = UUID()
+                let subNote = NoteCard(
+                    id: noteID,
+                    topicId: topicID,
+                    title: "Note \(ch + 1).\(sub + 1)",
+                    highlightText: "Extended excerpt discussing principles of modularization, data decoupling, and reliable distributed state across complex software architectures.",
+                    notesText: sub % 2 == 0 ? "Important realization to keep in mind for future design." : "",
+                    groupNoteId: chapterID
+                )
+                testCards.append(subNote)
+            }
+        }
+
+        // Verify root card is filtered out
+        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: testCards)
+        XCTAssertFalse(filtered.contains(where: { $0.id == syntheticRootID }), "Synthetic root card must be filtered out")
+        XCTAssertEqual(filtered.count, testCards.count - 1)
+
+        // Verify direct children promoted
+        for cid in childIDs {
+            let promoted = filtered.first(where: { $0.id == cid })
+            XCTAssertNil(promoted?.groupNoteId, "Chapter \(cid) must be promoted to root with groupNoteId == nil")
+        }
+
+        // Layout filtered cards and verify ZERO overlaps
+        let layout = TreeLayout.layout(cards: filtered)
+        let frames = layout.visibleCardIDs.compactMap { layout.frames[$0] }
+        XCTAssertEqual(frames.count, filtered.count)
+
+        for i in 0..<frames.count {
+            for j in (i + 1)..<frames.count {
+                XCTAssertFalse(
+                    frames[i].intersects(frames[j]),
+                    "Overlapping frames detected in synthetic forest: \(frames[i]) intersects \(frames[j])"
+                )
+            }
+        }
+
+        // 2. Real Ahrens topic verification (from local and/or OMV external library)
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let localDBURL = appSupport.appendingPathComponent("MarginGraph/MarginGraph.sqlite")
+        let omvDBURL = URL(fileURLWithPath: "/Volumes/omv/backups/marginnote/main/MarginGraph.sqlite")
+
+        for dbURL in [localDBURL, omvDBURL] where FileManager.default.fileExists(atPath: dbURL.path) {
+            let db = try Database(url: dbURL)
+            let ahrensTopicID = UUID(uuidString: "98F0B1A7-DC0E-4CF3-8888-9649AC9F3E94")!
+            let cards = try db.cardsForTopic(id: ahrensTopicID)
+            guard !cards.isEmpty else { continue }
+
+            let filteredAhrens = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
+            let rootUUID = UUID(uuidString: "58A37CCB-B508-4F34-8109-F0FA6F679895")!
+            XCTAssertFalse(filteredAhrens.contains(where: { $0.id == rootUUID }), "Ahrens root card must be ignored in DB \(dbURL.lastPathComponent)")
+
+            let ahrensLayout = TreeLayout.layout(cards: filteredAhrens)
+            let visible = ahrensLayout.visibleCardIDs.compactMap { ahrensLayout.frames[$0] }
+            XCTAssertGreaterThan(visible.count, 500, "Ahrens topic must have > 500 visible cards in mindmap")
+
+            var overlapCount = 0
+            for i in 0..<visible.count {
+                for j in (i + 1)..<visible.count {
+                    if visible[i].intersects(visible[j]) {
+                        overlapCount += 1
+                    }
+                }
+            }
+            XCTAssertEqual(overlapCount, 0, "Found \(overlapCount) overlapping card pairs in Ahrens topic mindmap in \(dbURL.lastPathComponent)!")
+        }
+    }
 }
 

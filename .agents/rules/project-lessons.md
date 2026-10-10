@@ -6,6 +6,7 @@
 > 2. **Before concluding ANY task**: If the task involved diagnosing an unexpected bug, fixing broken behavior (such as blocked clicks, layout shifts, coordinate offsets, performance lag, or stuck cursors), or learning a non-obvious framework behavior (SwiftUI, AppKit, PDFKit, SQLite), **YOU MUST PROACTIVELY UPDATE THIS FILE** before declaring completion.
 > 3. **Definition of Done**: Updating this file with verified traps and durable rules is part of the definition of done for non-trivial tasks. Do not wait for the user to ask or remind you.
 > 4. **Mandatory Post-Implementation UI & App Testing**: Whenever you finish implementing, ALWAYS launch the app (`.build/arm64-apple-macosx/debug/MarginGraphApp`), interact with the application, click around, and test the functionality and UI yourself to verify everything is working properly before declaring completion. Never ask or rely on the user to test what you can verify yourself.
+> 5. **Mandatory Pre-Commit Benchmark & Layout Tests**: Before every git commit, you MUST run and pass `testMandatoryBenchmarkDocumentOpenAndCardClickSpeed` (document open < 500ms, card click < 100ms) and `testMandatoryMindMapLayoutZeroOverlapsAndRootIgnored` (0 bounding box overlaps in mindmap layout, synthetic document root cards ignored). Commits are strictly prohibited if either test fails.
 
 ---
 
@@ -1016,3 +1017,27 @@ Structure each entry concisely with actionable rules:
     2. **Strip Original Annotations on Import & Document Load**: When turning highlights into cards (or opening an existing document with cards), call `PDFHighlightImporter.deleteOriginalHighlights(from:extracted:docModel:)` to remove original highlight/underline/strikeout annotations from all pages in-memory and persist the cleaned PDF.
     3. **Guarantee Sidecar `.md5` Before Rewriting PDF**: Whenever saving a modified PDF to disk, ALWAYS compute/retrieve the authoritative document MD5 and write it to `<fileURL.path>.md5` (and `<fileURL.path>.pdf.md5`) *before* executing `document.write(to: targetURL)`. This permanently anchors document MD5 immutability and protects database integrity.
     4. **Failsafe Overlap Cleanup on Delete**: In `delete(cardID:)` and `deleteSegment(cardID:segmentID:)`, scan the `PDFDocument` for any lingering non-MarginGraph annotations intersecting the deleted card/segment's line rects, remove them from the page, ensure the sidecar `.md5` exists, and write the document to disk.
+
+- **Document Switching Performance & Zero Synchronous Network Disk Writes**:
+  - **Trap**:
+    In `switchToDocument()`, calling synchronous disk operations like `PDFHighlightImporter.deleteOriginalHighlights(from:extracted:docModel:)` whenever a document was selected forced a full page-by-page annotation scan and synchronous `PDFDocument.write(to: targetURL)` on the main thread. When documents were hosted on external volumes or SMB network shares (e.g. `/Volumes/omv/backups/marginnote/main/...`), this stalled the main thread for 20-30 seconds on every document click.
+  - **Rule**:
+    1. **Zero Synchronous PDF Disk Writes on Document Open**: `switchToDocument()` must be instantaneous (< 500ms). Never invoke `PDFDocument.write` synchronously during document switching or reader loading. Stripping original annotations should be done asynchronously or specifically during highlight import operations.
+
+- **Unconditional Synthetic Document Root Card Filtering Across All Libraries & TreeLayout Clamping**:
+  - **Trap**:
+    MarginNote creates a synthetic document root card for each imported book (e.g. "Ahrens_2017_How-to-take-smart-notes") with radiating links to hundreds of child notes. When `filterMarginNoteDocumentRootCard` was gated behind `if isExternalDatabase`, it was skipped when `isExternalDatabase` was false (such as during initialization or in the built-in library), displaying the synthetic card and 47+ radiating link lines. In multi-book topics, reachability across the entire topic was under 80%, causing the root card not to be recognized. Furthermore, in `TreeLayout`, arbitrary coordinate clamping (`explicitFirstY < 5000`) caused large topics where $Y \ge 5000$ (Ahrens spans $Y$ up to $67,600$) to reset their positions and overlap.
+  - **Rule**:
+    1. **Unconditional Root Filtering**: Filter synthetic document root cards unconditionally in all libraries (built-in and external) and whenever reloading study sets or document cards.
+    2. **Multi-Book Topic Support**: Compute reachability per book (`bookCards`) as well as across the whole topic, iteratively stripping all synthetic root cards, promoting their children to roots (`groupNoteId = nil`), and purging root card IDs from `mindLinks` and `topicLinks`.
+    3. **Remove Arbitrary Coordinate Clamping**: In `TreeLayout`, support arbitrarily large coordinate spaces ($Y > 20$, `.isFinite`) without artificial upper bounds.
+
+- **Mandatory Pre-Commit Benchmark & Non-Overlapping Layout Verification**:
+  - **Trap**:
+    Performance regressions (e.g. network disk stalls on document open) and layout regressions (card overlaps or root card radiating lines) can silently creep into code changes if not verified before commit.
+  - **Rule**:
+    Two automated tests in `Tests/MarginGraphCoreTests/MindMapTests.swift` are mandatory before any commit:
+    1. `testMandatoryBenchmarkDocumentOpenAndCardClickSpeed`: Verifies document opening (< 500ms) and card click responsiveness (< 100ms) with both mock data and real PDF documents.
+    2. `testMandatoryMindMapLayoutZeroOverlapsAndRootIgnored`: Verifies that synthetic document root cards are pruned and that every pair of visible card bounding boxes in mindmap layout has zero intersections (0 overlaps) across both synthetic forest benchmarks and real library topics.
+    No commit is permitted unless both tests pass cleanly.
+

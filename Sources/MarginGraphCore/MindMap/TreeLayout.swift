@@ -291,14 +291,14 @@ public enum TreeLayout {
             let baseX = max(columnStartX, explicitX ?? columnStartX)
 
             let explicitFirstY = sortedColumn.first.flatMap { card -> CGFloat? in
-                guard let y = card.mindPos?.y, (card.mindPos?.x ?? 0) > 20, y > 20, y < 5000 else { return nil }
+                guard let y = card.mindPos?.y, (card.mindPos?.x ?? 0) > 20, y > 20, y.isFinite else { return nil }
                 return y
             }
             nextY = explicitFirstY ?? 40.0
 
             currentColumnMaxX = baseX + configuration.nodeSize.width
             for root in sortedColumn {
-                if let savedY = root.mindPos?.y, (root.mindPos?.x ?? 0) > 20, savedY > nextY && savedY < 5000 {
+                if let savedY = root.mindPos?.y, (root.mindPos?.x ?? 0) > 20, savedY > nextY && savedY.isFinite {
                     nextY = savedY
                 }
                 _ = place(root, depth: 0, baseX: baseX)

@@ -287,50 +287,78 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public static func filterMarginNoteDocumentRootCard(from cards: [NoteCard]) -> [NoteCard] {
         guard cards.count > 1 else { return cards }
 
-        // A MarginNote synthetic document card has no excerpt highlight text, no notes text,
-        // no highlight rects, no start page, and no highlight pic.
-        let candidates = cards.filter { card in
-            card.groupNoteId == nil &&
-            card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            card.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            card.highlightRects.isEmpty &&
-            card.startPage == nil &&
-            card.highlightPicHash == nil
-        }
+        var result = cards
+        var removedAny = true
 
-        guard !candidates.isEmpty else { return cards }
-
-        for rootCard in candidates {
-            // 1. Check groupNoteId tree hierarchy:
-            let descendants = allDescendants(of: rootCard.id, in: cards)
-            if descendants.count == cards.count - 1 {
-                return removeCardAndPromoteChildren(rootCard.id, from: cards)
+        while removedAny {
+            removedAny = false
+            let currentCards = result
+            let candidates = currentCards.filter { card in
+                card.groupNoteId == nil &&
+                card.highlightText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                card.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+                card.highlightRects.isEmpty &&
+                card.startPage == nil &&
+                card.highlightPicHash == nil
             }
 
-            // 2. Check mindLinks graph reachability:
-            let mindLinksMap = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.mindLinks) })
-            var reachable = Set<UUID>()
-            var queue: [UUID] = [rootCard.id]
-            while !queue.isEmpty {
-                let curr = queue.removeFirst()
-                for target in mindLinksMap[curr] ?? [] where target != rootCard.id {
-                    if reachable.insert(target).inserted {
-                        queue.append(target)
+            guard !candidates.isEmpty else { break }
+
+            for rootCard in candidates {
+                let otherCardsCount = currentCards.count - 1
+                guard otherCardsCount > 0 else { continue }
+
+                // Check groupNoteId tree hierarchy
+                let descendants = allDescendants(of: rootCard.id, in: currentCards)
+                let sameBookCards = (rootCard.bookMD5 != nil)
+                    ? currentCards.filter { $0.bookMD5 == rootCard.bookMD5 && $0.id != rootCard.id }
+                    : []
+
+                let isGroupTreeRootOverall = descendants.count == otherCardsCount || (otherCardsCount >= 5 && Double(descendants.count) / Double(otherCardsCount) >= 0.8)
+                let isGroupTreeRootPerBook = !sameBookCards.isEmpty && sameBookCards.count >= 3 &&
+                    Double(descendants.filter { $0.bookMD5 == rootCard.bookMD5 }.count) / Double(sameBookCards.count) >= 0.8
+
+                if isGroupTreeRootOverall || isGroupTreeRootPerBook {
+                    let isTargetOfOther = currentCards.contains { $0.id != rootCard.id && ($0.mindLinks.contains(rootCard.id) || $0.groupNoteId == rootCard.id) }
+                    // In group hierarchy, direct children have groupNoteId == rootCard.id, but no other card should treat it as child
+                    let hasParent = currentCards.contains { $0.id != rootCard.id && $0.mindLinks.contains(rootCard.id) }
+                    if !hasParent {
+                        result = removeCardAndPromoteChildren(rootCard.id, from: currentCards)
+                        removedAny = true
+                        break
+                    }
+                }
+
+                // Check mindLinks graph reachability
+                let mindLinksMap = Dictionary(uniqueKeysWithValues: currentCards.map { ($0.id, $0.mindLinks) })
+                var reachable = Set<UUID>()
+                var queue: [UUID] = [rootCard.id]
+                while !queue.isEmpty {
+                    let curr = queue.removeFirst()
+                    for target in mindLinksMap[curr] ?? [] where target != rootCard.id {
+                        if reachable.insert(target).inserted {
+                            queue.append(target)
+                        }
+                    }
+                }
+
+                let isMindLinksRootOverall = (reachable.count == otherCardsCount) || (otherCardsCount >= 5 && Double(reachable.count) / Double(otherCardsCount) >= 0.8)
+                let reachableSameBook = sameBookCards.filter { reachable.contains($0.id) }
+                let isMindLinksRootPerBook = !sameBookCards.isEmpty && sameBookCards.count >= 3 &&
+                    (Double(reachableSameBook.count) / Double(sameBookCards.count) >= 0.8)
+
+                if isMindLinksRootOverall || isMindLinksRootPerBook {
+                    let isTargetOfOther = currentCards.contains { $0.id != rootCard.id && $0.mindLinks.contains(rootCard.id) }
+                    if !isTargetOfOther {
+                        result = removeCardAndPromoteChildren(rootCard.id, from: currentCards)
+                        removedAny = true
+                        break
                     }
                 }
             }
-
-            let otherCardsCount = cards.count - 1
-            if otherCardsCount > 0 && (reachable.count == otherCardsCount || (otherCardsCount >= 5 && Double(reachable.count) / Double(otherCardsCount) >= 0.8)) {
-                // Ensure no other card has this rootCard in its mindLinks (it's strictly a root)
-                let isTargetOfOther = cards.contains { $0.id != rootCard.id && $0.mindLinks.contains(rootCard.id) }
-                if !isTargetOfOther {
-                    return removeCardAndPromoteChildren(rootCard.id, from: cards)
-                }
-            }
         }
 
-        return cards
+        return result
     }
 
     private static func removeCardAndPromoteChildren(_ rootCardID: UUID, from cards: [NoteCard]) -> [NoteCard] {
@@ -338,12 +366,14 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
             if card.id == rootCardID {
                 return nil
             }
-            if card.groupNoteId == rootCardID {
-                var promoted = card
-                promoted.groupNoteId = nil
-                return promoted
+            var updated = card
+            if updated.groupNoteId == rootCardID {
+                updated.groupNoteId = nil
             }
-            return card
+            if updated.mindLinks.contains(rootCardID) {
+                updated.mindLinks.removeAll { $0 == rootCardID }
+            }
+            return updated
         }
     }
 }
