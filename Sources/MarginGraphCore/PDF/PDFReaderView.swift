@@ -262,6 +262,37 @@ public enum PDFHighlightResolver {
         return sortInReadingOrder(result)
     }
 
+    public static func mergeContiguousLineRects(_ rects: [HighlightRect]) -> [HighlightRect] {
+        let sorted = sortInReadingOrder(deduplicate(rects))
+        guard !sorted.isEmpty else { return [] }
+        var merged: [HighlightRect] = []
+        for r in sorted {
+            guard let last = merged.last else {
+                merged.append(r)
+                continue
+            }
+            if last.page == r.page && abs(last.y - r.y) <= 4.0 && abs(last.height - r.height) <= 6.0 {
+                let lastMaxX = last.x + last.width
+                if r.x <= lastMaxX + 14.0 && (r.x + r.width) >= last.x {
+                    let newX = min(last.x, r.x)
+                    let newMaxX = max(lastMaxX, r.x + r.width)
+                    let newY = min(last.y, r.y)
+                    let newH = max(last.height, r.height)
+                    merged[merged.count - 1] = HighlightRect(
+                        page: last.page,
+                        x: newX,
+                        y: newY,
+                        width: newMaxX - newX,
+                        height: newH
+                    )
+                    continue
+                }
+            }
+            merged.append(r)
+        }
+        return merged
+    }
+
     public static func clampToLine(on page: PDFPage, point: CGPoint) -> CGPoint {
         guard let full = page.selection(for: page.bounds(for: .cropBox)) else { return point }
         let lines = full.selectionsByLine()

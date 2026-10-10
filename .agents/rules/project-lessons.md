@@ -991,4 +991,21 @@ Structure each entry concisely with actionable rules:
   - **Rule**:
     Use AppKit's Accessibility API (`AXUIElementCreateApplication`, `AXUIElementPerformAction(..., kAXPressAction)`) to programmatically trigger buttons and UI actions without mouse click simulation or coordinate translation. When window movement is necessary, set `kAXPositionAttribute` directly via `AXValueCreate(.cgPoint, &pt)`. Always use `screencapture -D <displayIndex>` with the specific display index to inspect and verify secondary screens.
 
+- **SwiftUI vs AppKit Font Metrics Mismatch in MindMap Card Height (`minimumLineHeight`)**:
+  - **Trap**:
+    SwiftUI `.font(.system(size: 11.5))` + `.lineSpacing(2)` spaces lines using `ceil(font.ascender - font.descender)` (14.0pt + 2.0pt = 16.0pt/line). AppKit's `NSAttributedString.boundingRect(with:options:)` without `minimumLineHeight` ignores font ascent/descent rounding and steps lines at ~15.0pt/line. On long multi-paragraph cards (e.g. 100+ lines in merged cards), this 1.0pt deficit per line accumulates to a 100+ point deficit. Because `TreeLayout` positions cards using `measureTextHeight`, underestimating card height causes consecutive cards to vertically collide and overlap in mindmap view.
+  - **Rule**:
+    1. **Enforce Minimum Line Height**: In `TreeLayout.measureTextHeight`, always configure `NSMutableParagraphStyle` with `let fontLineHeight = ceil(font.ascender - font.descender); if fontLineHeight > 0 { paragraphStyle.minimumLineHeight = fontLineHeight }`.
+    2. **Safety Buffer**: Add a safety buffer (+8pt) to `estimatedCardHeight` to absorb subpixel antialiasing and padding variances.
+    3. **Top Frame Alignment**: In `MindMapCanvasView`, specify `alignment: .top` for card `.frame(width: w, height: h, alignment: .top)` so card headers stay firmly pinned to the top of layout frames.
+
+- **One Native Note vs Multi-Segment Cards in PDF Highlight Merging**:
+  - **Trap**:
+    When consecutive highlights are merged into a card, storing them as multiple `excerptSegments` causes `PDFReaderView` to render each segment with individual brackets, separate selection handles, and multi-highlight interaction states. Users expecting a unified native highlight note instead see multiple fragmented highlights joined together.
+  - **Rule**:
+    1. **User Choice via Sequential Alerts**: After the user selects "Merge Consecutive Notes", present a follow-up alert asking whether to merge into "One Native Note" (`singleNativeHighlight: true`) or "Several Highlighted Areas" (`singleNativeHighlight: false`).
+    2. **Contiguous Rect Unification**: For `singleNativeHighlight == true`, merge overlapping or contiguous line rects across lines and pages into unified line rects via `PDFHighlightResolver.mergeContiguousLineRects(allRects)` and set `excerptSegments = []`.
+    3. **Single Native Note Semantics**: When `excerptSegments` is empty, `card.effectiveSegments` produces a single unified `ExcerptSegment(id: id, text: highlightText, rects: highlightRects)`. In `PDFReaderView`, the entire merged text acts as a single continuous native highlight note with one set of handles and brackets.
+
+
 

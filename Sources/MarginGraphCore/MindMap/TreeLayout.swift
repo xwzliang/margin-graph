@@ -54,6 +54,10 @@ public enum TreeLayout {
         if lineSpacing > 0 {
             para.lineSpacing = lineSpacing
         }
+        let fontLineHeight = ceil(font.ascender - font.descender)
+        if fontLineHeight > 0 {
+            para.minimumLineHeight = fontLineHeight
+        }
         let attr = NSAttributedString(
             string: text,
             attributes: [
@@ -163,7 +167,7 @@ public enum TreeLayout {
         }
 
         let bodyHeight: CGFloat = bodyItemsCount > 0 ? (bodyContentHeight + 16.0) : 0
-        let total = headerHeight + bodyHeight
+        let total = headerHeight + bodyHeight + 8.0
         if !card.title.isEmpty || hasExcerpt || hasNotes || hasImage || hasTags || isVideo {
             return max(70.0, total)
         } else {

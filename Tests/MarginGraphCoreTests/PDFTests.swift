@@ -1644,5 +1644,74 @@ final class PDFTests: XCTestCase {
         let tlDuration = Date().timeIntervalSince(tlStart)
         print("TreeLayout.layout on 900 cards took: \(tlDuration)s")
     }
+
+    func testMergeContiguousLineRects() throws {
+        // Line 1 Part A (x: 50, y: 700, w: 100, h: 14) and Part B (x: 155, y: 700, w: 120, h: 14) on page 0
+        // Small gap between 150 and 155 is 5pt (whitespace). Should merge into x: 50, w: 225.
+        let r1 = HighlightRect(page: 0, x: 50, y: 700, width: 100, height: 14)
+        let r2 = HighlightRect(page: 0, x: 155, y: 700, width: 120, height: 14)
+        // Line 2 on page 0: x: 50, y: 680, w: 200, h: 14
+        let r3 = HighlightRect(page: 0, x: 50, y: 680, width: 200, height: 14)
+        // Line on page 1: x: 50, y: 700, w: 200, h: 14
+        let r4 = HighlightRect(page: 1, x: 50, y: 700, width: 200, height: 14)
+
+        let merged = PDFHighlightResolver.mergeContiguousLineRects([r1, r2, r3, r4])
+        XCTAssertEqual(merged.count, 3, "r1 and r2 on the same line should merge into 1 continuous line rect")
+        XCTAssertEqual(merged[0].page, 0)
+        XCTAssertEqual(merged[0].x, 50)
+        XCTAssertEqual(merged[0].width, 225)
+        XCTAssertEqual(merged[1].y, 680)
+        XCTAssertEqual(merged[2].page, 1)
+    }
+
+    func testSingleNativeHighlightVersusSeparateExcerptSegments() throws {
+        let dummyAnnot = PDFAnnotation(bounds: CGRect(x: 50, y: 700, width: 200, height: 14), forType: .highlight, withProperties: nil)
+        let h1 = PDFHighlightImporter.ExtractedHighlight(
+            pageIndex: 0,
+            bounds: CGRect(x: 50, y: 700, width: 200, height: 14),
+            text: "First highlighted sentence.",
+            note: "",
+            color: .yellow,
+            colorIndex: 0,
+            lineRects: [HighlightRect(page: 0, x: 50, y: 700, width: 200, height: 14)],
+            annotation: dummyAnnot
+        )
+        let h2 = PDFHighlightImporter.ExtractedHighlight(
+            pageIndex: 0,
+            bounds: CGRect(x: 50, y: 680, width: 200, height: 14),
+            text: "Second contiguous sentence.",
+            note: "",
+            color: .yellow,
+            colorIndex: 0,
+            lineRects: [HighlightRect(page: 0, x: 50, y: 680, width: 200, height: 14)],
+            annotation: dummyAnnot
+        )
+
+        let cluster = [[h1, h2]]
+        let topicId = UUID()
+
+        // 1. Single Native Note mode: excerptSegments is empty, card is 1 native note
+        let singleCards = PDFHighlightImporter.buildCards(
+            from: cluster,
+            topicId: topicId,
+            bookMD5: "test_doc",
+            singleNativeHighlight: true
+        )
+        XCTAssertEqual(singleCards.count, 1)
+        XCTAssertTrue(singleCards[0].excerptSegments.isEmpty, "Single native note must have empty excerptSegments")
+        XCTAssertEqual(singleCards[0].effectiveSegments.count, 1, "Single native note has exactly 1 effective segment")
+        XCTAssertEqual(singleCards[0].highlightRects.count, 2)
+
+        // 2. Several Highlighted Areas mode: excerptSegments preserves each highlight part
+        let segmentedCards = PDFHighlightImporter.buildCards(
+            from: cluster,
+            topicId: topicId,
+            bookMD5: "test_doc",
+            singleNativeHighlight: false
+        )
+        XCTAssertEqual(segmentedCards.count, 1)
+        XCTAssertEqual(segmentedCards[0].excerptSegments.count, 2, "Segmented note preserves individual excerpt segments")
+        XCTAssertEqual(segmentedCards[0].effectiveSegments.count, 2)
+    }
 }
 

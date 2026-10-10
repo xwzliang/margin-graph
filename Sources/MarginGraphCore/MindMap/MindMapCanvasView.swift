@@ -571,7 +571,7 @@ public struct MindMapCanvasView: View {
                     onNewChild: onNewChild != nil ? { onNewChild?(card.id) } : nil,
                     onAddToDeck: { onAddToDeck?(card) }
                 )
-                .frame(width: frame.width, height: frame.height + extraHeight)
+                .frame(width: frame.width, height: frame.height + extraHeight, alignment: .top)
                 .overlay {
                     if isCurrentMatch {
                         // Striking gold/amber selection ring for the active search match
@@ -591,7 +591,7 @@ public struct MindMapCanvasView: View {
                 .opacity(isBeingDragged ? 0.78 : (isSearching ? (isMatch ? 1.0 : 0.28) : 1.0))
                 .shadow(color: isBeingDragged ? Color.black.opacity(0.25) : Color.clear, radius: 10, y: 5)
                 .scaleEffect(viewport.zoomScale)
-                .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale)
+                .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale, alignment: .top)
                 .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isCurrentMatch ? 90 : (isCardSelected ? 60 : (isTargeted ? 50 : 1))))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
                 .gesture(

@@ -787,7 +787,8 @@ public final class PDFHighlightImporter: @unchecked Sendable {
     public static func buildCards(
         from clusters: [[ExtractedHighlight]],
         topicId: UUID,
-        bookMD5: String
+        bookMD5: String,
+        singleNativeHighlight: Bool = true
     ) -> [NoteCard] {
         var cards: [NoteCard] = []
 
@@ -835,8 +836,9 @@ public final class PDFHighlightImporter: @unchecked Sendable {
                 .filter { !$0.isEmpty }
             let combinedNotes = Array(Set(notes)).joined(separator: "\n\n")
 
-            // Collect all line rects
-            let allRects = PDFHighlightResolver.sortInReadingOrder(cluster.flatMap(\.lineRects))
+            // Collect all line rects and merge contiguous line spans if single native highlight
+            let rawRects = PDFHighlightResolver.sortInReadingOrder(cluster.flatMap(\.lineRects))
+            let allRects = singleNativeHighlight ? PDFHighlightResolver.mergeContiguousLineRects(rawRects) : rawRects
 
             // Build excerpt segments for multi-part highlights
             let segments: [ExcerptSegment] = cluster.map { part in
@@ -860,7 +862,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
                 endPos: CGPoint(x: last.bounds.maxX, y: last.bounds.maxY),
                 colorIndex: first.colorIndex,
                 highlightRects: allRects,
-                excerptSegments: segments.count > 1 ? segments : []
+                excerptSegments: (!singleNativeHighlight && segments.count > 1) ? segments : []
             )
 
             cards.append(card)
@@ -877,6 +879,7 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         for docModel: Document,
         topicId: UUID,
         shouldMerge: Bool,
+        singleNativeHighlight: Bool = true,
         database: Database
     ) throws -> [NoteCard] {
         let extracted = extractHighlights(from: document)
@@ -889,7 +892,12 @@ public final class PDFHighlightImporter: @unchecked Sendable {
             clusters = extracted.map { [$0] }
         }
 
-        let cards = buildCards(from: clusters, topicId: topicId, bookMD5: docModel.md5)
+        let cards = buildCards(
+            from: clusters,
+            topicId: topicId,
+            bookMD5: docModel.md5,
+            singleNativeHighlight: singleNativeHighlight
+        )
 
         // Clean up any existing cards for this document before inserting new ones
         // (prevents duplication when user deletes and reimports the same document)

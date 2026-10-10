@@ -1405,6 +1405,24 @@ final class AppModel: ObservableObject {
         }
         let shouldMerge = (response2 == .alertFirstButtonReturn)
 
+        var singleNativeHighlight = true
+        if shouldMerge {
+            // Alert 3: Ask whether to merge into one native note (one highlighted area)
+            let alert3 = NSAlert()
+            alert3.messageText = "Merge into One Native Note?"
+            alert3.informativeText = "Would you like to merge consecutive highlights into one native note (one highlighted area for the merged note, not several highlighted areas merged together into one note)?"
+            alert3.addButton(withTitle: "One Native Note")
+            alert3.addButton(withTitle: "Several Highlighted Areas")
+            alert3.addButton(withTitle: "Cancel")
+            alert3.alertStyle = .informational
+
+            let response3 = alert3.runModal()
+            guard response3 != .alertThirdButtonReturn else {
+                return
+            }
+            singleNativeHighlight = (response3 == .alertFirstButtonReturn)
+        }
+
         // Find or create matching topic
         let targetTopic: Topic
         if attachToTopic, let selectedTopicID, let existing = topics.first(where: { $0.id == selectedTopicID }) {
@@ -1454,6 +1472,7 @@ final class AppModel: ObservableObject {
                 for: document,
                 topicId: targetTopic.id,
                 shouldMerge: shouldMerge,
+                singleNativeHighlight: singleNativeHighlight,
                 database: database
             )
             reloadLibrary()

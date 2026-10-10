@@ -921,5 +921,49 @@ final class MindMapTests: XCTestCase {
         XCTAssertFalse(frame1.intersects(frame2), "Card 1 and Card 2 must not intersect")
         XCTAssertGreaterThanOrEqual(frame2.minY, frame1.maxY + 28.0, "Card 2 must have at least verticalSpacing (28pt) separation below Card 1")
     }
+
+    func testHomoDeusConsecutiveCardsDoNotOverlap() throws {
+        let topicID = UUID()
+        let card0Text = """
+        At the dawn of the third millennium, humanity wakes up, stretching its limbs and rubbing its eyes. Remnants of some awful nightmare are still drifting across its mind. ‘There was something with barbed wire, and huge mushroom clouds. Oh well, it was just a bad dream.’ Going to the bathroom, humanity washes its face, examines its wrinkles in the mirror, makes a cup of coffee and opens the diary. ‘Let’s see what’s on the agenda today.’
+
+        For thousands of years the answer to this question remained unchanged. The same three problems preoccupied the people of twentieth-century China, of medieval India and of ancient Egypt. Famine, plague and war were always at the top of the list. For generation after generation humans have prayed to every god, angel and saint, and have invented countless tools, institutions and social systems – but they continued to die in their millions from starvation, epidemics and violence. Many thinkers and prophets concluded that famine, plague and war must be an integral part of God’s cosmic plan or of our imperfect nature, and nothing short of the end of time would free us from them.
+
+        Yet at the dawn of the third millennium, humanity wakes up to an amazing realisation. Most people rarely think about it, but in the last few decades we have managed to rein in famine, plague and war. Of course, these problems have not been completely solved, but they have been transformed from incomprehensible and uncontrollable forces of nature into manageable challenges. W e don’t need to pray to any god or saint to rescue us from them. W e know quite well what needs to be done in order to prevent famine, plague and war – and we usually succeed in doing it.
+
+        True, there are still notable failures; but when faced with such failures we no longer shrug our shoulders and say, ‘W ell, that’s the way things work in our imperfect world’ or ‘God’s will be done’. Rather, when famine, plague or war break out of our control, we feel that somebody must have screwed up, we set up a commission of inquiry, and promise ourselves that next time we’ll do better. And it actually works. Such calamities indeed happen less and less often. For the first time in history, more people die today from eating too much than from eating too little; more people die from old age than from infectious diseases; and more people commit suicide than are killed by soldiers, terrorists and criminals combined. In the early twentyfirst century, the average human is far more likely to die from bingeing at McDonald’s than from drought, Ebola or an al-Qaeda attack.
+
+        Hence even though presidents, CEOs and generals still have their daily schedules full of economic crises and military conflicts, on the cosmic scale of history humankind can lift its eyes up and start looking towards new horizons. If we are indeed bringing famine, plague and war under control, what will replace them at the top of the human agenda? Like firefighters in a world without fire, so humankind in the twenty-first century needs to ask itself an unprecedented question: what are we going to do with ourselves? In a healthy, prosperous and harmonious world, what will demand our attention and ingenuity? This question becomes doubly urgent given the immense new powers that biotechnology and information technology are providing us with. What will we do with all that power?
+        """
+
+        let card1Text = """
+        Despite the horrendous toll AIDS has taken, and despite the millions killed each year by long-established infectious diseases such as malaria, epidemics are a far smaller threat to human health today than in previous millennia. The vast majority of people die from non-infectious
+        """
+
+        let card0 = NoteCard(id: UUID(), topicId: topicID, title: "", highlightText: card0Text, startPage: 5)
+        let card1 = NoteCard(id: UUID(), topicId: topicID, title: "", highlightText: card1Text, startPage: 13)
+
+        let h0 = TreeLayout.estimatedCardHeight(for: card0, width: 220)
+        let h1 = TreeLayout.estimatedCardHeight(for: card1, width: 220)
+
+        // Card 0 must be estimated >= 1680 pt
+        XCTAssertGreaterThanOrEqual(h0, 1680.0, "Card 0 must have estimated height matching its 5 paragraphs and SwiftUI line step")
+        XCTAssertGreaterThanOrEqual(h1, 90.0)
+
+        let layout = TreeLayout.layout(cards: [card0, card1])
+        guard let f0 = layout.frames[card0.id], let f1 = layout.frames[card1.id] else {
+            XCTFail("Frames missing for cards")
+            return
+        }
+
+        XCTAssertFalse(f0.intersects(f1), "Card 0 and Card 1 must not intersect")
+        if abs(f0.minX - f1.minX) < 10.0 {
+            // In the same column
+            XCTAssertGreaterThanOrEqual(f1.minY, f0.maxY + 50.0, "Card 1 must be placed below Card 0's bottom edge with vertical spacing")
+        } else {
+            // In adjacent columns
+            XCTAssertGreaterThanOrEqual(f1.minX, f0.maxX + 70.0, "Card 1 in next column must be placed to the right of Card 0")
+        }
+    }
 }
 
