@@ -1255,4 +1255,395 @@ final class PDFTests: XCTestCase {
         // End handle must be at last line's end (right edge, bottom of block)
         XCTAssertEqual(endHandle.bounds.midX, CGFloat(expanded.last!.x + expanded.last!.width), accuracy: 3.0)
     }
+
+    func testPDFHighlightImporterDetectionAndClustering() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-HighlightImportTest-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeMultiLineSyntheticPDF(at: url)
+        guard let doc = PDFDocument(url: url), let page = doc.page(at: 0) else {
+            XCTFail("Failed to load synthetic PDF")
+            return
+        }
+
+        // Before adding annotations, hasHighlights should be false
+        XCTAssertFalse(PDFHighlightImporter.hasHighlights(in: doc))
+        XCTAssertEqual(PDFHighlightImporter.countHighlights(in: doc), 0)
+
+        guard let sel1 = doc.findString("First line", withOptions: []).first,
+              let sel2 = doc.findString("of the text", withOptions: []).first,
+              let sel3 = doc.findString("Second line", withOptions: []).first else {
+            XCTFail("Failed to find text in synthetic PDF")
+            return
+        }
+
+        let annot1 = PDFAnnotation(bounds: sel1.bounds(for: page), forType: .highlight, withProperties: nil)
+        annot1.color = .systemYellow
+        annot1.contents = "Note 1"
+
+        let annot2 = PDFAnnotation(bounds: sel2.bounds(for: page), forType: .highlight, withProperties: nil)
+        annot2.color = .systemYellow
+        annot2.contents = "Note 2"
+
+        let annot3 = PDFAnnotation(bounds: sel3.bounds(for: page), forType: .highlight, withProperties: nil)
+        annot3.color = .systemGreen
+        annot3.contents = "Note 3"
+
+        page.addAnnotation(annot1)
+        page.addAnnotation(annot2)
+        page.addAnnotation(annot3)
+
+        // After adding annotations:
+        XCTAssertTrue(PDFHighlightImporter.hasHighlights(in: doc))
+        XCTAssertEqual(PDFHighlightImporter.countHighlights(in: doc), 3)
+
+        // Extract highlights
+        let extracted = PDFHighlightImporter.extractHighlights(from: doc)
+        XCTAssertEqual(extracted.count, 3)
+
+        // Check consecutive grouping
+        let mergedClusters = PDFHighlightImporter.groupConsecutiveHighlights(extracted, in: doc)
+        XCTAssertEqual(mergedClusters.count, 2)
+        XCTAssertEqual(mergedClusters[0].count, 2)
+        XCTAssertEqual(mergedClusters[1].count, 1)
+
+        // Check non-merged grouping (each separate)
+        let unmergedClusters = extracted.map { [$0] }
+        XCTAssertEqual(unmergedClusters.count, 3)
+
+        // Import into in-memory SQLite database
+        let db = try Database(inMemory: true)
+        let topic = Topic(title: "Imported Highlights Topic")
+        try db.insertTopic(topic)
+
+        let docModel = Document(
+            id: UUID(),
+            title: "Test PDF Document",
+            filePath: url.path,
+            md5: "synthetic-md5-12345",
+            totalPages: doc.pageCount,
+            lastVisited: Date()
+        )
+        try db.insertDocument(docModel)
+
+        // Test merged import
+        let importedMergedCards = try PDFHighlightImporter.importHighlights(
+            from: doc,
+            for: docModel,
+            topicId: topic.id,
+            shouldMerge: true,
+            database: db
+        )
+        XCTAssertEqual(importedMergedCards.count, 2)
+        let fetchedCards = try db.cardsForTopic(id: topic.id)
+        XCTAssertEqual(fetchedCards.count, 2)
+
+        // Verify notes were merged
+        let firstCard = fetchedCards.first { $0.notesText.contains("Note 1") }
+        XCTAssertNotNil(firstCard)
+        XCTAssertTrue(firstCard!.notesText.contains("Note 2"))
+    }
+
+    func testPDFHighlightImporterPerceptualColorMapping() {
+        // Yellow should map to index 0 (Yellow #f3eca0), NOT Peach or Ochre
+        let pdfYellow1 = NSColor(deviceRed: 1.0, green: 0.969, blue: 0.779, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pdfYellow1), 0, "PDF Yellow must map to MarginNote Yellow (index 0)")
+
+        let pureYellow = NSColor(deviceRed: 1.0, green: 1.0, blue: 0.0, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pureYellow), 0, "Pure Yellow must map to MarginNote Yellow (index 0)")
+
+        // Green should map to index 1 (Green)
+        let pdfGreen = NSColor(deviceRed: 0.841, green: 1.0, blue: 0.721, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pdfGreen), 1, "PDF Light Green must map to Green (index 1)")
+
+        // Aqua / Teal should map to Teal (7) or Aqua (10)
+        let pdfAqua = NSColor(deviceRed: 0.752, green: 1.0, blue: 0.969, alpha: 1.0)
+        let aquaIdx = PDFHighlightImporter.colorIndex(for: pdfAqua)
+        XCTAssertTrue(aquaIdx == 7 || aquaIdx == 10, "PDF Aqua/Teal must map to Teal (7) or Aqua (10), got \(aquaIdx)")
+
+        // Pink should map to Pink (8)
+        let pdfPink = NSColor(deviceRed: 1.0, green: 0.859, blue: 0.915, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pdfPink), 8, "PDF Pink must map to Pink (index 8)")
+
+        // Pure Blue should map to Blue (2) or Indigo (11)
+        let skyBlue = NSColor(deviceRed: 0.5, green: 0.8, blue: 1.0, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: skyBlue), 2, "Sky Blue must map to Blue (index 2)")
+
+        // Pure Orange should map to Orange (5)
+        let pureOrange = NSColor(deviceRed: 1.0, green: 0.5, blue: 0.0, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pureOrange), 5, "Orange must map to Orange (index 5)")
+
+        // Pure Red / Coral should map to Coral (3)
+        let pureRed = NSColor(deviceRed: 1.0, green: 0.1, blue: 0.1, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pureRed), 3, "Red must map to Coral (index 3)")
+
+        // Purple / Lavender should map to Lavender (4)
+        let purple = NSColor(deviceRed: 0.7, green: 0.4, blue: 0.9, alpha: 1.0)
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: purple), 4, "Purple must map to Lavender (index 4)")
+    }
+
+    func testPDFHighlightImporterDistinctColorMappingNoCollisions() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MarginGraph-distinct-colors-\(UUID().uuidString).pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        try makeMultiPageSyntheticPDF(at: url)
+        guard let doc = PDFDocument(url: url), let page = doc.page(at: 0) else {
+            XCTFail("Failed to load PDF")
+            return
+        }
+
+        // Add two highlights of different shades of green (Lime vs Pure Green)
+        let limeColor = NSColor(deviceRed: 0.841, green: 1.0, blue: 0.721, alpha: 1.0)
+        let pureGreenColor = NSColor(deviceRed: 0.0, green: 1.0, blue: 0.0, alpha: 1.0)
+
+        let annot1 = PDFAnnotation(bounds: CGRect(x: 50, y: 700, width: 200, height: 18), forType: .highlight, withProperties: nil)
+        annot1.color = limeColor
+        annot1.contents = "Lime highlight note"
+
+        let annot2 = PDFAnnotation(bounds: CGRect(x: 50, y: 650, width: 200, height: 18), forType: .highlight, withProperties: nil)
+        annot2.color = pureGreenColor
+        annot2.contents = "Pure Green highlight note"
+
+        page.addAnnotation(annot1)
+        page.addAnnotation(annot2)
+
+        let extracted = PDFHighlightImporter.extractHighlights(from: doc)
+        XCTAssertEqual(extracted.count, 2)
+
+        // Both highlights must be assigned distinct palette colors without colliding!
+        XCTAssertNotEqual(
+            extracted[0].colorIndex,
+            extracted[1].colorIndex,
+            "Two different highlight colors in the PDF must NOT be forced to map to the same color in our program!"
+        )
+
+        // And they must not be merged as consecutive notes
+        XCTAssertFalse(
+            PDFHighlightImporter.areConsecutive(h1: extracted[0], h2: extracted[1], in: doc),
+            "Highlights with different colors must never be consecutive"
+        )
+    }
+
+    func testPDFHighlightImporterRealHomoDeusPDFIfPresent() throws {
+        let realPDFPath = "/Users/broliang/Downloads/Harari_2016_Homo Deus.pdf"
+        let flattenedPath = "/Users/broliang/Downloads/Harari_2016_Homo Deus - flattened.pdf"
+
+        if FileManager.default.fileExists(atPath: realPDFPath),
+           let realDoc = PDFDocument(url: URL(fileURLWithPath: realPDFPath)) {
+            XCTAssertTrue(PDFHighlightImporter.hasHighlights(in: realDoc))
+            let count = PDFHighlightImporter.countHighlights(in: realDoc)
+            XCTAssertGreaterThanOrEqual(count, 800)
+
+            let extracted = PDFHighlightImporter.extractHighlights(from: realDoc)
+            let clusters = PDFHighlightImporter.groupConsecutiveHighlights(extracted, in: realDoc)
+            XCTAssertLessThan(clusters.count, extracted.count, "Merging consecutive highlights must group fragments into fewer cards")
+
+            // Verify distinct color preservation in real Homo Deus document
+            let colorIndices = Set(extracted.map { $0.colorIndex })
+            XCTAssertGreaterThanOrEqual(
+                colorIndices.count, 3,
+                "Homo Deus has multiple distinct highlight colors (yellow, teal, green, pink); they must map to multiple distinct palette colors"
+            )
+            // Yellow (index 0) must be present since Homo Deus has 555 yellow highlights
+            XCTAssertTrue(colorIndices.contains(0), "Dominant yellow highlights in Homo Deus must map to Yellow (index 0)")
+        }
+
+        if FileManager.default.fileExists(atPath: flattenedPath),
+           let flatDoc = PDFDocument(url: URL(fileURLWithPath: flattenedPath)) {
+            XCTAssertFalse(PDFHighlightImporter.hasHighlights(in: flatDoc))
+            XCTAssertEqual(PDFHighlightImporter.countHighlights(in: flatDoc), 0)
+        }
+    }
+
+    func testInspectHomoDeusHighlights() throws {
+        let path = "/Users/broliang/Downloads/Harari_2016_Homo Deus.pdf"
+        guard FileManager.default.fileExists(atPath: path),
+              let doc = PDFDocument(url: URL(fileURLWithPath: path)) else { return }
+
+        let extracted = PDFHighlightImporter.extractHighlights(from: doc)
+        print("Total extracted highlights: \(extracted.count)")
+        let clusters = PDFHighlightImporter.groupConsecutiveHighlights(extracted, in: doc)
+        let cards = PDFHighlightImporter.buildCards(from: clusters, topicId: UUID(), bookMD5: "homo_deus")
+        XCTAssertGreaterThanOrEqual(cards.count, 10)
+        XCTAssertTrue(cards[0].highlightText.hasPrefix("At the dawn of the third millennium"))
+        XCTAssertTrue(cards[0].highlightText.hasSuffix("‘Let’s see what’s on the agenda today.’"))
+        XCTAssertEqual(cards[0].startPage, 5)
+        XCTAssertEqual(cards[0].endPage, 5)
+
+        XCTAssertTrue(cards[1].highlightText.hasPrefix("For thousands of years"))
+        XCTAssertTrue(cards[1].highlightText.hasSuffix("free us from them."))
+        XCTAssertEqual(cards[1].startPage, 5)
+
+        XCTAssertTrue(cards[2].highlightText.hasPrefix("Yet at the dawn of the third millennium"))
+        XCTAssertTrue(cards[2].highlightText.hasSuffix("succeed in doing it."))
+        XCTAssertEqual(cards[2].startPage, 5)
+
+        XCTAssertTrue(cards[3].highlightText.hasPrefix("True, there are still notable failures;"))
+        XCTAssertTrue(cards[3].highlightText.hasSuffix("al-Qaeda attack."))
+        XCTAssertEqual(cards[3].startPage, 5)
+        XCTAssertEqual(cards[3].endPage, 6)
+
+        XCTAssertTrue(cards[4].highlightText.hasPrefix("Hence even though presidents,"))
+        XCTAssertTrue(cards[4].highlightText.hasSuffix("all that power?"))
+        XCTAssertEqual(cards[4].startPage, 6)
+
+        XCTAssertTrue(cards[5].highlightText.hasPrefix("Despite the horrendous toll AIDS"))
+        XCTAssertTrue(cards[5].highlightText.hasSuffix("simply from old age."))
+        XCTAssertEqual(cards[5].startPage, 13)
+        XCTAssertEqual(cards[5].endPage, 13)
+
+        // Card 7 must be the cross-page note from P13 to P14 strictly isolated without bleeding into the next paragraph
+        XCTAssertTrue(cards[6].highlightText.hasPrefix("(Incidentally cancer and heart disease"))
+        XCTAssertTrue(cards[6].highlightText.hasSuffix("die from them.)"))
+        XCTAssertEqual(cards[6].startPage, 13)
+        XCTAssertEqual(cards[6].endPage, 14)
+        XCTAssertEqual(cards[6].highlightRects.count, 4)
+
+        // Card 8 must be the new paragraph on P14
+        XCTAssertTrue(cards[7].highlightText.hasPrefix("Many fear that this is only a temporary victory,"))
+        XCTAssertTrue(cards[7].highlightText.hasSuffix("impact on the environment."))
+        XCTAssertEqual(cards[7].startPage, 14)
+        XCTAssertEqual(cards[7].endPage, 14)
+
+        // Card 9
+        XCTAssertTrue(cards[8].highlightText.hasPrefix("Yet in the race against medicine"))
+        XCTAssertEqual(cards[8].startPage, 14)
+
+        // Card 10
+        XCTAssertTrue(cards[9].highlightText.hasPrefix("Doctors, in contrast, count on more than mere luck."))
+        XCTAssertEqual(cards[9].startPage, 14)
+    }
+
+    func testDiagnoseDuplicationIssues() throws {
+        let path = "/Users/broliang/Downloads/Harari_2016_Homo Deus.pdf"
+        guard FileManager.default.fileExists(atPath: path),
+              let doc = PDFDocument(url: URL(fileURLWithPath: path)) else { return }
+
+        var output = ""
+        func log(_ s: String) { output += s + "\n" }
+
+        let extracted = PDFHighlightImporter.extractHighlights(from: doc)
+        log("=== RAW EXTRACTED HIGHLIGHTS: \(extracted.count) ===")
+        
+        // Dump first 20 raw highlights with their page, bounds, color, and text prefix
+        for (i, h) in extracted.prefix(20).enumerated() {
+            let textPreview = String(h.text.prefix(80)).replacingOccurrences(of: "\n", with: "↵")
+            log("  RAW[\(i)] page=\(h.pageIndex) colorIdx=\(h.colorIndex) bounds=(\(Int(h.bounds.minX)),\(Int(h.bounds.minY)),\(Int(h.bounds.maxX)),\(Int(h.bounds.maxY))) lineRects=\(h.lineRects.count) text=\(textPreview)...")
+        }
+
+        let clusters = PDFHighlightImporter.groupConsecutiveHighlights(extracted, in: doc)
+        let cards = PDFHighlightImporter.buildCards(from: clusters, topicId: UUID(), bookMD5: "homo_deus")
+        
+        log("\n=== MERGED CARDS: \(cards.count) (from \(extracted.count) raw) ===")
+        
+        // Show cluster composition
+        log("\n=== CLUSTER COMPOSITION (first 15) ===")
+        for (ci, cluster) in clusters.prefix(15).enumerated() {
+            let rawIndices = cluster.map { h -> Int in
+                extracted.firstIndex(where: { $0.id == h.id }) ?? -1
+            }
+            log("  CLUSTER[\(ci)] size=\(cluster.count) rawIndices=\(rawIndices) pages=\(cluster.first?.pageIndex ?? -1)-\(cluster.last?.pageIndex ?? -1)")
+        }
+        
+        // Dump first 15 cards with full text to check for line breaks
+        for (i, card) in cards.prefix(15).enumerated() {
+            log("\n--- CARD[\(i)] pages=\(card.startPage ?? -1)-\(card.endPage ?? -1) colorIdx=\(card.colorIndex) rects=\(card.highlightRects.count) ---")
+            let lines = card.highlightText.components(separatedBy: "\n")
+            for (li, line) in lines.enumerated() {
+                log("  LINE[\(li)]: \(line)")
+            }
+        }
+
+        // Check for text overlap between adjacent cards (content of one card is a substring of another)
+        log("\n=== OVERLAP CHECK ===")
+        for i in 0..<min(cards.count, 30) {
+            for j in (i+1)..<min(cards.count, 30) {
+                let text1 = cards[i].highlightText
+                let text2 = cards[j].highlightText
+                // Check if one is a substring of the other
+                if text1.count > 20 && text2.count > 20 {
+                    if text1.contains(text2) {
+                        log("  ⚠️ CARD[\(j)] text is ENTIRELY INSIDE CARD[\(i)]")
+                    } else if text2.contains(text1) {
+                        log("  ⚠️ CARD[\(i)] text is ENTIRELY INSIDE CARD[\(j)]")
+                    }
+                    // Check for partial overlap (shared lines)
+                    let lines1 = Set(text1.components(separatedBy: "\n").filter { $0.count > 30 })
+                    let lines2 = Set(text2.components(separatedBy: "\n").filter { $0.count > 30 })
+                    let shared = lines1.intersection(lines2)
+                    if !shared.isEmpty {
+                        log("  ⚠️ CARDS[\(i)] and [\(j)] share \(shared.count) lines:")
+                        for s in shared.prefix(3) {
+                            log("    → \(String(s.prefix(80)))...")
+                        }
+                    }
+                }
+            }
+        }
+
+        // Check for overlapping annotations (same bounding rect region)
+        log("\n=== RAW ANNOTATION OVERLAP CHECK ===")
+        for i in 0..<min(extracted.count, 30) {
+            for j in (i+1)..<min(extracted.count, 30) {
+                let h1 = extracted[i]
+                let h2 = extracted[j]
+                if h1.pageIndex == h2.pageIndex {
+                    let intersection = h1.bounds.intersection(h2.bounds)
+                    if !intersection.isNull && intersection.height > 5 && intersection.width > 20 {
+                        let overlapArea = intersection.width * intersection.height
+                        let h1Area = h1.bounds.width * h1.bounds.height
+                        let h2Area = h2.bounds.width * h2.bounds.height
+                        let overlapPct = max(overlapArea / h1Area, overlapArea / h2Area) * 100
+                        if overlapPct > 30 {
+                            log("  ⚠️ RAW[\(i)] and RAW[\(j)] overlap \(Int(overlapPct))% on page \(h1.pageIndex)")
+                            log("    RAW[\(i)] bounds=\(h1.bounds) text=\(String(h1.text.prefix(60)))...")
+                            log("    RAW[\(j)] bounds=\(h2.bounds) text=\(String(h2.text.prefix(60)))...")
+                        }
+                    }
+                }
+            }
+        }
+
+        try output.write(toFile: "/tmp/highlight_diag.txt", atomically: true, encoding: .utf8)
+        print("Diagnostic output written to /tmp/highlight_diag.txt")
+    }
+
+    func testBenchmarkStartup() throws {
+        let db = try Database()
+        let t0 = Date()
+        try db.syncAvailableDocuments()
+        let t1 = Date()
+        print("syncAvailableDocuments took: \(t1.timeIntervalSince(t0))s")
+        let topics = try db.allTopics()
+        let t2 = Date()
+        print("allTopics (\(topics.count)) took: \(t2.timeIntervalSince(t1))s")
+        let docs = try db.allDocuments()
+        let t3 = Date()
+        print("allDocuments (\(docs.count)) took: \(t3.timeIntervalSince(t2))s")
+
+        MainActor.assumeIsolated {
+            let libManager = LibraryManager.shared
+            print("Libraries count: \(libManager.libraries.count)")
+            for lib in libManager.libraries {
+                print(" - [\(lib.displayName)] path=\(lib.path) isDefault=\(lib.isDefault) isBuiltIn=\(lib.isBuiltIn)")
+            }
+        }
+
+        // Benchmark TreeLayout on large card count
+        let cards = (0..<900).map { i in
+            NoteCard(
+                topicId: UUID(),
+                title: "Card #\(i)",
+                highlightText: "This is a test highlight with several lines of text discussing complex subjects.",
+                colorIndex: i % 16
+            )
+        }
+        let tlStart = Date()
+        _ = TreeLayout.layout(cards: cards)
+        let tlDuration = Date().timeIntervalSince(tlStart)
+        print("TreeLayout.layout on 900 cards took: \(tlDuration)s")
+    }
 }
+

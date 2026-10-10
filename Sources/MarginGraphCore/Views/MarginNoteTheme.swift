@@ -62,6 +62,41 @@ public struct MarginNoteTheme {
         (Color(red: 245/255.0, green: 239/255.0, blue: 220/255.0), Color(red: 215/255.0, green: 190/255.0, blue: 150/255.0), Color(red: 235/255.0, green: 216/255.0, blue: 183/255.0))
     ]
 
+    public static let paletteRGBValues: [(r: Double, g: Double, b: Double)] = [
+        // 0: Yellow #f3eca0
+        (243/255.0, 236/255.0, 160/255.0),
+        // 1: Green #c3ebac
+        (195/255.0, 235/255.0, 172/255.0),
+        // 2: Blue #bfdbfe
+        (191/255.0, 219/255.0, 254/255.0),
+        // 3: Coral / Light Red #f2bab7
+        (242/255.0, 186/255.0, 183/255.0),
+        // 4: Light Purple / Lavender #e0c3e8
+        (224/255.0, 195/255.0, 232/255.0),
+        // 5: Orange #f6d2a9
+        (246/255.0, 210/255.0, 169/255.0),
+        // 6: Slate Gray #d5d8dc
+        (213/255.0, 216/255.0, 220/255.0),
+        // 7: Teal #b5e4de
+        (181/255.0, 228/255.0, 222/255.0),
+        // 8: Pink #f5cbe0
+        (245/255.0, 203/255.0, 224/255.0),
+        // 9: Lime #dbee9e
+        (219/255.0, 238/255.0, 158/255.0),
+        // 10: Aqua #bde6f1
+        (189/255.0, 230/255.0, 241/255.0),
+        // 11: Indigo #c9c7f2
+        (201/255.0, 199/255.0, 242/255.0),
+        // 12: Peach #f7d2be
+        (247/255.0, 210/255.0, 190/255.0),
+        // 13: Mint #b6ecc7
+        (182/255.0, 236/255.0, 199/255.0),
+        // 14: Periwinkle #c5d2ea
+        (197/255.0, 210/255.0, 234/255.0),
+        // 15: Warm Ochre #ebd8b7
+        (235/255.0, 216/255.0, 183/255.0)
+    ]
+
     public static func cardColors(for colorIndex: Int) -> (background: Color, border: Color, accent: Color) {
         let idx = ((colorIndex % cardPastels.count) + cardPastels.count) % cardPastels.count
         return cardPastels[idx]

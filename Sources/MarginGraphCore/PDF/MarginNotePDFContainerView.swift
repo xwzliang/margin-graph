@@ -87,6 +87,7 @@ public struct MarginNotePDFContainerView: View {
     public var onPageChanged: ((Int) -> Void)?
     public var onPositionChanged: ((Int, CGFloat) -> Void)?
     public var onUpdateTypography: ((TypographyOptions) -> Void)?
+    public var onImportHighlights: (() -> Void)?
 
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
@@ -146,7 +147,8 @@ public struct MarginNotePDFContainerView: View {
         onMerge: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onEmphasize: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil,
-        onUpdateTypography: ((TypographyOptions) -> Void)? = nil
+        onUpdateTypography: ((TypographyOptions) -> Void)? = nil,
+        onImportHighlights: (() -> Void)? = nil
     ) {
         self.manager = manager
         self.cards = cards
@@ -180,6 +182,7 @@ public struct MarginNotePDFContainerView: View {
         self.onEmphasize = onEmphasize
         self.onDeleteEmphasis = onDeleteEmphasis
         self.onUpdateTypography = onUpdateTypography
+        self.onImportHighlights = onImportHighlights
         self.initialPageIndex = initialPageIndex
         self.onPageChanged = onPageChanged
         self._currentPageIndex = State(initialValue: initialPageIndex)
@@ -714,7 +717,7 @@ public struct MarginNotePDFContainerView: View {
                     InWindowPopoverContainer(
                         anchorFrame: moreOptionsButtonFrame ?? CGRect(x: containerGeometry.size.width - 36, y: 7, width: 24, height: 24),
                         containerWidth: containerGeometry.size.width,
-                        popoverWidth: 195,
+                        popoverWidth: 205,
                         onDismiss: {
                             withAnimation(.easeInOut(duration: 0.15)) {
                                 showMoreOptionsPopover = false
@@ -736,6 +739,14 @@ public struct MarginNotePDFContainerView: View {
                                     showBookmarksPopover = false
                                     showTableOfContentsPopover = false
                                     showTypographyPopover = true
+                                }
+                            },
+                            onImportHighlights: onImportHighlights.map { fn in
+                                {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        showMoreOptionsPopover = false
+                                    }
+                                    fn()
                                 }
                             }
                         )

@@ -7,10 +7,15 @@ import SQLite3
 
 public extension Database {
     func deleteDocument(id: UUID) throws {
+        // First find the document's md5 to clean up associated cards
+        if let doc = try allDocuments().first(where: { $0.id == id }) {
+            try deleteCardsForDocument(md5: doc.md5)
+        }
         try execute("DELETE FROM documents WHERE id = '\(id.uuidString)';")
     }
 
     func deleteDocument(md5: String) throws {
+        try deleteCardsForDocument(md5: md5)
         try execute("DELETE FROM documents WHERE md5 = '\(md5)';")
     }
 
@@ -20,10 +25,13 @@ public extension Database {
         // 1. Remove phantom documents with empty or non-existent file paths
         try execute("DELETE FROM documents WHERE file_path = '' OR file_path IS NULL;")
         if !isInMemory {
-            let currentDocs = try allDocuments()
-            for doc in currentDocs {
-                if !FileManager.default.fileExists(atPath: doc.filePath) {
-                    try deleteDocument(id: doc.id)
+            let isNetwork = (libraryRoot != nil && Database.isNetworkVolume(url: libraryRoot!))
+            if !isNetwork {
+                let currentDocs = try allDocuments()
+                for doc in currentDocs {
+                    if !FileManager.default.fileExists(atPath: doc.filePath) {
+                        try deleteDocument(id: doc.id)
+                    }
                 }
             }
         }
@@ -45,14 +53,22 @@ public extension Database {
 
         // Deduplicate any documents sharing the same file_path
         let currentDocs = try allDocuments()
+        let allTopicsCached = try allTopics()
+        var topicCountByBookMD5: [String: Int] = [:]
+        for t in allTopicsCached {
+            for b in t.bookMD5List {
+                topicCountByBookMD5[b, default: 0] += 1
+            }
+        }
+
         let groupedByPath = Dictionary(grouping: currentDocs, by: { $0.filePath })
         for (path, docs) in groupedByPath where docs.count > 1 && !path.isEmpty {
             let bestDoc = docs.max { a, b in
                 let aCards = (try? cardCountForDocument(md5: a.md5)) ?? 0
                 let bCards = (try? cardCountForDocument(md5: b.md5)) ?? 0
                 if aCards != bCards { return aCards < bCards }
-                let aTopics = (try? allTopics().filter { $0.bookMD5List.contains(a.md5) }.count) ?? 0
-                let bTopics = (try? allTopics().filter { $0.bookMD5List.contains(b.md5) }.count) ?? 0
+                let aTopics = topicCountByBookMD5[a.md5] ?? 0
+                let bTopics = topicCountByBookMD5[b.md5] ?? 0
                 if aTopics != bTopics { return aTopics < bTopics }
                 return a.md5.count < b.md5.count
             } ?? docs[0]
@@ -84,8 +100,8 @@ public extension Database {
                 let aCards = (try? cardCountForDocument(md5: a.md5)) ?? 0
                 let bCards = (try? cardCountForDocument(md5: b.md5)) ?? 0
                 if aCards != bCards { return aCards < bCards }
-                let aTopics = (try? allTopics().filter { $0.bookMD5List.contains(a.md5) }.count) ?? 0
-                let bTopics = (try? allTopics().filter { $0.bookMD5List.contains(b.md5) }.count) ?? 0
+                let aTopics = topicCountByBookMD5[a.md5] ?? 0
+                let bTopics = topicCountByBookMD5[b.md5] ?? 0
                 if aTopics != bTopics { return aTopics < bTopics }
                 let aExists = FileManager.default.fileExists(atPath: a.filePath)
                 let bExists = FileManager.default.fileExists(atPath: b.filePath)
@@ -115,26 +131,21 @@ public extension Database {
         }
 
         // Clean up dummy topics with 0 cards when a real topic with cards already exists for the same book or title
-        let allTopicsList = try allTopics()
         let cardCounts = (try? cardCountsByTopic()) ?? [:]
-        let topicsWithCards = allTopicsList.filter { (cardCounts[$0.id] ?? 0) > 0 }
+        let topicsWithCards = allTopicsCached.filter { (cardCounts[$0.id] ?? 0) > 0 }
+        var booksWithCards = Set<String>()
+        var titlesWithCards = Set<String>()
+        for t in topicsWithCards {
+            for b in t.bookMD5List { booksWithCards.insert(b.lowercased()) }
+            let clean = t.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if !clean.isEmpty { titlesWithCards.insert(clean) }
+        }
 
-        for topic in allTopicsList where (cardCounts[topic.id] ?? 0) == 0 {
-            let cleanTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let hasSisterTopicWithCards = topicsWithCards.contains { other in
-                let cleanOtherTitle = other.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                let titleMatch = cleanOtherTitle.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame ||
-                                 cleanOtherTitle.localizedCaseInsensitiveContains(cleanTitle) ||
-                                 cleanTitle.localizedCaseInsensitiveContains(cleanOtherTitle)
-                let bookMatch = !Set(topic.bookMD5List).isDisjoint(with: Set(other.bookMD5List)) ||
-                    topic.bookMD5List.contains(where: { tmd5 in
-                        other.bookMD5List.contains(where: { omd5 in
-                            tmd5 == omd5 || tmd5.hasPrefix(omd5) || omd5.hasPrefix(tmd5)
-                        })
-                    })
-                return titleMatch || bookMatch
-            }
-            if hasSisterTopicWithCards {
+        for topic in allTopicsCached where (cardCounts[topic.id] ?? 0) == 0 {
+            let cleanTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let hasSisterTitle = !cleanTitle.isEmpty && titlesWithCards.contains(cleanTitle)
+            let hasSisterBook = topic.bookMD5List.contains { booksWithCards.contains($0.lowercased()) }
+            if hasSisterTitle || hasSisterBook {
                 try? deleteTopic(id: topic.id)
             }
         }
@@ -142,13 +153,19 @@ public extension Database {
         // 2. Discover physical PDF files in search directories
         var searchDirectories: [URL] = []
         if let libraryRoot {
-            searchDirectories = [libraryRoot]
+            let ext = libraryRoot.pathExtension.lowercased()
+            let isPackage = ext == "marginbackupall" || ext == "marginpkg" || ext == "marginnotes"
+            let isNetwork = Database.isNetworkVolume(url: libraryRoot)
+            if !isPackage && !isNetwork {
+                searchDirectories = [libraryRoot]
+            }
         } else if !isInMemory {
             if let defaultDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
                 .appendingPathComponent("MarginGraph/Documents", isDirectory: true) {
                 searchDirectories.append(defaultDir)
             }
         }
+
         searchDirectories.append(contentsOf: additionalSearchPaths)
         var seenDirs = Set<String>()
         searchDirectories = searchDirectories.filter { seenDirs.insert($0.standardizedFileURL.path).inserted }

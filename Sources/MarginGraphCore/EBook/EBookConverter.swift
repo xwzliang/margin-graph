@@ -123,6 +123,40 @@ public final class EBookConverter: Sendable {
         return docs
     }
 
+    public static func existingConvertedPDFURL(for ebookURL: URL) -> URL? {
+        guard isSupported(url: ebookURL) else { return nil }
+
+        let docsDir = documentsDirectory()
+        let sidecar1 = ebookURL.appendingPathExtension("md5")
+        let sidecar2 = ebookURL.deletingPathExtension().appendingPathExtension("md5")
+        var md5: String? = nil
+        if FileManager.default.fileExists(atPath: sidecar1.path),
+           let content = try? String(contentsOf: sidecar1, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           !content.isEmpty {
+            md5 = content
+        } else if FileManager.default.fileExists(atPath: sidecar2.path),
+                  let content = try? String(contentsOf: sidecar2, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+                  !content.isEmpty {
+            md5 = content
+        }
+
+        if md5 == nil {
+            if Database.isNetworkVolume(url: ebookURL) {
+                return nil
+            }
+            md5 = MediaDocumentHelper.computeFileMD5(url: ebookURL)
+        }
+
+        guard let validMD5 = md5, !validMD5.isEmpty else { return nil }
+        let targetPDF = docsDir.appendingPathComponent("\(validMD5).pdf")
+        if FileManager.default.fileExists(atPath: targetPDF.path),
+           let attrs = try? FileManager.default.attributesOfItem(atPath: targetPDF.path),
+           let size = attrs[.size] as? Int64, size > 1024 {
+            return targetPDF
+        }
+        return nil
+    }
+
     public static func ensureConvertedPDF(for ebookURL: URL, options: TypographyOptions = .default) throws -> ConvertedEBookResult {
         guard FileManager.default.fileExists(atPath: ebookURL.path) else {
             throw EBookConverterError.fileNotFound(ebookURL.path)

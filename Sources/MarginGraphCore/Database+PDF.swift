@@ -11,6 +11,16 @@ public extension Database {
         )
     }
 
+    /// Deletes all cards associated with a specific document by MD5.
+    func deleteCardsForDocument(md5: String) throws {
+        try withStatement("DELETE FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%')") { statement in
+            bind(md5, to: 1, in: statement)
+            bind("\(md5)%", to: 2, in: statement)
+            bind(md5, to: 3, in: statement)
+            try requireDone(statement)
+        }
+    }
+
     func getBookmarks(for md5: String) throws -> Set<Int> {
         try withStatement("SELECT page_index FROM document_bookmarks WHERE document_md5=? ORDER BY page_index") { statement in
             bind(md5, to: 1, in: statement)

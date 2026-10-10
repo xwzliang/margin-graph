@@ -6,6 +6,7 @@ public struct DocumentOptionsMenuView: View {
     public var displayMode: PDFReaderDisplayMode
     public var onSelectDisplayMode: (PDFReaderDisplayMode) -> Void
     public var onOpenReadingAppearance: () -> Void
+    public var onImportHighlights: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
 
@@ -13,12 +14,14 @@ public struct DocumentOptionsMenuView: View {
         isReflowable: Bool,
         displayMode: PDFReaderDisplayMode,
         onSelectDisplayMode: @escaping (PDFReaderDisplayMode) -> Void,
-        onOpenReadingAppearance: @escaping () -> Void
+        onOpenReadingAppearance: @escaping () -> Void,
+        onImportHighlights: (() -> Void)? = nil
     ) {
         self.isReflowable = isReflowable
         self.displayMode = displayMode
         self.onSelectDisplayMode = onSelectDisplayMode
         self.onOpenReadingAppearance = onOpenReadingAppearance
+        self.onImportHighlights = onImportHighlights
     }
 
     public var body: some View {
@@ -55,9 +58,24 @@ public struct DocumentOptionsMenuView: View {
             ) {
                 onSelectDisplayMode(.singlePage)
             }
+
+            if let onImportHighlights {
+                Divider()
+                    .padding(.vertical, 3)
+                    .padding(.horizontal, 4)
+
+                menuRow(
+                    id: "import_highlights",
+                    title: "Import PDF Highlights…",
+                    icon: "highlighter",
+                    isSelected: false
+                ) {
+                    onImportHighlights()
+                }
+            }
         }
         .padding(6)
-        .frame(width: 195)
+        .frame(width: 205)
     }
 
     @ViewBuilder

@@ -23,6 +23,7 @@ public struct DocumentShelfView: View {
     public var onExportDocumentMarginPkg: ((Document) -> Void)?
     public var onExportFolderMarginPkg: ((DocumentFolder) -> Void)?
     public var onManageLibraries: (() -> Void)?
+    public var onImportHighlights: ((Document) -> Void)?
     @Binding public var isSearchPresented: Bool
     @Binding public var searchQuery: String
 
@@ -69,7 +70,8 @@ public struct DocumentShelfView: View {
         onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil,
         onExportDocumentMarginPkg: ((Document) -> Void)? = nil,
         onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil,
-        onManageLibraries: (() -> Void)? = nil
+        onManageLibraries: (() -> Void)? = nil,
+        onImportHighlights: ((Document) -> Void)? = nil
     ) {
         self.documents = documents
         self.folders = folders
@@ -91,6 +93,7 @@ public struct DocumentShelfView: View {
         self.onExportDocumentMarginPkg = onExportDocumentMarginPkg
         self.onExportFolderMarginPkg = onExportFolderMarginPkg
         self.onManageLibraries = onManageLibraries
+        self.onImportHighlights = onImportHighlights
     }
 
     public init(
@@ -113,7 +116,8 @@ public struct DocumentShelfView: View {
         onAddToStudy: (([Document], UUID?, String?) -> Void)? = nil,
         onExportDocumentMarginPkg: ((Document) -> Void)? = nil,
         onExportFolderMarginPkg: ((DocumentFolder) -> Void)? = nil,
-        onManageLibraries: (() -> Void)? = nil
+        onManageLibraries: (() -> Void)? = nil,
+        onImportHighlights: ((Document) -> Void)? = nil
     ) {
         self.init(
             documents: documents,
@@ -135,7 +139,8 @@ public struct DocumentShelfView: View {
             onAddToStudy: onAddToStudy,
             onExportDocumentMarginPkg: onExportDocumentMarginPkg,
             onExportFolderMarginPkg: onExportFolderMarginPkg,
-            onManageLibraries: onManageLibraries
+            onManageLibraries: onManageLibraries,
+            onImportHighlights: onImportHighlights
         )
     }
 
@@ -465,7 +470,8 @@ public struct DocumentShelfView: View {
                                         selectedFolderIDs = []
                                         isShowingAddToStudySheet = true
                                     },
-                                    onExportMarginPkg: onExportDocumentMarginPkg.map { fn in { fn(doc) } }
+                                    onExportMarginPkg: onExportDocumentMarginPkg.map { fn in { fn(doc) } },
+                                    onImportHighlights: onImportHighlights.map { fn in { fn(doc) } }
                                 )
                             }
                         }
@@ -1404,6 +1410,7 @@ public struct DocumentActionCardView: View {
     public var onRename: (() -> Void)?
     public var onDelete: () -> Void
     public var onExportMarginPkg: (() -> Void)?
+    public var onImportHighlights: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
     @State private var showingMoveDestinations: Bool = false
@@ -1440,7 +1447,8 @@ public struct DocumentActionCardView: View {
         onMoveToFolder: @escaping (UUID?) -> Void,
         onRename: (() -> Void)? = nil,
         onDelete: @escaping () -> Void,
-        onExportMarginPkg: (() -> Void)? = nil
+        onExportMarginPkg: (() -> Void)? = nil,
+        onImportHighlights: (() -> Void)? = nil
     ) {
         self.document = document
         self.folders = folders
@@ -1449,6 +1457,7 @@ public struct DocumentActionCardView: View {
         self.onRename = onRename
         self.onDelete = onDelete
         self.onExportMarginPkg = onExportMarginPkg
+        self.onImportHighlights = onImportHighlights
     }
 
     public var body: some View {
@@ -1627,6 +1636,30 @@ public struct DocumentActionCardView: View {
 
                 Divider()
                     .padding(.vertical, 2)
+
+                if let onImportHighlights {
+                    Button(action: onImportHighlights) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "highlighter")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.primary)
+                                .frame(width: 16)
+                            Text("Import PDF Highlights…")
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundStyle(.primary)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(hoveredItem == "import_highlights" ? Color.secondary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 5))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .onHover { hoveredItem = $0 ? "import_highlights" : nil }
+
+                    Divider()
+                        .padding(.vertical, 2)
+                }
 
                 if let onExportMarginPkg {
                     Button(action: onExportMarginPkg) {
@@ -2202,6 +2235,7 @@ public struct DocumentCardView: View {
     public var onRename: (() -> Void)?
     public var onAddToStudy: (() -> Void)?
     public var onExportMarginPkg: (() -> Void)?
+    public var onImportHighlights: (() -> Void)?
 
     @State private var isShowingActionPopover: Bool = false
 
@@ -2217,7 +2251,8 @@ public struct DocumentCardView: View {
         onDelete: (() -> Void)? = nil,
         onRename: (() -> Void)? = nil,
         onAddToStudy: (() -> Void)? = nil,
-        onExportMarginPkg: (() -> Void)? = nil
+        onExportMarginPkg: (() -> Void)? = nil,
+        onImportHighlights: (() -> Void)? = nil
     ) {
         self.document = document
         self.folders = folders
@@ -2231,6 +2266,7 @@ public struct DocumentCardView: View {
         self.onRename = onRename
         self.onAddToStudy = onAddToStudy
         self.onExportMarginPkg = onExportMarginPkg
+        self.onImportHighlights = onImportHighlights
     }
 
     @State private var loadedThumbnail: NSImage? = nil
@@ -2574,6 +2610,12 @@ public struct DocumentCardView: View {
                                 isShowingActionPopover = false
                                 fn()
                             }
+                        },
+                        onImportHighlights: onImportHighlights.map { fn in
+                            {
+                                isShowingActionPopover = false
+                                fn()
+                            }
                         }
                     )
                 }
@@ -2585,6 +2627,10 @@ public struct DocumentCardView: View {
             if !isSelectionMode {
                 Button("Open") { onOpen() }
                 Divider()
+                if let onImportHighlights {
+                    Button("Import PDF Highlights…") { onImportHighlights() }
+                    Divider()
+                }
                 if let onExportMarginPkg {
                     Button("Export to MarginNote Package (.marginpkg)…") { onExportMarginPkg() }
                     Divider()
@@ -2677,7 +2723,7 @@ public struct DocumentCardView: View {
             if url.pathExtension.lowercased() == "pdf" {
                 pdfURL = url
             } else if MediaDocumentHelper.isEBook(url: url) {
-                pdfURL = try? EBookConverter.ensureConvertedPDF(for: url).pdfURL
+                pdfURL = EBookConverter.existingConvertedPDFURL(for: url)
             } else {
                 pdfURL = nil
             }

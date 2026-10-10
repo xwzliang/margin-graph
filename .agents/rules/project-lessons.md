@@ -883,5 +883,85 @@ Structure each entry concisely with actionable rules:
     2. **Dual-Mode Default Library Switching**: `AppModel.init()` and `switchToDefaultDatabase()` must check `LibraryManager.shared.defaultLibrary`. If the default library is external, open `defaultLib.path`; if built-in, open Application Support. The top banner must dynamically show a blue `DEFAULT` badge and `Switch to Built-in Library` when the active external library is the default.
     3. **Explicit Action Labels & Universal Shelf Access**: Always provide a prominent `[Manage Libraries…]` button in the document shelf header bar across all libraries. In modal management cards, avoid ambiguous icon-only buttons; use explicit text buttons (`[Rename Library]`) with inline editing fields.
 
+- **PDF Highlight Extraction & Consecutive Note Clustering Importer (`PDFHighlightImporter`)**:
+  - **Trap**:
+    When PDFs highlighted by external viewers (e.g. Preview, Acrobat, GoodNotes, Skim, MarginNote) are imported into MarginGraph:
+    1. Highlights are often split into multiple sub-annotations or line-by-line fragments even when they belong to the same sentence or paragraph.
+    2. Blindly treating every PDF highlight annotation as an isolated card floods study notebooks with hundreds or thousands of fragmented single-line notes (e.g. 892 raw annotations in *Homo Deus* collapsing down to 251 coherent note cards).
+    3. Treating general punctuation (like periods, exclamation marks, semicolons) as ignorable between highlights causes separate sentences and distinct thoughts to be incorrectly merged into one card.
+    4. Using LaunchServices `open -a <executable>` to test raw command-line debug binaries fails with OS status -10811 because the executable in `.build/` is a raw binary, not an `.app` bundle.
+  - **Rule**:
+    1. **Two-Stage Sequential User Decision Dialogs (`NSAlert`)**:
+       - Alert 1: Check if PDF contains highlights (`PDFHighlightImporter.hasHighlights(in:)`). If found, ask user whether to convert highlights into notebook cards (`[Turn into Cards]`, `[Skip]`).
+       - Alert 2: If yes, ask user whether to merge consecutive notes (`[Merge Consecutive Notes]`, `[Keep Separate Cards]`, `[Cancel]`).
+       - Run both synchronously on `@MainActor` in sequence before performing database operations.
+    2. **Strict Consecutive Note Adjacency Criteria**:
+       - Two highlights $H_1, H_2$ are consecutive if and only if:
+         a) They are adjacent in document reading order (same page and $H_2$ follows $H_1$ vertically/horizontally, OR consecutive pages where $H_1$ is at the bottom of page $N$ and $H_2$ is at the top of page $N+1$).
+         b) They have the exact same color / palette index (`colorIndex(for:)`).
+         c) The text between them in the document text stream contains strictly zero non-whitespace characters except word-break hyphens (`CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: "-‐‑‒–—"))`). Never ignore standard punctuation or sentence boundaries.
+    3. **Non-Destructive PDF Handling**:
+       - Keep the original PDF file completely intact and untouched. Highlights are imported purely as `NoteCard` records attached to a dedicated study topic with accurate PDF page references and bounding boxes.
+     4. **On-Demand Access & Boundary Clamping**:
+       - Expose "Import PDF Highlights…" in the shelf document card menu (`DocumentActionCardView`), shelf right-click context menu, and the reader top toolbar `...` popover menu (`DocumentOptionsMenuView`), strictly clamped within window bounds via `InWindowPopoverContainer`.
+    5. **CLI Launch Argument Support for Headless/Agent Testing**:
+       - Support `--import-document <path>` in CLI arguments so agents can launch and test document import workflows directly from `.build/arm64-apple-macosx/debug/MarginGraphApp` without relying on `open -a` or system file dialog interaction.
 
+- **PDF Highlight Perceptual Color Matching & Collision-Free Hungarian Bipartite Assignment**:
+  - **Trap**:
+    1. **Euclidean RGB Distance vs Perceptual Hue Trap**:
+       Comparing PDF highlighter colors to app palette colors in standard Euclidean RGB space (`sqrt(dr^2 + dg^2 + db^2)`) produces severe misclassifications. For example, standard bright yellow highlighter pens (`#fff7c7`, RGB `1.0, 0.969, 0.779`) compared to MarginGraph pastel yellow (`#f3eca0`, index 0, RGB `0.953, 0.925, 0.627`) have a large blue difference ($\Delta b = 0.152$). In Euclidean RGB space, this yellow highlight is falsely closer to Peach (`#fed7aa`, index 12, $\Delta b = 0.034$), causing yellow highlights in PDFs to turn into peach cards. Human vision distinguishes highlight markers almost entirely by hue angle ($\sim 52^\circ$ for yellow vs $55^\circ$ for MarginGraph yellow vs $21^\circ$ for peach).
+    2. **Nearest-Neighbor Color Collisions**:
+       Mapping each PDF highlight independently to its nearest palette color causes distinct colors used in the same document (e.g. Lime Green vs Pure Green, or Sky Blue vs Teal) to collapse into the exact same MarginGraph palette slot (e.g. Green index 1). This destroys the reader's visual hierarchy and causes `areConsecutive` to erroneously merge distinct-color highlights into single cards.
+  - **Rule**:
+    1. **HSV Circular Perceptual Distance**:
+       Convert colors to HSV and compute circular hue difference: `min(|h1 - h2|, 360 - |h1 - h2|)`. Weight hue heavily over saturation and value: `distance = (hueDiff^2 * 5.0) + (satDiff^2 * 0.5) + (valDiff^2 * 0.5)`. Apply gray penalties when mapping chromatic highlights to low-saturation grays.
+    2. **Document-Level Hungarian Bipartite Matching (Collision-Free)**:
+       Before importing highlights from a document, cluster all unique highlight pen colors in the PDF (Euclidean distance threshold $\le 0.035$). If $N$ clusters exist ($N \le 16$), assign each cluster to a unique MarginGraph palette index using the Hungarian algorithm (minimum-weight bipartite matching on the $N \times 16$ cost matrix). This ensures globally minimal perceptual distortion while strictly guaranteeing zero color collisions across the document.
+    3. **Double-Guarded Consecutive Note Merging**:
+       In `areConsecutive(h1:h2:in:)`, require both `h1.colorIndex == h2.colorIndex` AND raw PDF color consistency (`isSamePDFColor(h1.color, h2.color, threshold: 0.04)`), preventing disparate pens from merging even if mapped close together.
+
+- **Intra-Line PDFKit Spurious Newline Cleanup & Punctuation Attachment (`cleanPhysicalLineText`)**:
+  - **Trap**:
+    Apple PDFKit's `page.selection(for: lineBox)?.string` injects spurious newline characters (`\n`) between adjacent text runs, font styling shifts, or `Tj` operator chunks even within a single physical line (e.g. `across its mind.\n‘There was something...`, `mushroom clouds. Oh well, it was just a bad dream.\n’ Going to the bathroom,`, `‘God’s will be done’\n. Rather,`). Blindly extracting or joining selections orphans punctuation and quote marks onto separate lines and corrupts card excerpts.
+  - **Rule**:
+    Process physical line text with `cleanPhysicalLineText(from:)`:
+    1. Split line text by newlines and trim whitespace.
+    2. Join chunks using character attachment rules: attach closing quotes (`’`, `'`, `”`, `"`) and punctuation (`,`, `.`, `;`, `:`, `!`, `?`, `)`) to the preceding word without spaces.
+    3. Separate regular words and opening quotes with a single space.
+    Extracted physical lines are guaranteed to be clean, single-line strings without internal spurious breaks.
+
+- **Strict Sentence & Paragraph Boundary Detection in Consecutive Highlight Merging**:
+  - **Trap**:
+    Using naive `.hasSuffix(".")` to detect completed sentences fails when an excerpt ends with sentence-ending punctuation followed by closing quotes, parentheses, brackets, or footnote citations (e.g. `die from them.)` or `bad dream.’`). The failed suffix check allows distinct paragraphs (such as an indented opening sentence of the next paragraph) to merge across paragraph or page boundaries ($N \to N+1$).
+  - **Rule**:
+    1. **Punctuation Trimming Before Suffix Checking**:
+       Strip trailing closing characters (`"”\"'’)]}）】」』”’"`) before checking whether an excerpt ends with sentence-ending punctuation (`endsWithPunct`: `.`, `!`, `?`, `;`, `:`).
+    2. **Paragraph Boundary Guards**:
+       If an excerpt ends with sentence-ending punctuation, check whether it terminates a paragraph using layout geometry:
+       - `isShortLine`: line width is shorter than standard column width (ragged right margin).
+       - `isNextIndented`: the next highlight line starts significantly to the right (paragraph indentation).
+       If either condition holds, treat the boundary as a distinct paragraph and do NOT merge consecutive highlights.
+    3. **Cross-Page Paragraph Preservation**:
+       In cross-page merging ($N \to N+1$), completed paragraphs at the bottom of page $N$ (`endsWithPunct && (isShortLine || isNextIndented)`) must never merge into new paragraphs at the top of page $N+1$.
+
+- **Startup $O(N^2)$ Deduplication Avoidance & Asynchronous Background Document Sync**:
+  - **Trap**:
+    Running disk scans and document synchronization (`syncAvailableDocuments()`) synchronously on the Main Thread in `AppModel.init()` blocks window rendering. Furthermore, calling SQLite queries (like `allTopics()`) inside nested loops over hundreds of documents or performing quadratic string comparisons across thousands of dummy topics causes multi-second UI freezing on app startup.
+  - **Rule**:
+    1. **$O(1)$ In-Memory Lookups**:
+       Pre-fetch and cache topics and documents into `[String: Set<String>]` and `[String: String]` Dictionaries/Sets before running maintenance passes, reducing query complexity from $O(N^2)$ to $O(1)$.
+    2. **Detached Asynchronous Startup Task**:
+       Move `database.syncAvailableDocuments()` out of the synchronous `AppModel.init()` flow into a detached background task (`Task.detached(priority: .utility)`), dispatching any subsequent UI state reload back to `@MainActor`. Startup completes in milliseconds.
+
+- **Bookshelf Thumbnail Generation Must NEVER Trigger Heavy Document Conversions (`existingConvertedPDFURL`)**:
+  - **Trap**:
+    In `DocumentCoverView.generateCoverThumbnail`, falling back to `try? EBookConverter.ensureConvertedPDF(for: url).pdfURL` when an EPUB or ebook lacked an extracted cover image triggered full document conversion (spawning Calibre's `ebook-convert` or WebKit rendering). When documents are located on remote network shares (SMB/NFS) or when multiple ebooks appear on the bookshelf, every item without a cover spawned external processes in parallel, pegs CPU at 100%, saturates network bandwidth, and causes the entire application to lag and freeze.
+  - **Rule**:
+    1. **Strictly Non-Converting Thumbnail Resolution**:
+       Shelf thumbnail generation passes must NEVER run document format conversions. Use `EBookConverter.existingConvertedPDFURL(for: url)` which strictly inspects whether a converted PDF already exists on local disk.
+    2. **Network Volume Guard**:
+       On network shares without sidecar `.md5` files, avoid reading megabytes over SMB just to compute hashes for thumbnail checks; return `nil` immediately.
+    3. **Graceful Card Cover Fallback**:
+       When no thumbnail is cached or available, display the native document cover card featuring the document title, format badge (`EPUB`, `MOBI`, `AZW3`, `DOCX`, etc.), and icon. Format conversions are deferred strictly until the user actively opens the document to read it.
 

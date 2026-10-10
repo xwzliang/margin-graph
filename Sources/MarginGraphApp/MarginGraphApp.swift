@@ -133,6 +133,7 @@ final class AppModel: ObservableObject {
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
     @Published var studyDocumentSheetMode: StudyDocumentSheetMode = .manage
+    @Published var handledHighlightImportMD5s: Set<String> = []
     var documentCurrentPage: [String: Int] = [:]
     var documentPageOffsets: [String: Double] = [:]
     var documentMindPan: [String: CGPoint] = [:]
@@ -247,15 +248,26 @@ final class AppModel: ObservableObject {
         database = try! Database()
         mediaStorage = try! MediaStorage()
         recentDatabasePaths = UserDefaults.standard.stringArray(forKey: "MarginGraph.RecentDatabases") ?? []
-        try? database.syncAvailableDocuments()
-        autoImportLiveMarginNoteIfEmpty()
         reloadLibrary()
+        let db = database
+        Task.detached(priority: .utility) { [weak self] in
+            try? db.syncAvailableDocuments()
+            await MainActor.run { [weak self] in
+                self?.reloadLibrary()
+            }
+        }
 
         if let backupArgIndex = CommandLine.arguments.firstIndex(of: "--open-backup"),
            backupArgIndex + 1 < CommandLine.arguments.count {
             let backupPath = CommandLine.arguments[backupArgIndex + 1]
             Task { @MainActor in
                 await self.openMarginNoteBackup(at: URL(fileURLWithPath: backupPath))
+            }
+        } else if let importDocIndex = CommandLine.arguments.firstIndex(of: "--import-document"),
+                  importDocIndex + 1 < CommandLine.arguments.count {
+            let docPath = CommandLine.arguments[importDocIndex + 1]
+            Task { @MainActor in
+                self.openOrImportFile(url: URL(fileURLWithPath: docPath), attachToTopic: false)
             }
         } else if let defaultLib = LibraryManager.shared.defaultLibrary, !defaultLib.isBuiltIn {
             let targetPath = FileManager.default.fileExists(atPath: defaultLib.path) ? defaultLib.path : (defaultLib.workingFolderPath ?? "")
@@ -577,6 +589,7 @@ final class AppModel: ObservableObject {
     }
 
     func deleteDocument(_ document: Document) {
+        handledHighlightImportMD5s.remove(document.md5)
         try? database.deleteDocument(id: document.id)
         reloadLibrary()
     }
@@ -1290,10 +1303,13 @@ final class AppModel: ObservableObject {
     func openDocument(url: URL, attachToTopic: Bool = true) {
         let docType = MediaDocumentHelper.documentType(for: url)
 
+        var loadedPDFManager: PDFDocumentManager? = nil
+        var isNewDocument = false
         let document: Document
         if docType == "video" || docType == "audio" {
             let md5 = MediaDocumentHelper.computeFileMD5(url: url)
             let existing = try? database.getDocumentByMD5(md5: md5)
+            isNewDocument = (existing == nil)
             let duration = MediaDocumentHelper.mediaDuration(url: url)
             let title = url.deletingPathExtension().lastPathComponent
             document = existing ?? Document(
@@ -1306,7 +1322,9 @@ final class AppModel: ObservableObject {
                 documentType: docType
             )
         } else if let manager = try? PDFDocumentManager(url: url) {
+            loadedPDFManager = manager
             let existing = try? database.getDocumentByMD5(md5: manager.md5)
+            isNewDocument = (existing == nil)
             document = existing ?? Document(
                 id: Document.stableUUID(manager.md5),
                 title: manager.title,
@@ -1329,6 +1347,109 @@ final class AppModel: ObservableObject {
         reloadLibrary()
         reloadStudySet()
         switchToDocument(document)
+
+        if let pdfDoc = loadedPDFManager?.document {
+            if isNewDocument && !handledHighlightImportMD5s.contains(document.md5) {
+                handledHighlightImportMD5s.insert(document.md5)
+                if PDFHighlightImporter.hasHighlights(in: pdfDoc) {
+                    handlePDFHighlightImport(for: document, pdfDocument: pdfDoc, attachToTopic: attachToTopic)
+                }
+            }
+        }
+    }
+
+    /// Handles detecting and importing PDF highlights as notebook cards, presenting the two sequential alerts requested.
+    @MainActor
+    func handlePDFHighlightImport(
+        for document: Document,
+        pdfDocument: PDFDocument,
+        attachToTopic: Bool
+    ) {
+        let highlightCount = PDFHighlightImporter.countHighlights(in: pdfDocument)
+        guard highlightCount > 0 else { return }
+
+        // Alert 1: Ask whether to turn highlights into notebook cards
+        let alert1 = NSAlert()
+        alert1.messageText = "Import PDF Highlights as Cards?"
+        alert1.informativeText = "Found \(highlightCount) highlighted note\(highlightCount == 1 ? "" : "s") in \"\(document.title)\". Would you like to turn these highlights into study notebook cards?"
+        alert1.addButton(withTitle: "Turn into Cards")
+        alert1.addButton(withTitle: "Skip")
+        alert1.alertStyle = .informational
+
+        let response1 = alert1.runModal()
+        guard response1 == .alertFirstButtonReturn else {
+            return
+        }
+
+        // Alert 2: Ask whether to merge consecutive notes
+        let alert2 = NSAlert()
+        alert2.messageText = "Merge Consecutive Notes?"
+        alert2.informativeText = "Would you like to merge consecutive notes (two adjacent highlights with no text between them and sharing the same color) into one card?"
+        alert2.addButton(withTitle: "Merge Consecutive Notes")
+        alert2.addButton(withTitle: "Keep Separate Cards")
+        alert2.addButton(withTitle: "Cancel")
+        alert2.alertStyle = .informational
+
+        let response2 = alert2.runModal()
+        guard response2 != .alertThirdButtonReturn else {
+            return
+        }
+        let shouldMerge = (response2 == .alertFirstButtonReturn)
+
+        // Find or create matching topic
+        let targetTopic: Topic
+        if attachToTopic, let selectedTopicID, let existing = topics.first(where: { $0.id == selectedTopicID }) {
+            targetTopic = existing
+            if !targetTopic.bookMD5List.contains(document.md5) {
+                try? database.addDocument(to: targetTopic.id, md5: document.md5)
+            }
+        } else if let matching = topics.first(where: { $0.bookMD5List.contains(document.md5) }) {
+            targetTopic = matching
+        } else {
+            let now = Date()
+            let newTopic = Topic(title: document.title, bookMD5List: [document.md5], createdAt: now, updatedAt: now)
+            try? database.insertTopic(newTopic)
+            targetTopic = newTopic
+        }
+
+        do {
+            _ = try PDFHighlightImporter.importHighlights(
+                from: pdfDocument,
+                for: document,
+                topicId: targetTopic.id,
+                shouldMerge: shouldMerge,
+                database: database
+            )
+            reloadLibrary()
+            reloadStudySet()
+
+            // Open document in reader/study workspace so imported cards are immediately visible
+            openDocumentInReader(document: document)
+        } catch {
+            print("Failed to import PDF highlights: \(error)")
+        }
+    }
+
+    /// Manually triggers highlight import for a document from context menus or toolbar options.
+    @MainActor
+    func importPDFHighlightsManually(for document: Document) {
+        guard let pdfDoc = PDFDocument(url: URL(fileURLWithPath: document.filePath)) else {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Open PDF"
+            alert.informativeText = "Could not load the PDF document from: \(document.filePath)"
+            alert.runModal()
+            return
+        }
+        let count = PDFHighlightImporter.countHighlights(in: pdfDoc)
+        if count == 0 {
+            let alert = NSAlert()
+            alert.messageText = "No Highlights Found"
+            alert.informativeText = "No highlight annotations or notes were found in \"\(document.title)\"."
+            alert.alertStyle = .informational
+            alert.runModal()
+            return
+        }
+        handlePDFHighlightImport(for: document, pdfDocument: pdfDoc, attachToTopic: selectedTopicID != nil)
     }
 
     func openPDF(url: URL, attachToTopic: Bool = true) {
@@ -3335,6 +3456,11 @@ struct StudyWorkspaceView: View {
                 },
                 onUpdateTypography: { [weak model] options in
                     model?.updateTypography(options: options)
+                },
+                onImportHighlights: { [weak model] in
+                    if let doc = model?.activeDocument {
+                        model?.importPDFHighlightsManually(for: doc)
+                    }
                 }
             )
         } else if let doc = model.activeDocument, doc.documentType == "video" || doc.documentType == "audio" {
@@ -3618,6 +3744,9 @@ struct MarginGraphApp: App {
                                 },
                                 onManageLibraries: {
                                     model.isShowingManageLibraries = true
+                                },
+                                onImportHighlights: { doc in
+                                    model.importPDFHighlightsManually(for: doc)
                                 }
                             )
                         case .study:
