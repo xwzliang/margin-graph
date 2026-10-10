@@ -246,8 +246,16 @@ public enum TreeLayout {
         var columnContainers: [[NoteCard]] = []
 
         // If roots have explicit columns (clustered by valid canvas X):
-        let rootsWithExplicitX = roots.filter { ($0.mindPos?.x ?? 0) > 20 && ($0.mindPos?.x ?? 0) < 10000 }
-        if !rootsWithExplicitX.isEmpty {
+        // Only use explicit clustering if a significant portion of roots have explicit X coordinates (or all roots if <= 3).
+        // Otherwise (such as when only a handful of cards have coordinates or when imported without positions),
+        // cards are laid out cohesively in sequential columns ordered by document order (cardOrder).
+        let rootsWithExplicitX = roots.filter { ($0.mindPos?.x ?? 0) > 20 && ($0.mindPos?.x ?? 0) < 5000 && ($0.mindPos?.x ?? 0).isFinite }
+        let hasCohesiveExplicitColumns = !rootsWithExplicitX.isEmpty && (
+            rootsWithExplicitX.count == roots.count ||
+            Double(rootsWithExplicitX.count) / Double(roots.count) >= 0.35
+        )
+
+        if hasCohesiveExplicitColumns {
             var clusters: [(baseX: CGFloat, roots: [NoteCard])] = []
             for root in rootsWithExplicitX.sorted(by: { ($0.mindPos?.x ?? 0) < ($1.mindPos?.x ?? 0) }) {
                 let x = root.mindPos!.x
@@ -260,14 +268,32 @@ public enum TreeLayout {
             }
             clusters.sort(by: { $0.baseX < $1.baseX })
             columnContainers = clusters.map(\.roots)
-        }
 
-        // Unpositioned roots (or when no explicit columns exist):
-        let unpositionedRoots = roots.filter { ($0.mindPos?.x ?? 0) <= 20 || ($0.mindPos?.x ?? 0) >= 10000 }
-        if !unpositionedRoots.isEmpty {
+            // Unpositioned roots placed in subsequent columns
+            let unpositionedRoots = roots.filter { ($0.mindPos?.x ?? 0) <= 20 || ($0.mindPos?.x ?? 0) >= 5000 || !($0.mindPos?.x ?? 0).isFinite }
+            if !unpositionedRoots.isEmpty {
+                var currentColumn: [NoteCard] = []
+                var currentHeight: CGFloat = 0
+                for root in unpositionedRoots {
+                    let h = estimatedSubtreeHeight(root) + configuration.verticalSpacing
+                    if currentHeight + h > maxColumnHeight && !currentColumn.isEmpty {
+                        columnContainers.append(currentColumn)
+                        currentColumn = [root]
+                        currentHeight = h
+                    } else {
+                        currentColumn.append(root)
+                        currentHeight += h
+                    }
+                }
+                if !currentColumn.isEmpty {
+                    columnContainers.append(currentColumn)
+                }
+            }
+        } else {
+            // All roots packed into columns ordered by document order (cardOrder)
             var currentColumn: [NoteCard] = []
             var currentHeight: CGFloat = 0
-            for root in unpositionedRoots {
+            for root in roots.sorted(by: cardOrder) {
                 let h = estimatedSubtreeHeight(root) + configuration.verticalSpacing
                 if currentHeight + h > maxColumnHeight && !currentColumn.isEmpty {
                     columnContainers.append(currentColumn)
@@ -287,18 +313,18 @@ public enum TreeLayout {
         var columnStartX: CGFloat = 40.0
         for column in columnContainers {
             let sortedColumn = column.sorted(by: cardOrder)
-            let explicitX = sortedColumn.compactMap(\.mindPos?.x).filter { $0 > 20 && $0 < 10000 }.min()
+            let explicitX = hasCohesiveExplicitColumns ? sortedColumn.compactMap(\.mindPos?.x).filter { $0 > 20 && $0 < 5000 && $0.isFinite }.min() : nil
             let baseX = max(columnStartX, explicitX ?? columnStartX)
 
-            let explicitFirstY = sortedColumn.first.flatMap { card -> CGFloat? in
-                guard let y = card.mindPos?.y, (card.mindPos?.x ?? 0) > 20, y > 20, y.isFinite else { return nil }
+            let explicitFirstY = hasCohesiveExplicitColumns ? sortedColumn.first.flatMap { card -> CGFloat? in
+                guard let y = card.mindPos?.y, (card.mindPos?.x ?? 0) > 20, y >= 20, y < 5000, y.isFinite else { return nil }
                 return y
-            }
+            } : nil
             nextY = explicitFirstY ?? 40.0
 
             currentColumnMaxX = baseX + configuration.nodeSize.width
             for root in sortedColumn {
-                if let savedY = root.mindPos?.y, (root.mindPos?.x ?? 0) > 20, savedY > nextY && savedY.isFinite {
+                if hasCohesiveExplicitColumns, let savedY = root.mindPos?.y, (root.mindPos?.x ?? 0) > 20, savedY > nextY, savedY < 5000, savedY.isFinite {
                     nextY = savedY
                 }
                 _ = place(root, depth: 0, baseX: baseX)
@@ -336,14 +362,16 @@ public enum TreeLayout {
     }
 
     public static func cardOrder(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
-        if let ly = lhs.mindPos?.y, let ry = rhs.mindPos?.y, ly != ry {
+        let lp = lhs.startPage ?? 0
+        let rp = rhs.startPage ?? 0
+        if lp != rp && lhs.startPage != nil && rhs.startPage != nil {
+            return lp < rp
+        }
+        if let ly = lhs.mindPos?.y, let ry = rhs.mindPos?.y, ly != ry, ly.isFinite, ry.isFinite {
             return ly < ry
         }
         if lhs.startPage != rhs.startPage {
             return (lhs.startPage ?? 0) < (rhs.startPage ?? 0)
-        }
-        if lhs.mindPos?.y != rhs.mindPos?.y {
-            return (lhs.mindPos?.y ?? .greatestFiniteMagnitude) < (rhs.mindPos?.y ?? .greatestFiniteMagnitude)
         }
         return lhs.createdAt < rhs.createdAt
     }
@@ -399,8 +427,11 @@ public struct CanvasViewport: Equatable, Sendable {
         let scaleY = availableHeight / max(1, bounds.height)
         let naturalScale = min(scaleX, scaleY)
         if nodes.count > 15 {
-            zoomScale = min(1.0, max(0.85, naturalScale))
-            panOffset = CGPoint(x: padding, y: padding + 20)
+            zoomScale = min(1.0, max(0.35, naturalScale))
+            panOffset = CGPoint(
+                x: padding - bounds.minX * zoomScale,
+                y: padding - bounds.minY * zoomScale
+            )
         } else {
             zoomScale = min(1.5, max(0.6, naturalScale))
             panOffset = CGPoint(

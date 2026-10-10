@@ -76,7 +76,7 @@ public struct MindMapCanvasView: View {
     @State private var isDraggingHScroll = false
     @State private var hScrollStartPanX: CGFloat = 0
     @State private var isHoveringScrollbars = false
-    @State private var showMiniMap = true
+    @State private var showMiniMap = false
     @State private var draggingCardID: UUID? = nil
     @State private var hoverTargetCardID: UUID? = nil
     @State private var layoutResult: TreeLayoutResult
@@ -216,9 +216,7 @@ public struct MindMapCanvasView: View {
                         hasInitialFitted = true
                         cardIDToCenter = nil
                     } else if let savedPan = initialPanOffset, let savedZoom = initialZoomScale {
-                        viewport.panOffset = savedPan
-                        viewport.zoomScale = savedZoom
-                        hasInitialFitted = true
+                        applyInitialViewport(savedPan: savedPan, savedZoom: savedZoom, frames: frames)
                     } else if let targetID = selectedCardID, let frame = frames[targetID] {
                         viewport.center(on: frame)
                         hasInitialFitted = true
@@ -250,9 +248,7 @@ public struct MindMapCanvasView: View {
                         hasInitialFitted = true
                         cardIDToCenter = nil
                     } else if let savedPan = initialPanOffset, let savedZoom = initialZoomScale {
-                        viewport.panOffset = savedPan
-                        viewport.zoomScale = savedZoom
-                        hasInitialFitted = true
+                        applyInitialViewport(savedPan: savedPan, savedZoom: savedZoom, frames: frames)
                     } else {
                         hasInitialFitted = false
                         if !cards.isEmpty {
@@ -320,6 +316,20 @@ public struct MindMapCanvasView: View {
         }
         viewportDebounceWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.20, execute: item)
+    }
+
+    private func applyInitialViewport(savedPan: CGPoint, savedZoom: CGFloat, frames: [UUID: CGRect]) {
+        let viewW = max(50, viewport.viewportSize.width) / max(0.1, savedZoom)
+        let viewH = max(50, viewport.viewportSize.height) / max(0.1, savedZoom)
+        let viewRect = CGRect(x: -savedPan.x / max(0.1, savedZoom), y: -savedPan.y / max(0.1, savedZoom), width: viewW, height: viewH)
+        let hasVisible = frames.values.contains { $0.intersects(viewRect) }
+        if hasVisible {
+            viewport.panOffset = savedPan
+            viewport.zoomScale = savedZoom
+        } else if !frames.isEmpty {
+            viewport.zoomToFit(nodes: Array(frames.values))
+        }
+        hasInitialFitted = true
     }
 
     private func magnifyGesture(proxy: GeometryProxy) -> some Gesture {
@@ -1349,19 +1359,34 @@ public struct MindMapCanvasView: View {
             }
         }
 
-        for link in links where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
+        // Draw cross-links contextually
+        // When there are many links (e.g. hundreds of cross-links in imported MarginNote notebooks),
+        // drawing every link globally causes a visual spiderweb that obscures cards.
+        // In MarginNote, cross-links are contextual:
+        // - If a card is selected, show links connected to that card prominently.
+        // - If no card is selected, only show links if the link count is small (<= 15).
+        let linksToDraw: [CardLink]
+        if let selID = selectedCardID {
+            linksToDraw = links.filter { $0.sourceCardId == selID || $0.targetCardId == selID }
+        } else if links.count <= 15 {
+            linksToDraw = links
+        } else {
+            linksToDraw = []
+        }
+
+        for link in linksToDraw where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
             guard let source = frames[link.sourceCardId], let target = frames[link.targetCardId] else { continue }
             var relation = Path()
             relation.addPath(Path(TreeLayout.connectorPath(from: source, to: target)))
             context.stroke(
                 transformed(relation),
-                with: .color(Color(red: 0.25, green: 0.55, blue: 0.85).opacity(0.8)),
-                style: StrokeStyle(lineWidth: 1.8, dash: [6, 3])
+                with: .color(Color(red: 0.25, green: 0.55, blue: 0.85).opacity(0.85)),
+                style: StrokeStyle(lineWidth: 2.0, dash: [6, 3])
             )
 
             var arrow = Path()
             arrow.addPath(Path(TreeLayout.arrowHead(for: TreeLayout.connectorPath(from: source, to: target), at: target)))
-            context.fill(transformed(arrow), with: .color(Color(red: 0.25, green: 0.55, blue: 0.85).opacity(0.85)))
+            context.fill(transformed(arrow), with: .color(Color(red: 0.25, green: 0.55, blue: 0.85).opacity(0.9)))
         }
     }
 

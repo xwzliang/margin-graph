@@ -319,7 +319,6 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
                     Double(descendants.filter { $0.bookMD5 == rootCard.bookMD5 }.count) / Double(sameBookCards.count) >= 0.8
 
                 if isGroupTreeRootOverall || isGroupTreeRootPerBook {
-                    let isTargetOfOther = currentCards.contains { $0.id != rootCard.id && ($0.mindLinks.contains(rootCard.id) || $0.groupNoteId == rootCard.id) }
                     // In group hierarchy, direct children have groupNoteId == rootCard.id, but no other card should treat it as child
                     let hasParent = currentCards.contains { $0.id != rootCard.id && $0.mindLinks.contains(rootCard.id) }
                     if !hasParent {
@@ -347,8 +346,14 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
                 let isMindLinksRootPerBook = !sameBookCards.isEmpty && sameBookCards.count >= 3 &&
                     (Double(reachableSameBook.count) / Double(sameBookCards.count) >= 0.8)
 
-                if isMindLinksRootOverall || isMindLinksRootPerBook {
-                    let isTargetOfOther = currentCards.contains { $0.id != rootCard.id && $0.mindLinks.contains(rootCard.id) }
+                let isTargetOfOther = currentCards.contains { $0.id != rootCard.id && ($0.mindLinks.contains(rootCard.id) || $0.groupNoteId == rootCard.id) }
+                let isMarginNoteSyntheticRoot = !isTargetOfOther && (
+                    (rootCard.mindPos?.x == 10000.0 && rootCard.mindPos?.y == 10000.0) ||
+                    (rootCard.mindLinks.count >= 10) ||
+                    (!sameBookCards.isEmpty && rootCard.mindLinks.count >= 5 && Double(reachableSameBook.count) / Double(sameBookCards.count) >= 0.05)
+                )
+
+                if isGroupTreeRootOverall || isGroupTreeRootPerBook || isMindLinksRootOverall || isMindLinksRootPerBook || isMarginNoteSyntheticRoot {
                     if !isTargetOfOther {
                         result = removeCardAndPromoteChildren(rootCard.id, from: currentCards)
                         removedAny = true

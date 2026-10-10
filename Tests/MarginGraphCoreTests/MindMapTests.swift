@@ -1231,6 +1231,10 @@ final class MindMapTests: XCTestCase {
             let visible = ahrensLayout.visibleCardIDs.compactMap { ahrensLayout.frames[$0] }
             XCTAssertGreaterThan(visible.count, 500, "Ahrens topic must have > 500 visible cards in mindmap")
 
+            var links = try db.linksForTopic(id: ahrensTopicID)
+            let filteredIDs = Set(filteredAhrens.map(\.id))
+            links.removeAll { !filteredIDs.contains($0.sourceCardId) || !filteredIDs.contains($0.targetCardId) }
+
             var overlapCount = 0
             for i in 0..<visible.count {
                 for j in (i + 1)..<visible.count {

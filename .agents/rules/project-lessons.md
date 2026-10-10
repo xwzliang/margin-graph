@@ -1041,3 +1041,29 @@ Structure each entry concisely with actionable rules:
     2. `testMandatoryMindMapLayoutZeroOverlapsAndRootIgnored`: Verifies that synthetic document root cards are pruned and that every pair of visible card bounding boxes in mindmap layout has zero intersections (0 overlaps) across both synthetic forest benchmarks and real library topics.
     No commit is permitted unless both tests pass cleanly.
 
+- **Sparse Outlier Coordinates & Cohesive Column Layout in Imported MindMaps**:
+  - **Trap**:
+    In imported MarginNote databases, a document might have hundreds of cards with unassigned coordinates (`mind_x = nil`) and only a tiny handful of outlier cards with manual coordinates (e.g. 11 cards out of 678 cards with $X \in [702, 17678]$ and $Y \in [-96977, 122886]$). If `TreeLayout` clusters columns based on any existing finite $X$, it creates 10 single-card columns spanning 18,000 pixels, inherits extreme vertical offsets, and packs the remaining 667 cards past $X = 18000$.
+  - **Rule**:
+    1. **Cohesiveness Threshold for Explicit Columns**: Only cluster explicit columns when a significant portion of root cards have explicit coordinates (`rootsWithExplicitX.count == roots.count || ratio >= 0.35`). When explicit roots are sparse (< 35%), treat all roots as unpositioned and pack them into uniform vertical columns of `maxColumnHeight` (e.g. 900pt).
+    2. **Reading Order Sorting**: In `TreeLayout.cardOrder`, prioritize document page order (`card.startPage`) when available, falling back to coordinate $Y$ and creation time.
+
+- **Robust Synthetic Document Root Detection Without Arbitrary Reachability Thresholds**:
+  - **Trap**:
+    MarginNote synthetic document root cards (empty text cards created to anchor book title notes) do not always link to 80% of cards (in large books, a user may only link 47 out of 678 cards, resulting in < 7% reachability). An 80% reachability requirement fails to filter the root card, leaving the book title card with dozens of radiating cross-links.
+  - **Rule**:
+    Detect synthetic root cards using robust structural signatures: empty highlight & notes text, nil `startPage`, nil `groupNoteId`, no incoming parent/links, and either coordinate `(10000, 10000)` or high outbound links ($\ge 10$ links, or $\ge 5$ links reaching $\ge 5\%$ of same-book cards).
+
+- **Defensive Canvas Viewport Validation Against Empty Canvas Coordinates**:
+  - **Trap**:
+    The SQLite `documents` table may store stale or out-of-bounds pan/zoom coordinates (e.g. `mind_pan_x: -1126.42, mind_pan_y: -873.58`) pointing to empty canvas space. Restoring these coordinates on document open displays an entirely blank canvas, requiring the user to manually zoom to fit.
+  - **Rule**:
+    In `MindMapCanvasView.applyInitialViewport`, validate that the restored viewport actually intersects at least one rendered card frame. If no card intersects the restored viewport, automatically trigger `viewport.zoomToFit(nodes: Array(frames.values))` so content is always immediately centered and visible.
+
+- **Mandatory App Binary Rebuild (`swift build`) Verification**:
+  - **Trap**:
+    Running `swift test` only compiles test products; it does NOT update `.build/arm64-apple-macosx/debug/MarginGraphApp`. If the user or agent launches `MarginGraphApp` without running `swift build`, the app runs outdated code from a previous build and symptoms appear unfixed.
+  - **Rule**:
+    Always execute `swift build` (or `swift build --product MarginGraphApp`) after code changes before launching the application binary or declaring completion.
+
+
