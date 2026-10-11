@@ -14,6 +14,15 @@ final class MarginPackageExporterTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
+    func testSuggestedFilenameSanitizesBookAndFolderTitles() {
+        XCTAssertEqual(MarginPackageExporter.sanitizeFilename("Homo Deus: A Brief History of Tomorrow"),
+                       "Homo Deus_ A Brief History of Tomorrow")
+        XCTAssertEqual(MarginPackageExporter.sanitizeFilename("Homo Deus/ A Brief History of Tomorrow"),
+                       "Homo Deus_ A Brief History of Tomorrow")
+        XCTAssertEqual(MarginPackageExporter.sanitizeFilename("   "), "Notes")
+        XCTAssertFalse(MarginPackageExporter.sanitizeFilename("folder/book\\name").contains("/"))
+    }
+
     func testExportDocumentAndImportBack() throws {
         let db = try Database(inMemory: true)
         let mediaStorage = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))

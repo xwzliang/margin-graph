@@ -1114,7 +1114,7 @@ final class AppModel: ObservableObject {
         dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         let timestamp = dateFormatter.string(from: Date())
-        panel.nameFieldStringValue = "\(document.title)(\(timestamp)).marginpkg"
+        panel.nameFieldStringValue = "\(MarginPackageExporter.sanitizeFilename(document.title))(\(timestamp)).marginpkg"
         if let type = UTType(filenameExtension: "marginpkg") {
             panel.allowedContentTypes = [type]
         }
@@ -1145,7 +1145,7 @@ final class AppModel: ObservableObject {
         dateFormatter.dateFormat = "yyyy-MM-dd-HH-mm-ss"
         dateFormatter.locale = Locale(identifier: "en_US_POSIX")
         let timestamp = dateFormatter.string(from: Date())
-        panel.nameFieldStringValue = "\(folder.name)(\(timestamp)).marginpkg"
+        panel.nameFieldStringValue = "\(MarginPackageExporter.sanitizeFilename(folder.name))(\(timestamp)).marginpkg"
         if let type = UTType(filenameExtension: "marginpkg") {
             panel.allowedContentTypes = [type]
         }

@@ -492,7 +492,7 @@ public enum MarginPackageExporter {
         }
     }
 
-    private static func sanitizeFilename(_ name: String) -> String {
+    public static func sanitizeFilename(_ name: String) -> String {
         let invalid = CharacterSet(charactersIn: "/:\\?%*|\"<>")
         let cleaned = name.components(separatedBy: invalid).joined(separator: "_")
         let trimmed = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
