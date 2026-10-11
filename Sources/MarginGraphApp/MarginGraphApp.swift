@@ -485,7 +485,6 @@ final class AppModel: ObservableObject {
     func openDocumentInReader(document: Document) {
         flushPendingPositions()
         let now = Date()
-        try? database.updateDocumentLastVisited(id: document.id, date: now)
 
         let cleanDocTitle = document.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let docFileName = URL(fileURLWithPath: document.filePath).deletingPathExtension().lastPathComponent
@@ -536,29 +535,32 @@ final class AppModel: ObservableObject {
         }
 
         // Prioritize candidate with cards (> 0), choosing the one with the highest card count
-        let allCounts = (try? database.cardCountsByTopic()) ?? cardCounts
+        let allCounts = cardCounts
         let candidatesWithCards = candidates.filter { (allCounts[$0.id] ?? 0) > 0 }
         let matchingTopic = candidatesWithCards.max(by: { (allCounts[$0.id] ?? 0) < (allCounts[$1.id] ?? 0) }) ?? candidates.first
 
-        if let matchingTopic {
+        if var matchingTopic {
             let cleanTopicTitle = matchingTopic.title.trimmingCharacters(in: .whitespacesAndNewlines)
             if matchingTopic.bookMD5List.count <= 1 && !cleanDocTitle.isEmpty &&
                 !cleanTopicTitle.localizedCaseInsensitiveContains(cleanDocTitle) &&
                 !cleanDocTitle.localizedCaseInsensitiveContains(cleanTopicTitle) {
                 try? database.renameTopic(id: matchingTopic.id, newTitle: cleanDocTitle)
+                matchingTopic.title = cleanDocTitle
             }
-            try? database.updateTopicUpdatedAt(id: matchingTopic.id, date: now)
             if !matchingTopic.bookMD5List.contains(document.md5) {
                 try? database.addDocument(to: matchingTopic.id, md5: document.md5)
+                matchingTopic.bookMD5List.append(document.md5)
             }
-            reloadLibrary()
+            if let index = topics.firstIndex(where: { $0.id == matchingTopic.id }) {
+                topics[index] = matchingTopic
+            }
             selectedTopicID = matchingTopic.id
             switchToDocument(document, clearSelection: false)
             reloadStudySet()
         } else {
             let newTopic = Topic(title: document.title, bookMD5List: [document.md5], createdAt: now, updatedAt: now)
             try? database.insertTopic(newTopic)
-            reloadLibrary()
+            topics.append(newTopic)
             selectedTopicID = newTopic.id
             switchToDocument(document, clearSelection: false)
             reloadStudySet()
@@ -1519,13 +1521,7 @@ final class AppModel: ObservableObject {
         if docType == "video" || docType == "audio" {
             activeDocument = document
             manager = nil
-            let now = Date()
-            try? database.updateDocumentLastVisited(id: document.id, date: now)
-            if let topicID = selectedTopicID {
-                try? database.updateTopicUpdatedAt(id: topicID, date: now)
-                try? database.updateTopicLastDocument(id: topicID, md5: document.md5)
-            }
-            reloadLibrary()
+            recordDocumentVisit(document)
             loadBookmarks()
             reloadDocumentCards()
             return
@@ -1533,15 +1529,33 @@ final class AppModel: ObservableObject {
         guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
         activeDocument = document
         manager = loaded
-        let now = Date()
-        try? database.updateDocumentLastVisited(id: document.id, date: now)
-        if let topicID = selectedTopicID {
-            try? database.updateTopicUpdatedAt(id: topicID, date: now)
-            try? database.updateTopicLastDocument(id: topicID, md5: document.md5)
-        }
-        reloadLibrary()
+        recordDocumentVisit(document)
         loadBookmarks()
         reloadDocumentCards()
+    }
+
+    // Opening a document changes recency, not library membership or review counts.
+    // Keep the loaded library snapshot current without scanning the network database.
+    private func recordDocumentVisit(_ document: Document) {
+        let now = Date()
+        try? database.transaction {
+            try database.updateDocumentLastVisited(id: document.id, date: now)
+            if let topicID = selectedTopicID {
+                try database.updateTopicUpdatedAt(id: topicID, date: now)
+                try database.updateTopicLastDocument(id: topicID, md5: document.md5)
+            }
+        }
+        if let index = documents.firstIndex(where: { $0.id == document.id }) {
+            documents[index].lastVisited = now
+        }
+        if let index = studyDocuments.firstIndex(where: { $0.id == document.id }) {
+            studyDocuments[index].lastVisited = now
+        }
+        activeDocument?.lastVisited = now
+        if let index = topics.firstIndex(where: { $0.id == selectedTopicID }) {
+            topics[index].updatedAt = now
+            topics[index].lastDocumentMD5 = document.md5
+        }
     }
 
     func updateTypography(options: TypographyOptions) {
@@ -2679,6 +2693,15 @@ final class AppModel: ObservableObject {
     private func reloadDocumentCards() {
         guard let md5 = manager?.md5 else {
             documentCards = []
+            return
+        }
+        // Notebook rendering already owns the topic's cards. Do not fetch every
+        // matching card from every notebook again (twice during shelf opening).
+        if selectedTopicID != nil {
+            documentCards = mindMapCards.filter {
+                guard let bookMD5 = $0.bookMD5 else { return false }
+                return bookMD5 == md5 || bookMD5.hasPrefix(md5) || md5.hasPrefix(bookMD5)
+            }
             return
         }
         let rawCards = (try? database.cardsForDocument(md5: md5)) ?? []

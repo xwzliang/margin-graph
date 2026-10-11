@@ -972,7 +972,9 @@ public final class Database: @unchecked Sendable {
     }
 
     public func topicIDsForCardBookMD5(_ md5: String) throws -> [UUID] {
-        try withStatement("SELECT DISTINCT topic_id FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%')") { statement in
+        // Keep prefix matching in the covering hash index, then fetch only
+        // matching cards instead of scanning the full cards table over SMB.
+        try withStatement("SELECT DISTINCT topic_id FROM cards WHERE book_md5 IN (SELECT DISTINCT book_md5 FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%'))") { statement in
             bind(md5, to: 1, in: statement)
             bind(md5 + "%", to: 2, in: statement)
             bind(md5, to: 3, in: statement)

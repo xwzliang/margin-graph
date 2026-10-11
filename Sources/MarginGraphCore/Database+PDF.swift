@@ -5,8 +5,11 @@ import SQLite3
 
 public extension Database {
     func cardsForDocument(md5: String) throws -> [NoteCard] {
+        // Resolve compatible hashes through the small covering index first.
+        // Applying the prefix OR directly to SELECT * scans every card body,
+        // causing thousands of network reads for external libraries.
         try cards(
-            sql: "SELECT * FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%') ORDER BY created_at",
+            sql: "SELECT * FROM cards WHERE book_md5 IN (SELECT DISTINCT book_md5 FROM cards WHERE book_md5 = ? OR book_md5 LIKE ? OR ? LIKE (book_md5 || '%')) ORDER BY created_at",
             values: [md5, "\(md5)%", md5]
         )
     }

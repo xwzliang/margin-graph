@@ -4,6 +4,27 @@ import SQLite3
 @testable import MarginGraphCore
 
 final class DatabaseTests: XCTestCase {
+    func testDocumentLookupPreservesPrefixMatchesAcrossTopics() throws {
+        let db = try Database(inMemory: true)
+        let first = Topic(title: "First")
+        let second = Topic(title: "Second")
+        try db.insertTopic(first)
+        try db.insertTopic(second)
+        let hashes = ["abcdef", "abc", "abcdef123", "unrelated"]
+        var cards: [NoteCard] = []
+        for (index, hash) in hashes.enumerated() {
+            let card = NoteCard(topicId: index == 1 ? second.id : first.id,
+                                bookMD5: hash, title: hash,
+                                createdAt: Date(timeIntervalSince1970: Double(index)))
+            try db.insertCard(card)
+            cards.append(card)
+        }
+        XCTAssertEqual(try db.cardsForDocument(md5: "abcdef").map(\.id), cards.prefix(3).map(\.id))
+        XCTAssertEqual(Set(try db.topicIDsForCardBookMD5("abcdef")), [first.id, second.id])
+        XCTAssertTrue(try db.cardsForDocument(md5: "missing").isEmpty)
+        XCTAssertTrue(try db.topicIDsForCardBookMD5("missing").isEmpty)
+    }
+
     func testCRUDHierarchyAndLinks() throws {
         let db = try Database(inMemory: true)
         let document = Document(title: "Book", filePath: "/tmp/book.pdf", md5: "abc", totalPages: 12)
