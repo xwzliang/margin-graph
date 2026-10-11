@@ -99,10 +99,22 @@ final class MarginPackageExporterTests: XCTestCase {
         }
         XCTAssertNotEqual(scalar("SELECT Z_UUID FROM Z_METADATA"), "6470D715-D0C6-4BEE-885D-BD40CAE72134")
         XCTAssertFalse(FileManager.default.fileExists(atPath: unpacked.appendingPathComponent("__MACOSX").path))
-        XCTAssertEqual(scalar("SELECT ZTITLE FROM ZBOOKCONFIG"), "SampleBook")
+        XCTAssertEqual(scalar("SELECT ZTITLE FROM ZBOOKCONFIG"), "SampleBook_ Display Title")
         XCTAssertEqual(scalar("SELECT count(*) FROM ZTOPIC t JOIN ZBOOKNOTE n ON n.ZNOTEID=t.ZMINDLINKS AND n.ZTOPICID=t.ZTOPICID"), "1")
         XCTAssertEqual(scalar("SELECT n.ZMINDLINKS FROM ZBOOKNOTE n JOIN ZTOPIC t ON n.ZNOTEID=t.ZMINDLINKS"), card.id.uuidString)
         XCTAssertEqual(scalar("SELECT count(*) FROM ZBOOKNOTE WHERE ZMINDPOS IS NOT NULL"), "2")
+        var highlightStatement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(nativeDB, "SELECT ZHIGHLIGHTS FROM ZBOOKNOTE WHERE ZHIGHLIGHTS IS NOT NULL", -1, &highlightStatement, nil), SQLITE_OK)
+        defer { sqlite3_finalize(highlightStatement) }
+        XCTAssertEqual(sqlite3_step(highlightStatement), SQLITE_ROW)
+        let blob = try XCTUnwrap(sqlite3_column_blob(highlightStatement, 0))
+        let archive = Data(bytes: blob, count: Int(sqlite3_column_bytes(highlightStatement, 0)))
+        let nativeHighlights = try XCTUnwrap(NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archive) as? [[String: Any]])
+        XCTAssertEqual(nativeHighlights.count, 1)
+        let selectionData = try XCTUnwrap(nativeHighlights[0]["textSelData"] as? Data)
+        XCTAssertEqual(Array(selectionData.prefix(2)), [0x1f, 0x8b])
+        XCTAssertNil(nativeHighlights[0]["textSelLst"])
+
 
         // Read package back using MarginNoteImporter
         let destDocs = tempDir.appendingPathComponent("imported_docs")
@@ -117,7 +129,7 @@ final class MarginPackageExporterTests: XCTestCase {
 
         XCTAssertFalse(result.documents.isEmpty)
         XCTAssertEqual(result.documents[0].md5, docMD5)
-        XCTAssertEqual(result.documents[0].title, "SampleBook")
+        XCTAssertEqual(result.documents[0].title, "SampleBook_ Display Title")
 
         XCTAssertFalse(result.topics.isEmpty)
         XCTAssertEqual(result.topics[0].title, "Sample Study Notebook")
@@ -128,6 +140,31 @@ final class MarginPackageExporterTests: XCTestCase {
         XCTAssertEqual(importedCard?.highlightText, "This is highlighted text in the document.")
         XCTAssertEqual(importedCard?.notesText, "My personal study commentary.")
         XCTAssertEqual(importedCard?.startPage, 2)
+    }
+
+    func testConvertedEPUBExportsOriginalSourceAndReadableFilename() throws {
+        let db = try Database(inMemory: true)
+        let media = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))
+        let cached = tempDir.appendingPathComponent("abcdef.pdf")
+        try Data("PDF cache".utf8).write(to: cached)
+        let source = tempDir.appendingPathComponent("original.epub")
+        let originalData = Data("Original EPUB bytes".utf8)
+        try originalData.write(to: source)
+        try source.path.write(to: cached.deletingPathExtension().appendingPathExtension("source_path"), atomically: true, encoding: .utf8)
+        let doc = Document(title: "A Proper Book Name", filePath: cached.path, md5: "abcdef", totalPages: 1, documentType: "epub")
+        try db.insertDocument(doc)
+        let package = tempDir.appendingPathComponent("ebook.marginpkg")
+        try MarginPackageExporter.exportDocument(document: doc, database: db, mediaStorage: media, destinationURL: package)
+        let unpacked = tempDir.appendingPathComponent("ebook_unpacked")
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", package.path, unpacked.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        XCTAssertEqual(try Data(contentsOf: unpacked.appendingPathComponent("A Proper Book Name.epub")), originalData)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unpacked.appendingPathComponent("abcdef.pdf").path))
+        try FileManager.default.removeItem(at: source)
+        XCTAssertThrowsError(try MarginPackageExporter.exportDocument(document: doc, database: db, mediaStorage: media, destinationURL: tempDir.appendingPathComponent("missing.marginpkg")))
     }
 
     func testExportFolderAndImportBack() throws {
@@ -181,7 +218,7 @@ final class MarginPackageExporterTests: XCTestCase {
         let result = try importer.read()
 
         XCTAssertEqual(result.documents.count, 2)
-        XCTAssertEqual(result.cards.count, 3) // Includes the notebook entry root.
+        XCTAssertEqual(result.cards.count, 2) // Structural root is not an excerpt card.
     }
 
     @MainActor

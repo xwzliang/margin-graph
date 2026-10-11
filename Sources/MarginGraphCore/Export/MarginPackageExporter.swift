@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import SQLite3
 import zlib
+import CryptoKit
 
 public enum MarginPackageExportError: LocalizedError {
     case templateDecompressionFailed
@@ -208,18 +209,55 @@ public enum MarginPackageExporter {
         let notesDBURL = stagingDir.appendingPathComponent(notesFileName)
         try templateData.write(to: notesDBURL)
 
-        for doc in documents {
-            let rel = relativePaths[doc.id] ?? (doc.filePath as NSString).lastPathComponent
+        var packagedDocuments = documents
+        var usedPaths = Set<String>()
+        var convertedEPUBHashes = Set<String>()
+        for index in packagedDocuments.indices {
+            let doc = documents[index]
+            let currentURL = URL(fileURLWithPath: doc.filePath)
+            let sourceURL: URL
+            if doc.documentType == "epub", currentURL.pathExtension.lowercased() != "epub" {
+                guard let original = MediaDocumentHelper.resolveSourceURL(for: currentURL),
+                      original.pathExtension.lowercased() == "epub" else {
+                    throw MarginPackageExportError.documentNotFound("Original EPUB for " + doc.title)
+                }
+                sourceURL = original
+                convertedEPUBHashes.insert(doc.md5)
+            } else {
+                sourceURL = currentURL
+            }
+            guard fileManager.fileExists(atPath: sourceURL.path) else {
+                throw MarginPackageExportError.documentNotFound(sourceURL.path)
+            }
+            let folder = ((relativePaths[doc.id] ?? "") as NSString).deletingLastPathComponent
+            var filename = sanitizeFilename(doc.title) + "." + sourceURL.pathExtension
+            var rel = folder.isEmpty ? filename : folder + "/" + filename
+            if usedPaths.contains(rel) {
+                filename = sanitizeFilename(doc.title) + "-" + doc.id.uuidString + "." + sourceURL.pathExtension
+                rel = folder.isEmpty ? filename : folder + "/" + filename
+            }
+            usedPaths.insert(rel)
             let targetURL = stagingDir.appendingPathComponent(rel)
             try fileManager.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fileManager.fileExists(atPath: doc.filePath) {
-                try? fileManager.copyItem(at: URL(fileURLWithPath: doc.filePath), to: targetURL)
-            }
+            try fileManager.copyItem(at: sourceURL, to: targetURL)
+            packagedDocuments[index].filePath = targetURL.path
         }
 
         // MarginNote enters a notebook through ZTOPIC.ZMINDLINKS, rather than
         // discovering arbitrary notes solely by their topic ID.
-        var exportCards = cards
+        var exportCards = cards.map { original -> NoteCard in
+            var card = original
+            if let hash = card.bookMD5, convertedEPUBHashes.contains(hash) {
+                // Cached PDF page coordinates cannot identify EPUB text ranges.
+                // Retain the excerpt and notebook, without bogus PDF anchors.
+                card.startPage = nil
+                card.endPage = nil
+                card.startPos = nil
+                card.endPos = nil
+                card.highlightRects = []
+            }
+            return card
+        }
         var topicRoots: [UUID: UUID] = [:]
         for topic in topics {
             let topicCards = cards.filter { $0.topicId == topic.id }
@@ -250,7 +288,7 @@ public enum MarginPackageExporter {
 
         try populateDatabase(
             dbURL: notesDBURL,
-            documents: documents,
+            documents: packagedDocuments,
             topics: topics,
             cards: exportCards,
             topicRoots: topicRoots,
@@ -384,11 +422,17 @@ public enum MarginPackageExporter {
             sqlite3_reset(noteStmt)
             sqlite3_bind_int(noteStmt, 1, Int32(idx + 1))
 
-            let sPage: Int32 = card.startPage != nil ? Int32(card.startPage! + 1) : 1
-            let ePage: Int32 = card.endPage != nil ? Int32(card.endPage! + 1) : sPage
-            sqlite3_bind_int(noteStmt, 2, ePage)
+            if let page = card.endPage ?? card.startPage {
+                sqlite3_bind_int(noteStmt, 2, Int32(page + 1))
+            } else {
+                sqlite3_bind_null(noteStmt, 2)
+            }
             sqlite3_bind_int(noteStmt, 3, card.isFolded ? 1 : 0)
-            sqlite3_bind_int(noteStmt, 4, sPage)
+            if let page = card.startPage {
+                sqlite3_bind_int(noteStmt, 4, Int32(page + 1))
+            } else {
+                sqlite3_bind_null(noteStmt, 4)
+            }
 
             sqlite3_bind_double(noteStmt, 5, card.createdAt.timeIntervalSinceReferenceDate)
             sqlite3_bind_double(noteStmt, 6, card.updatedAt.timeIntervalSinceReferenceDate)
@@ -403,9 +447,9 @@ public enum MarginPackageExporter {
                 let et = card.videoEndTime ?? st
                 endPosStr = "MN3VIDEO|\(et)|1.0"
             } else if let sp = card.startPos {
-                startPosStr = "{\(sp.x), \(sp.y)}"
+                startPosStr = "\(sp.x),\(sp.y)"
                 if let ep = card.endPos {
-                    endPosStr = "{\(ep.x), \(ep.y)}"
+                    endPosStr = "\(ep.x),\(ep.y)"
                 }
             }
             sqlite3_bind_text(noteStmt, 8, endPosStr, -1, transient)
@@ -468,16 +512,20 @@ public enum MarginPackageExporter {
             // ZHIGHLIGHTS
             if !card.highlightRects.isEmpty {
                 let rectsList = card.highlightRects.map { r -> [String: Any] in
-                    [
-                        "pageNo": r.page + 1,
-                        "rect": "{{\(r.x), \(r.y)}, {\(r.width), \(r.height)}}"
-                    ]
+                    ["pageNo": r.page + 1,
+                     "rect": ["_jsonvalueType": "CGRect", "x": r.x, "y": r.y,
+                              "w": r.width, "h": r.height]]
                 }
-                let hlDict: [String: Any] = [
-                    "highlight_text": card.highlightText,
-                    "textSelLst": rectsList
-                ]
-                if let data = try? NSKeyedArchiver.archivedData(withRootObject: hlDict, requiringSecureCoding: false) {
+                let json = try JSONSerialization.data(withJSONObject: rectsList, options: [.sortedKeys])
+                let compressed = try gzip(json)
+                let hlDict = NSMutableDictionary(dictionary: [
+                    "highlight_text": NSMutableString(string: card.highlightText),
+                    "textSelData": NSMutableData(data: compressed),
+                    "coords_hash": Insecure.MD5.hash(data: json).map { String(format: "%02x", $0) }.joined()
+                ])
+                // Native MarginNote archives an ARRAY of highlight dictionaries.
+                let highlights = NSMutableArray(object: hlDict)
+                if let data = try? NSKeyedArchiver.archivedData(withRootObject: highlights, requiringSecureCoding: false) {
                     _ = data.withUnsafeBytes { rawBuf in
                         sqlite3_bind_blob(noteStmt, 21, rawBuf.baseAddress, Int32(data.count), transient)
                     }
@@ -533,6 +581,30 @@ public enum MarginPackageExporter {
             updateMax(entity: "BookNote", max: cards.count)
             updateMax(entity: "Media", max: mediaCount)
         }
+    }
+
+    private static func gzip(_ data: Data) throws -> Data {
+        var stream = z_stream()
+        guard deflateInit2_(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 16 + MAX_WBITS,
+                           8, Z_DEFAULT_STRATEGY, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+            throw MarginPackageExportError.archiveCreationFailed("Cannot initialize highlight compression")
+        }
+        defer { deflateEnd(&stream) }
+        var output = Data(count: Int(deflateBound(&stream, uLong(data.count))))
+        let status = data.withUnsafeBytes { input in
+            output.withUnsafeMutableBytes { buffer in
+                stream.next_in = UnsafeMutablePointer(mutating: input.bindMemory(to: Bytef.self).baseAddress)
+                stream.avail_in = uInt(data.count)
+                stream.next_out = buffer.bindMemory(to: Bytef.self).baseAddress
+                stream.avail_out = uInt(buffer.count)
+                return deflate(&stream, Z_FINISH)
+            }
+        }
+        guard status == Z_STREAM_END else {
+            throw MarginPackageExportError.archiveCreationFailed("Cannot compress highlight coordinates")
+        }
+        output.count = Int(stream.total_out)
+        return output
     }
 
     public static func sanitizeFilename(_ name: String) -> String {
