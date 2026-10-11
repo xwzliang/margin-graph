@@ -1260,15 +1260,30 @@ final class AppModel: ObservableObject {
         openDocumentPicker(attachToTopic: attachToTopic)
     }
 
+    private var importedDocumentsDirectory: URL {
+        let libraryDirectory = activeDatabaseURL?.deletingLastPathComponent()
+            ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MarginGraph", isDirectory: true)
+        return libraryDirectory.appendingPathComponent("ImportedDocuments", isDirectory: true)
+    }
+
     func openDocument(url: URL, attachToTopic: Bool = false) {
+        let importedURL: URL
+        do {
+            importedURL = try ManagedDocumentImport.copySource(url, into: importedDocumentsDirectory)
+        } catch {
+            NSAlert(error: error).runModal()
+            return
+        }
+        let url = importedURL
         let docType = MediaDocumentHelper.documentType(for: url)
 
         var loadedPDFManager: PDFDocumentManager? = nil
         var isNewDocument = false
-        let document: Document
+        var document: Document
         if docType == "video" || docType == "audio" {
             let md5 = MediaDocumentHelper.computeFileMD5(url: url)
-            let existing = try? database.getDocumentByMD5(md5: md5)
+            var existing = try? database.getDocumentByMD5(md5: md5)
+            existing?.filePath = url.path
             isNewDocument = (existing == nil)
             let duration = MediaDocumentHelper.mediaDuration(url: url)
             let title = url.deletingPathExtension().lastPathComponent
@@ -1283,7 +1298,8 @@ final class AppModel: ObservableObject {
             )
         } else if let manager = try? PDFDocumentManager(url: url) {
             loadedPDFManager = manager
-            let existing = try? database.getDocumentByMD5(md5: manager.md5)
+            var existing = try? database.getDocumentByMD5(md5: manager.md5)
+            existing?.filePath = manager.url.path
             isNewDocument = (existing == nil)
             document = existing ?? Document(
                 id: Document.stableUUID(manager.md5),
@@ -1298,7 +1314,13 @@ final class AppModel: ObservableObject {
             return
         }
 
-        try? database.insertDocument(document)
+        do {
+            try database.insertDocument(document)
+            document = try database.getDocumentByPath(filePath: document.filePath) ?? document
+        } catch {
+            NSAlert(error: error).runModal()
+            return
+        }
 
         if attachToTopic, let topicID = selectedTopicID {
             try? database.addDocument(to: topicID, md5: document.md5)
@@ -1418,9 +1440,17 @@ final class AppModel: ObservableObject {
         }
 
         do {
+            var workingDocument = document
+            let copyURL = try ManagedDocumentImport.copySource(URL(fileURLWithPath: document.filePath), into: importedDocumentsDirectory)
+            workingDocument.filePath = copyURL.path
+            // Reload the copy so annotation removal cannot mutate the source PDF object.
+            guard let workingPDF = PDFDocument(url: copyURL) else {
+                throw CocoaError(.fileReadCorruptFile)
+            }
+            try database.insertDocument(workingDocument)
             _ = try PDFHighlightImporter.importHighlights(
-                from: pdfDocument,
-                for: document,
+                from: workingPDF,
+                for: workingDocument,
                 topicId: targetTopic.id,
                 shouldMerge: shouldMerge,
                 singleNativeHighlight: singleNativeHighlight,
@@ -1430,9 +1460,9 @@ final class AppModel: ObservableObject {
             reloadStudySet()
 
             // Open document in reader/study workspace so imported cards are immediately visible
-            openDocumentInReader(document: document)
+            openDocumentInReader(document: workingDocument)
         } catch {
-            print("Failed to import PDF highlights: \(error)")
+            NSAlert(error: error).runModal()
         }
     }
 

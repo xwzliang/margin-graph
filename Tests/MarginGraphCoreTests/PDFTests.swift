@@ -1345,6 +1345,44 @@ final class PDFTests: XCTestCase {
         XCTAssertTrue(firstCard!.notesText.contains("Note 2"))
     }
 
+    func testHighlightImportModifiesManagedCopyAndPreservesSource() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let source = directory.appendingPathComponent("Original.pdf")
+        try makeMultiPageSyntheticPDF(at: source)
+        let original = try XCTUnwrap(PDFDocument(url: source))
+        let annotation = PDFAnnotation(bounds: CGRect(x: 50, y: 700, width: 200, height: 18), forType: .highlight, withProperties: nil)
+        annotation.color = .yellow
+        annotation.contents = "Preserve this original annotation"
+        try XCTUnwrap(original.page(at: 0)).addAnnotation(annotation)
+        XCTAssertTrue(original.write(to: source))
+        let before = try Data(contentsOf: source)
+        let managedDirectory = directory.appendingPathComponent("library/ImportedDocuments")
+        let copy = try ManagedDocumentImport.copySource(source, into: managedDirectory)
+        XCTAssertNotEqual(copy, source)
+        XCTAssertEqual(copy.lastPathComponent, source.lastPathComponent)
+        XCTAssertEqual(try Data(contentsOf: copy), before)
+        XCTAssertEqual(try ManagedDocumentImport.copySource(copy, into: managedDirectory), copy)
+        let pdf = try XCTUnwrap(PDFDocument(url: copy))
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Imported Notebook")
+        try database.insertTopic(topic)
+        let document = Document(title: "Original", filePath: copy.path, md5: "source-book", totalPages: pdf.pageCount)
+        try database.insertDocument(document)
+        let cards = try PDFHighlightImporter.importHighlights(from: pdf, for: document, topicId: topic.id, shouldMerge: true, singleNativeHighlight: true, database: database)
+        XCTAssertFalse(cards.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: source), before)
+        XCTAssertTrue(PDFHighlightImporter.hasHighlights(in: try XCTUnwrap(PDFDocument(url: source))))
+        XCTAssertFalse(PDFHighlightImporter.hasHighlights(in: try XCTUnwrap(PDFDocument(url: copy))))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: source.appendingPathExtension("md5").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copy.appendingPathExtension("md5").path))
+        // Same basenames from another location must never overwrite an earlier import.
+        let otherCopy = try ManagedDocumentImport.copySource(source, into: managedDirectory)
+        XCTAssertNotEqual(otherCopy, copy)
+        XCTAssertEqual(try Data(contentsOf: otherCopy), before)
+    }
+
     func testPDFHighlightImporterPerceptualColorMapping() {
         // Yellow should map to index 0 (Yellow #f3eca0), NOT Peach or Ochre
         let pdfYellow1 = NSColor(deviceRed: 1.0, green: 0.969, blue: 0.779, alpha: 1.0)

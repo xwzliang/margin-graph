@@ -46,6 +46,7 @@ public struct DocumentShelfView: View {
     @State private var folderToRename: DocumentFolder? = nil
     @State private var renameFolderName: String = ""
     @State private var folderToDelete: DocumentFolder? = nil
+    @State private var documentToDelete: Document? = nil
     @State private var documentToRename: Document? = nil
     @State private var renameDocumentTitle: String = ""
     @FocusState private var isSearchFieldFocused: Bool
@@ -460,7 +461,7 @@ public struct DocumentShelfView: View {
                                     onMoveToFolder: { targetFolderID in
                                         onMoveDocument?(doc, targetFolderID)
                                     },
-                                    onDelete: { onDeleteDocument(doc) },
+                                    onDelete: { documentToDelete = doc },
                                     onRename: {
                                         renameDocumentTitle = doc.title
                                         documentToRename = doc
@@ -538,6 +539,19 @@ public struct DocumentShelfView: View {
                     isShowingAddToStudySheet = false
                 }
             )
+        }
+        .alert("Delete Document?", isPresented: Binding(
+            get: { documentToDelete != nil },
+            set: { if !$0 { documentToDelete = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { documentToDelete = nil }
+                .keyboardShortcut(.defaultAction)
+            Button("Delete", role: .destructive) {
+                if let document = documentToDelete { onDeleteDocument(document) }
+                documentToDelete = nil
+            }
+        } message: {
+            Text("Remove \"\(documentToDelete?.title ?? "")\" from this library? Its notebook notes will also be removed. This cannot be undone.")
         }
         .confirmationDialog(
             "Delete folder \"\(folderToDelete?.name ?? "")\"? Items inside will be moved to \(folderToDelete?.parentId == nil ? "Root" : "parent folder").",
