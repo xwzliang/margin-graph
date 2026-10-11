@@ -77,6 +77,8 @@ public struct MindMapCanvasView: View {
     @State private var hScrollStartPanX: CGFloat = 0
     @State private var isHoveringScrollbars = false
     @State private var showMiniMap = true
+    @State private var selectedMapLayerID: UUID?
+    @State private var showingMapLayers = false
     @State private var draggingCardID: UUID? = nil
     @State private var hoverTargetCardID: UUID? = nil
     @State private var layoutResult: TreeLayoutResult
@@ -160,13 +162,13 @@ public struct MindMapCanvasView: View {
         GeometryReader { proxy in
             let layout = layoutResult
             let frames = displayFrames(layout: layout)
-            let visibleCards = cards.filter { layout.visibleCardIDs.contains($0.id) }
+            let visibleCards = MindMapLayers.cards(in: selectedMapLayerID, all: cards).filter { layout.visibleCardIDs.contains($0.id) }
 
             canvasZStack(proxy: proxy, layout: layout, frames: frames, visibleCards: visibleCards)
                 .coordinateSpace(name: "MindMapCanvas")
                 .onChange(of: cards) { _, newCards in
                     let oldFrames = layoutResult.frames
-                    layoutResult = TreeLayout.layout(cards: newCards)
+                    layoutResult = TreeLayout.layout(cards: MindMapLayers.cards(in: selectedMapLayerID, all: newCards))
                     if viewport.viewportSize.width < 50 && proxy.size.width > 50 {
                         viewport.viewportSize = proxy.size
                     }
@@ -208,8 +210,11 @@ public struct MindMapCanvasView: View {
                     viewport: $viewport
                 ))
                 .onAppear {
+                    if let target = cardIDToCenter ?? selectedCardID {
+                        selectedMapLayerID = MindMapLayers.layer(for: target, cards: cards)
+                    }
                     if layoutResult.frames.isEmpty {
-                        layoutResult = TreeLayout.layout(cards: cards)
+                        layoutResult = TreeLayout.layout(cards: MindMapLayers.cards(in: selectedMapLayerID, all: cards))
                     }
                     let frames = layoutResult.frames
                     if proxy.size.width > 20 && proxy.size.height > 20 {
@@ -283,6 +288,10 @@ public struct MindMapCanvasView: View {
                     viewportDebounceWorkItem = nil
                 }
                 .onChange(of: selectedCardID) { _, newID in
+                    if let newID {
+                        let layer = MindMapLayers.layer(for: newID, cards: cards)
+                        if layer != selectedMapLayerID { selectMapLayer(layer) }
+                    }
                     if let newID, let frame = frames[newID] {
                         let screenOrigin = viewport.canvasToScreen(CGPoint(x: frame.minX, y: frame.minY))
                         let screenRect = CGRect(origin: screenOrigin, size: CGSize(width: frame.width * viewport.zoomScale, height: frame.height * viewport.zoomScale))
@@ -1034,45 +1043,47 @@ public struct MindMapCanvasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     }
 
+    private func selectMapLayer(_ id: UUID?) {
+        selectedMapLayerID = id
+        showingMapLayers = false
+        layoutResult = TreeLayout.layout(cards: MindMapLayers.cards(in: id, all: cards))
+        viewport.zoomToFit(nodes: Array(layoutResult.frames.values))
+    }
+
     private var mainMindMapHeader: some View {
-        Menu {
+        VStack(spacing: 4) {
             Button {
-                if let selectedTopic {
-                    onSelectTopic?(selectedTopic)
-                }
+                showingMapLayers.toggle()
             } label: {
-                Label("Main MindMap", systemImage: "checkmark")
-            }
-            Divider()
-            if let onNewTopic {
-                Button("New MindMap Layer…") {
-                    onNewTopic()
+                HStack(spacing: 4) {
+                    Text(cards.first { $0.id == selectedMapLayerID }?.title ?? "Main MindMap")
+                    Image(systemName: "chevron.down")
                 }
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Color.blue)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 6)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 6))
             }
-        } label: {
-            HStack(spacing: 4) {
-                Text("Main MindMap")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 8.5, weight: .semibold))
-                    .foregroundStyle(Color(red: 0.15, green: 0.45, blue: 0.85))
+            .buttonStyle(.plain)
+            if showingMapLayers {
+                VStack(alignment: .leading, spacing: 4) {
+                    Button("Main MindMap") { selectMapLayer(nil) }
+                    ForEach(MindMapLayers.anchors(in: cards)) { anchor in
+                        Button(anchor.title) { selectMapLayer(anchor.id) }
+                    }
+                    if let onNewTopic {
+                        Divider()
+                        Button("New MindMap Layer…") { showingMapLayers = false; onNewTopic() }
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(10)
+                .frame(width: 180, alignment: .leading)
+                .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
+                .shadow(radius: 3)
             }
-            .padding(.horizontal, 11)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(Color(white: 0.99))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color.black.opacity(0.10), lineWidth: 0.5)
-                    )
-                    .shadow(color: .black.opacity(0.12), radius: 3, y: 1)
-            )
         }
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-        .allowsHitTesting(true)
     }
 
     private var grid: some View {
@@ -1324,7 +1335,7 @@ public struct MindMapCanvasView: View {
     ) {
         let isSearching = isSearchActive && !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-        for card in cards where visible.contains(card.id) {
+        for card in MindMapLayers.cards(in: selectedMapLayerID, all: cards) where visible.contains(card.id) {
             if let parentID = card.groupNoteId,
                visible.contains(parentID),
                let parent = frames[parentID],
@@ -1350,7 +1361,7 @@ public struct MindMapCanvasView: View {
         }
 
         // Draw short horizontal stem for collapsed cards with children
-        for card in cards where visible.contains(card.id) && card.isFolded {
+        for card in MindMapLayers.cards(in: selectedMapLayerID, all: cards) where visible.contains(card.id) && card.isFolded {
             let hasChildren = cards.contains(where: { $0.groupNoteId == card.id })
             if hasChildren, let parent = frames[card.id] {
                 var stem = Path()
