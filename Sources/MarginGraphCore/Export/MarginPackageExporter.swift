@@ -481,17 +481,17 @@ public enum MarginPackageExporter {
         var noteStmt: OpaquePointer?
         let noteSql = """
         INSERT INTO ZBOOKNOTE (
-            Z_PK, Z_ENT, Z_OPT, ZENDPAGE, ZMINDCLOSE, ZSTARTPAGE, ZUSN, ZZINDEX,
+            Z_PK, Z_ENT, Z_OPT, ZENDPAGE, ZMINDCLOSE, ZSTARTPAGE, ZUSN,
             ZHIGHLIGHT_DATE, ZNOTE_DATE, ZBOOKMD5, ZENDPOS, ZGROUPNOTEID,
             ZHIGHLIGHT_STYLE, ZHIGHLIGHT_TEXT, ZMEDIA_LIST, ZMINDLINKS, ZMINDPOS,
             ZNOTEID, ZNOTES_TEXT, ZNOTETITLE, ZSTARTPOS, ZTOPICID,
-            ZHIGHLIGHT_PIC, ZHIGHLIGHTS
+            ZHIGHLIGHT_PIC, ZHIGHLIGHTS, ZZINDEX
         ) VALUES (
-            ?, 5, 1, ?, ?, ?, 0, 0,
+            ?, 5, 1, ?, ?, ?, 0,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?, ?,
-            ?, ?
+            ?, ?, ?
         );
         """
         if sqlite3_prepare_v2(db, noteSql, -1, &noteStmt, nil) != SQLITE_OK {
@@ -504,6 +504,10 @@ public enum MarginPackageExporter {
         for (idx, card) in cards.enumerated() {
             sqlite3_reset(noteStmt)
             sqlite3_bind_int(noteStmt, 1, Int32(idx + 1))
+            // Native Adler book root uses bit 12 for Framework branch layout.
+            let isExportRoot = topicRoots.values.contains(card.id)
+                || bookRoots.values.contains { $0.values.contains(card.id) }
+            sqlite3_bind_int(noteStmt, 22, isExportRoot ? 4096 : 0)
 
             if let page = card.endPage ?? card.startPage {
                 sqlite3_bind_int(noteStmt, 2, Int32(page + 1))

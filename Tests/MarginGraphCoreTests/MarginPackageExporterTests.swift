@@ -122,6 +122,8 @@ final class MarginPackageExporterTests: XCTestCase {
         XCTAssertEqual(scalar("SELECT count(*) FROM ZTOPIC t JOIN ZBOOKNOTE n ON n.ZNOTEID=t.ZMINDLINKS AND n.ZTOPICID=t.ZTOPICID"), "1")
         XCTAssertEqual(scalar("SELECT n.ZMINDLINKS FROM ZBOOKNOTE n JOIN ZTOPIC t ON n.ZNOTEID=t.ZMINDLINKS"), card.id.uuidString)
         XCTAssertEqual(scalar("SELECT count(*) FROM ZBOOKNOTE WHERE ZMINDPOS IS NOT NULL"), "2")
+        XCTAssertEqual(scalar("SELECT n.ZZINDEX FROM ZBOOKNOTE n JOIN ZTOPIC t ON n.ZNOTEID=t.ZMINDLINKS"), "4096")
+        XCTAssertEqual(scalar("SELECT ZZINDEX FROM ZBOOKNOTE WHERE ZNOTETITLE='Concept A'"), "0")
         var highlightStatement: OpaquePointer?
         XCTAssertEqual(sqlite3_prepare_v2(nativeDB, "SELECT ZHIGHLIGHTS FROM ZBOOKNOTE WHERE ZHIGHLIGHTS IS NOT NULL", -1, &highlightStatement, nil), SQLITE_OK)
         defer { sqlite3_finalize(highlightStatement) }
