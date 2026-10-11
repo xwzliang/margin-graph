@@ -1669,7 +1669,7 @@ private struct MiniMapView: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(white: 0.96).opacity(0.88))
+                .fill(Color(white: 0.96))
         )
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(red: 0.80, green: 0.76, blue: 0.70), lineWidth: 0.8))
         .shadow(color: .black.opacity(0.08), radius: 4, y: 1)

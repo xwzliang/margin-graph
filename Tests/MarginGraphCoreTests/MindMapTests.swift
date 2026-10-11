@@ -89,6 +89,27 @@ final class MindMapTests: XCTestCase {
         XCTAssertLessThanOrEqual(viewport.zoomScale, 3.0)
     }
 
+    func testAutomaticForestBalancesDifferentExcerptLengths() {
+        for repetitions in [1, 8, 24] {
+            let topicID = UUID()
+            let cards = (0..<120).map { index in
+                NoteCard(topicId: topicID, title: "Card \(index)",
+                         highlightText: String(repeating: "An excerpt with useful context. ", count: repetitions))
+            }
+            let result = TreeLayout.layout(cards: cards)
+            let frames = Array(result.frames.values)
+            let bounds = frames.dropFirst().reduce(frames[0]) { $0.union($1) }
+            XCTAssertGreaterThan(bounds.width / bounds.height, 0.9)
+            XCTAssertLessThan(bounds.width / bounds.height, 2.2)
+            XCTAssertEqual(frames.count, cards.count)
+            for (index, frame) in frames.enumerated() {
+                for other in frames.dropFirst(index + 1) {
+                    XCTAssertFalse(frame.intersects(other))
+                }
+            }
+        }
+    }
+
     func testLayoutAspectRatioInspection() throws {
         let db = try Database()
         let topics = try db.allTopics()

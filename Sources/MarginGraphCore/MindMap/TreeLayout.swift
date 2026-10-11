@@ -190,8 +190,6 @@ public enum TreeLayout {
         var frames: [UUID: CGRect] = [:]
         var visible = Set<UUID>()
         var nextY: CGFloat = 40
-        let totalCards = max(1, cards.count)
-        let maxColumnHeight: CGFloat = max(1400.0, 270.0 * sqrt(CGFloat(totalCards)))
 
         var currentColumnMaxX: CGFloat = 40.0
 
@@ -245,6 +243,22 @@ public enum TreeLayout {
             }
             return max(cardHeight, childrenHeight)
         }
+
+        // Balance the forest using measured content area, rather than card count.
+        // A long excerpt consumes much more space than a title-only card. Keep
+        // each connected tree intact and retain explicitly positioned columns.
+        func subtreeWidth(_ card: NoteCard) -> CGFloat {
+            guard !card.isFolded else { return configuration.nodeSize.width }
+            let childWidth = (children[card.id] ?? []).map(subtreeWidth).max() ?? 0
+            return configuration.nodeSize.width + (childWidth > 0 ? configuration.horizontalSpacing + childWidth : 0)
+        }
+        let contentArea = roots.reduce(CGFloat.zero) { area, root in
+            area + (estimatedSubtreeHeight(root) + configuration.verticalSpacing)
+                * (subtreeWidth(root) + configuration.horizontalSpacing)
+        }
+        // Match the overview's 3:2 proportions without stretching cards or
+        // breaking branches. Small maps remain a single readable column.
+        let maxColumnHeight = max(1400, sqrt(contentArea / 1.5))
 
         // Partition roots into Column Containers
         var columnContainers: [[NoteCard]] = []
