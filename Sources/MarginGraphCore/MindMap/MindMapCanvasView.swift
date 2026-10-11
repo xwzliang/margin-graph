@@ -76,7 +76,7 @@ public struct MindMapCanvasView: View {
     @State private var isDraggingHScroll = false
     @State private var hScrollStartPanX: CGFloat = 0
     @State private var isHoveringScrollbars = false
-    @State private var showMiniMap = false
+    @State private var showMiniMap = true
     @State private var draggingCardID: UUID? = nil
     @State private var hoverTargetCardID: UUID? = nil
     @State private var layoutResult: TreeLayoutResult
@@ -449,6 +449,13 @@ public struct MindMapCanvasView: View {
             bottomLeftControls
                 .zIndex(150)
 
+            // Draggable Vertical & Horizontal Scrollbars
+            scrollBars(proxy: proxy, frames: frames)
+                .zIndex(160)
+        }
+        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        // Anchor the overview to the viewport, independently of zoomed card bounds.
+        .overlay(alignment: .bottomTrailing) {
             // MiniMapView at bottom-right (toggleable)
             if showMiniMap {
                 MiniMapView(
@@ -464,7 +471,6 @@ public struct MindMapCanvasView: View {
                 )
                 .frame(width: 150, height: 100)
                 .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .zIndex(150)
             } else {
                 Button {
@@ -488,15 +494,10 @@ public struct MindMapCanvasView: View {
                 .buttonStyle(.plain)
                 .help("Show Overview Window")
                 .padding(16)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 .zIndex(150)
             }
 
-            // Draggable Vertical & Horizontal Scrollbars
-            scrollBars(proxy: proxy, frames: frames)
-                .zIndex(160)
         }
-        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     }
 
     private var canvasBackgroundView: some View {
