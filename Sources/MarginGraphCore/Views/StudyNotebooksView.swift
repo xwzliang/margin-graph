@@ -2,6 +2,19 @@ import SwiftUI
 import AppKit
 import PDFKit
 
+// Cache successes and failures, including when several notebooks share a book.
+private final class NotebookCoverResult: @unchecked Sendable {
+    let image: NSImage?
+    init(image: NSImage?) { self.image = image }
+}
+// NSCache synchronizes its own lookups and insertions across queues.
+private nonisolated(unsafe) let notebookCoverCache: NSCache<NSString, NotebookCoverResult> = {
+    let cache = NSCache<NSString, NotebookCoverResult>()
+    cache.countLimit = 256
+    return cache
+}()
+private let notebookCoverQueue = DispatchQueue(label: "MarginGraph.NotebookCovers", qos: .utility)
+
 public struct StudyNotebooksView: View {
     public var topics: [Topic]
     public var documents: [Document]
@@ -59,9 +72,11 @@ public struct StudyNotebooksView: View {
         }
     }
 
-    private func matchingDocument(for topic: Topic) -> Document? {
+    static func matchingDocument(for topic: Topic, documents: [Document]) -> Document? {
+        // Rendering must not probe every candidate path on a network volume.
+        // Missing/unavailable covers are handled by the background loader.
         documents.first { doc in
-            guard !doc.filePath.isEmpty, FileManager.default.fileExists(atPath: doc.filePath) else { return false }
+            guard !doc.filePath.isEmpty else { return false }
             let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let cleanDocTitle = doc.title.trimmingCharacters(in: .whitespacesAndNewlines)
             let dFileName = URL(fileURLWithPath: doc.filePath).deletingPathExtension().lastPathComponent
@@ -249,7 +264,7 @@ public struct StudyNotebooksView: View {
                         ForEach(sortedTopics, id: \.id) { topic in
                             NotebookCardView(
                                 topic: topic,
-                                document: matchingDocument(for: topic),
+                                document: Self.matchingDocument(for: topic, documents: documents),
                                 cardCount: cardCounts[topic.id] ?? 0,
                                 onOpen: { onOpenTopic(topic) },
                                 onRename: {
@@ -290,6 +305,8 @@ public struct NotebookCardView: View {
     public var onDelete: (() -> Void)?
 
     @State private var isShowingActionCard: Bool = false
+    @State private var loadedThumbnail: NSImage?
+    @State private var thumbnailPath: String?
 
     public init(
         topic: Topic,
@@ -347,7 +364,7 @@ public struct NotebookCardView: View {
                     .frame(height: 180)
 
                     // Top Left: Mini Document Cover Thumbnail (MarginNote 3 signature)
-                    if let doc = document, let thumb = loadMiniCoverThumbnail(path: doc.filePath) {
+                    if let thumb = loadedThumbnail {
                         Image(nsImage: thumb)
                             .resizable()
                             .scaledToFit()
@@ -438,6 +455,30 @@ public struct NotebookCardView: View {
             }
         }
         .buttonStyle(.plain)
+        .onAppear { loadThumbnailAsync() }
+        .onChange(of: document?.filePath) { _, _ in loadThumbnailAsync() }
+        .onDisappear { thumbnailPath = nil }
+    }
+
+    private func loadThumbnailAsync() {
+        let path = document?.filePath ?? ""
+        thumbnailPath = path
+        loadedThumbnail = nil
+        guard !path.isEmpty else { return }
+        if let cached = notebookCoverCache.object(forKey: path as NSString) {
+            loadedThumbnail = cached.image
+            return
+        }
+        // Serialize PDF work so a large grid cannot flood the network share.
+        notebookCoverQueue.async {
+            let cached = notebookCoverCache.object(forKey: path as NSString)
+            let result = cached ?? NotebookCoverResult(image: Self.loadMiniCoverThumbnail(path: path))
+            notebookCoverCache.setObject(result, forKey: path as NSString)
+            DispatchQueue.main.async {
+                guard thumbnailPath == path else { return }
+                loadedThumbnail = result.image
+            }
+        }
     }
 
     private func miniCard(color: Color, stroke: Color, width: CGFloat) -> some View {
@@ -460,7 +501,7 @@ public struct NotebookCardView: View {
         )
     }
 
-    private func loadMiniCoverThumbnail(path: String) -> NSImage? {
+    private nonisolated static func loadMiniCoverThumbnail(path: String) -> NSImage? {
         guard !path.isEmpty,
               FileManager.default.fileExists(atPath: path),
               let pdfDoc = PDFDocument(url: URL(fileURLWithPath: path)),
