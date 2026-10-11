@@ -1357,14 +1357,14 @@ final class PDFTests: XCTestCase {
         let pdfGreen = NSColor(deviceRed: 0.841, green: 1.0, blue: 0.721, alpha: 1.0)
         XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pdfGreen), 1, "PDF Light Green must map to Green (index 1)")
 
-        // Aqua / Teal should map to Teal (7) or Aqua (10)
+        // Aqua / Teal uses the toolbar blue.
         let pdfAqua = NSColor(deviceRed: 0.752, green: 1.0, blue: 0.969, alpha: 1.0)
         let aquaIdx = PDFHighlightImporter.colorIndex(for: pdfAqua)
-        XCTAssertTrue(aquaIdx == 7 || aquaIdx == 10, "PDF Aqua/Teal must map to Teal (7) or Aqua (10), got \(aquaIdx)")
+        XCTAssertEqual(aquaIdx, 2, "Teal must resolve to the third toolbar color")
 
-        // Pink should map to Pink (8)
+        // Pink uses the toolbar coral.
         let pdfPink = NSColor(deviceRed: 1.0, green: 0.859, blue: 0.915, alpha: 1.0)
-        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pdfPink), 8, "PDF Pink must map to Pink (index 8)")
+        XCTAssertEqual(PDFHighlightImporter.colorIndex(for: pdfPink), 3, "Pink must resolve to toolbar coral")
 
         // Pure Blue should map to Blue (2) or Indigo (11)
         let skyBlue = NSColor(deviceRed: 0.5, green: 0.8, blue: 1.0, alpha: 1.0)
@@ -1381,6 +1381,24 @@ final class PDFTests: XCTestCase {
         // Purple / Lavender should map to Lavender (4)
         let purple = NSColor(deviceRed: 0.7, green: 0.4, blue: 0.9, alpha: 1.0)
         XCTAssertEqual(PDFHighlightImporter.colorIndex(for: purple), 4, "Purple must map to Lavender (index 4)")
+    }
+
+    func testDocumentColorMappingUsesToolbarBlueForTeal() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("teal-palette-" + UUID().uuidString + ".pdf")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try makeMultiPageSyntheticPDF(at: url)
+        let document = try XCTUnwrap(PDFDocument(url: url))
+        let page = try XCTUnwrap(document.page(at: 0))
+        let colors = [NSColor.yellow, NSColor.green, NSColor(srgbRed: 0.752, green: 1, blue: 0.969, alpha: 1)]
+        for (index, color) in colors.enumerated() {
+            let annotation = PDFAnnotation(bounds: CGRect(x: 50, y: 700 - index * 30, width: 150, height: 18), forType: .highlight, withProperties: nil)
+            annotation.color = color
+            page.addAnnotation(annotation)
+        }
+        let mapping = PDFHighlightImporter.buildDocumentColorMapping(for: document)
+        XCTAssertEqual(mapping(colors[2]), 2)
+        for color in colors { XCTAssertTrue((0..<6).contains(mapping(color))) }
+        XCTAssertEqual(Set(colors.map(mapping)).count, 3)
     }
 
     func testPDFHighlightImporterDistinctColorMappingNoCollisions() throws {

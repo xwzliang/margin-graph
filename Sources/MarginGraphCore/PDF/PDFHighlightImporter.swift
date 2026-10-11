@@ -217,7 +217,8 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         return result
     }
 
-    /// Maps a single NSColor to the closest MarginNoteTheme pastel colorIndex (0...15) based on perceptual color distance.
+    /// Resolve source hues to the six colors exposed by the note toolbars.
+    /// Extended teal/aqua shades use blue, pink uses coral, and indigo uses purple.
     public static func colorIndex(for color: NSColor) -> Int {
         guard let rgb = ColorRGB(color: color) else { return 0 }
         let palValues = MarginNoteTheme.paletteRGBValues
@@ -235,7 +236,11 @@ public final class PDFHighlightImporter: @unchecked Sendable {
                 bestIdx = idx
             }
         }
-        return bestIdx
+        return primaryPaletteIndex(bestIdx)
+    }
+
+    private static func primaryPaletteIndex(_ extendedIndex: Int) -> Int {
+        [0, 1, 2, 3, 4, 5, 2, 2, 3, 1, 2, 4, 5, 1, 2, 5][extendedIndex]
     }
 
     /// Color cluster structure representing distinct highlight colors used across a PDF document.
@@ -292,19 +297,22 @@ public final class PDFHighlightImporter: @unchecked Sendable {
         // Sort clusters by frequency descending
         clusters.sort { $0.count > $1.count }
 
-        let palValues = MarginNoteTheme.paletteRGBValues
-        let totalPaletteCount = palValues.count // 16
+        let palValues = Array(MarginNoteTheme.paletteRGBValues.prefix(6))
+        let totalPaletteCount = palValues.count
 
-        // Up to 16 clusters can have strictly distinct palette assignments
+        // Up to six clusters can have strictly distinct palette assignments
         let distinctClusterCount = min(clusters.count, totalPaletteCount)
         let topClusters = Array(clusters.prefix(distinctClusterCount))
 
         var costMatrix: [[Double]] = []
         for cluster in topClusters {
             var row: [Double] = []
+            let sourceColor = NSColor(srgbRed: cluster.r, green: cluster.g, blue: cluster.b, alpha: 1)
+            let preferred = palValues[colorIndex(for: sourceColor)]
             for pal in palValues {
-                let dist = perceptualDistance(c1: (cluster.r, cluster.g, cluster.b), c2: (pal.r, pal.g, pal.b))
-                row.append(dist)
+                let hueCost = perceptualDistance(c1: preferred, c2: pal)
+                let sourceCost = perceptualDistance(c1: (cluster.r, cluster.g, cluster.b), c2: pal)
+                row.append(hueCost + sourceCost * 0.01)
             }
             costMatrix.append(row)
         }
@@ -316,20 +324,11 @@ public final class PDFHighlightImporter: @unchecked Sendable {
             clusterToPalette[clusterIdx] = palIdx
         }
 
-        // For any clusters beyond 16 (rare edge case), fall back to closest individual palette match
+        // For any clusters beyond six (rare edge case), fall back to closest individual palette match
         if clusters.count > totalPaletteCount {
             for clusterIdx in totalPaletteCount..<clusters.count {
                 let cluster = clusters[clusterIdx]
-                var bestPal = 0
-                var bestDist = Double.infinity
-                for (pIdx, pal) in palValues.enumerated() {
-                    let d = perceptualDistance(c1: (cluster.r, cluster.g, cluster.b), c2: (pal.r, pal.g, pal.b))
-                    if d < bestDist {
-                        bestDist = d
-                        bestPal = pIdx
-                    }
-                }
-                clusterToPalette[clusterIdx] = bestPal
+                clusterToPalette[clusterIdx] = colorIndex(for: NSColor(srgbRed: cluster.r, green: cluster.g, blue: cluster.b, alpha: 1))
             }
         }
 
