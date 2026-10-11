@@ -153,7 +153,7 @@ public enum TreeLayout {
         }
 
         if hasImage {
-            bodyContentHeight += 82.0
+            bodyContentHeight += 120.0
             bodyItemsCount += 1
         }
 
@@ -183,6 +183,10 @@ public enum TreeLayout {
         let children = Dictionary(grouping: cards, by: { $0.groupNoteId })
         let roots = (children[nil] ?? []).sorted(by: cardOrder)
 
+        // Measure each card once; subtree packing and placement share these metrics.
+        let heights = Dictionary(uniqueKeysWithValues: cards.map {
+            ($0.id, estimatedCardHeight(for: $0, width: configuration.nodeSize.width))
+        })
         var frames: [UUID: CGRect] = [:]
         var visible = Set<UUID>()
         var nextY: CGFloat = 40
@@ -195,7 +199,7 @@ public enum TreeLayout {
         func place(_ card: NoteCard, depth: Int, baseX: CGFloat) -> CGRect {
             let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
             let x = baseX + CGFloat(depth) * (configuration.nodeSize.width + configuration.horizontalSpacing)
-            let cardHeight = estimatedCardHeight(for: card, width: configuration.nodeSize.width)
+            let cardHeight = heights[card.id] ?? configuration.nodeSize.height
             let currentSize = CGSize(width: configuration.nodeSize.width, height: cardHeight)
 
             if card.isFolded || cardChildren.isEmpty {
@@ -230,7 +234,7 @@ public enum TreeLayout {
         }
 
         func estimatedSubtreeHeight(_ card: NoteCard) -> CGFloat {
-            let cardHeight = estimatedCardHeight(for: card, width: configuration.nodeSize.width)
+            let cardHeight = heights[card.id] ?? configuration.nodeSize.height
             let cardChildren = (children[card.id] ?? []).sorted(by: cardOrder)
             if card.isFolded || cardChildren.isEmpty {
                 return cardHeight

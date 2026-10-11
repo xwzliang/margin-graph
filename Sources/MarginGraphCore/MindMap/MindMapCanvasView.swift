@@ -149,7 +149,7 @@ public struct MindMapCanvasView: View {
         self.searchScope = searchScope
         self.currentSearchMatchID = currentSearchMatchID
         self.isSearchActive = isSearchActive
-        self._layoutResult = State(initialValue: TreeLayout.layout(cards: cards))
+        self._layoutResult = State(initialValue: TreeLayoutResult(frames: [:], visibleCardIDs: []))
     }
 
     public static func matchesSearch(card: NoteCard, query: String, scope: MindMapSearchScope = .all) -> Bool {
@@ -208,6 +208,10 @@ public struct MindMapCanvasView: View {
                     viewport: $viewport
                 ))
                 .onAppear {
+                    if layoutResult.frames.isEmpty {
+                        layoutResult = TreeLayout.layout(cards: cards)
+                    }
+                    let frames = layoutResult.frames
                     if proxy.size.width > 20 && proxy.size.height > 20 {
                         viewport.viewportSize = proxy.size
                     }
@@ -492,6 +496,7 @@ public struct MindMapCanvasView: View {
             scrollBars(proxy: proxy, frames: frames)
                 .zIndex(160)
         }
+        .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
     }
 
     private var canvasBackgroundView: some View {
@@ -600,8 +605,8 @@ public struct MindMapCanvasView: View {
                 }
                 .opacity(isBeingDragged ? 0.78 : (isSearching ? (isMatch ? 1.0 : 0.28) : 1.0))
                 .shadow(color: isBeingDragged ? Color.black.opacity(0.25) : Color.clear, radius: 10, y: 5)
-                .scaleEffect(viewport.zoomScale)
-                .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale, alignment: .top)
+                .scaleEffect(viewport.zoomScale, anchor: .topLeading)
+                .frame(width: frame.width * viewport.zoomScale, height: (frame.height + extraHeight) * viewport.zoomScale, alignment: .topLeading)
                 .zIndex(isBeingDragged || editingCardTitleID == card.id ? 100 : (isCurrentMatch ? 90 : (isCardSelected ? 60 : (isTargeted ? 50 : 1))))
                 .contentShape(RoundedRectangle(cornerRadius: 7 * viewport.zoomScale))
                 .gesture(
@@ -611,9 +616,9 @@ public struct MindMapCanvasView: View {
                 .contextMenu {
                     cardContextMenu(for: card)
                 }
-                .position(
-                    x: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).x,
-                    y: viewport.canvasToScreen(CGPoint(x: frame.midX, y: frame.midY + extraHeight / 2)).y
+                .offset(
+                    x: viewport.canvasToScreen(frame.origin).x,
+                    y: viewport.canvasToScreen(frame.origin).y
                 )
             }
         }

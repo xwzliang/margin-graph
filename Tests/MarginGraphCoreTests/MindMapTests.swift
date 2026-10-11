@@ -4,6 +4,33 @@ import SwiftUI
 @testable import MarginGraphCore
 
 final class MindMapTests: XCTestCase {
+    @MainActor
+    func testRenderedLongCardFitsLayoutHeight() {
+        for count in [1, 20, 100] {
+            let card = NoteCard(id: UUID(), topicId: UUID(), title: "Long title wrapping across several lines in the card header",
+                                highlightText: String(repeating: "A long paragraph with several words and punctuation.\n", count: count),
+                                notesText: "Some additional comments")
+            let view = NSHostingView(rootView: CardNodeView(card: card, isSelected: false, hasChildren: false,
+                                                            onSelect: {}, onToggleFold: {}).frame(width: 220))
+            let rendered = view.fittingSize.height
+            XCTAssertLessThanOrEqual(rendered, TreeLayout.estimatedCardHeight(for: card), "Rendered \(rendered) for \(count) paragraphs")
+        }
+    }
+
+    @MainActor
+    func testAhrensRenderedCardsFitReservedLayout() throws {
+        let url = URL(fileURLWithPath: "/Volumes/omv/backups/marginnote/main/MarginGraph.sqlite")
+        guard FileManager.default.fileExists(atPath: url.path) else { throw XCTSkip("Main library unavailable") }
+        let db = try Database(url: url)
+        let cards = NoteCard.filterMarginNoteDocumentRootCard(from: try db.cardsForTopic(id: UUID(uuidString: "98F0B1A7-DC0E-4CF3-8888-9649AC9F3E94")!))
+        guard !cards.isEmpty else { throw XCTSkip("Ahrens notebook unavailable") }
+        for card in cards where card.highlightPicHash == nil {
+            let view = NSHostingView(rootView: CardNodeView(card: card, isSelected: false, hasChildren: false,
+                                                            onSelect: {}, onToggleFold: {}).frame(width: 220))
+            XCTAssertLessThanOrEqual(view.fittingSize.height, TreeLayout.estimatedCardHeight(for: card), "Card \(card.id) exceeds reserved bounds")
+        }
+    }
+
     func testTreeLayoutPlacesChildrenToRightWithoutOverlap() {
         let topic = UUID()
         let root = NoteCard(id: UUID(), topicId: topic, title: "Root")
