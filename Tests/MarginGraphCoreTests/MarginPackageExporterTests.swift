@@ -100,6 +100,8 @@ final class MarginPackageExporterTests: XCTestCase {
         XCTAssertNotEqual(scalar("SELECT Z_UUID FROM Z_METADATA"), "6470D715-D0C6-4BEE-885D-BD40CAE72134")
         XCTAssertFalse(FileManager.default.fileExists(atPath: unpacked.appendingPathComponent("__MACOSX").path))
         XCTAssertEqual(scalar("SELECT ZTITLE FROM ZBOOKCONFIG"), "SampleBook_ Display Title")
+        XCTAssertEqual(scalar("SELECT count(*) FROM ZTOPIC WHERE ZHISTORYDATE IS NOT NULL"), "0")
+        XCTAssertEqual(scalar("SELECT count(*) FROM ZTOPIC WHERE ZLASTVISIT IS NOT NULL AND ZDATE IS NOT NULL"), "1")
         XCTAssertEqual(scalar("SELECT count(*) FROM ZTOPIC t JOIN ZBOOKNOTE n ON n.ZNOTEID=t.ZMINDLINKS AND n.ZTOPICID=t.ZTOPICID"), "1")
         XCTAssertEqual(scalar("SELECT n.ZMINDLINKS FROM ZBOOKNOTE n JOIN ZTOPIC t ON n.ZNOTEID=t.ZMINDLINKS"), card.id.uuidString)
         XCTAssertEqual(scalar("SELECT count(*) FROM ZBOOKNOTE WHERE ZMINDPOS IS NOT NULL"), "2")

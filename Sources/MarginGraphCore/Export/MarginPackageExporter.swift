@@ -372,7 +372,7 @@ public enum MarginPackageExporter {
         INSERT INTO ZTOPIC (
             Z_PK, Z_ENT, Z_OPT, ZISCHINA, ZISLINK, ZPRIVATEFORUM, ZSYNCDIRTY, ZSYNCMODE, ZUSN,
             ZDATE, ZHISTORYDATE, ZLASTVISIT, ZBOOKLIST, ZLOCALBOOKMD5, ZTITLE, ZTOPICID, ZMINDLINKS
-        ) VALUES (?, 11, 1, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?);
+        ) VALUES (?, 11, 1, 0, 0, 0, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, ?);
         """
         if sqlite3_prepare_v2(db, topicSql, -1, &topicStmt, nil) != SQLITE_OK {
             throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
@@ -384,16 +384,17 @@ public enum MarginPackageExporter {
             sqlite3_reset(topicStmt)
             sqlite3_bind_int(topicStmt, 1, Int32(idx + 1))
             sqlite3_bind_double(topicStmt, 2, topic.createdAt.timeIntervalSinceReferenceDate)
+            // ZHISTORYDATE denotes a historical notebook, not its modification time.
+            // Active native packages leave it NULL.
             sqlite3_bind_double(topicStmt, 3, topic.updatedAt.timeIntervalSinceReferenceDate)
-            sqlite3_bind_double(topicStmt, 4, topic.updatedAt.timeIntervalSinceReferenceDate)
             let exportedBooks = topic.bookMD5List.filter { hash in documents.contains { $0.md5 == hash } }
             let bList = exportedBooks.isEmpty ? allDocMD5s : exportedBooks.joined(separator: "|")
+            sqlite3_bind_text(topicStmt, 4, bList, -1, transient)
             sqlite3_bind_text(topicStmt, 5, bList, -1, transient)
-            sqlite3_bind_text(topicStmt, 6, bList, -1, transient)
-            sqlite3_bind_text(topicStmt, 7, topic.title, -1, transient)
-            sqlite3_bind_text(topicStmt, 8, topic.id.uuidString, -1, transient)
+            sqlite3_bind_text(topicStmt, 6, topic.title, -1, transient)
+            sqlite3_bind_text(topicStmt, 7, topic.id.uuidString, -1, transient)
             if let rootID = topicRoots[topic.id] {
-                sqlite3_bind_text(topicStmt, 9, rootID.uuidString, -1, transient)
+                sqlite3_bind_text(topicStmt, 8, rootID.uuidString, -1, transient)
             }
             if sqlite3_step(topicStmt) != SQLITE_DONE {
                 throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
