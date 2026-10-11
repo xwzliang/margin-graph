@@ -915,8 +915,22 @@ final class AppModel: ObservableObject {
                     do {
                         let newDb = try Database(url: url)
                         self.database = newDb
-                        self.mediaStorage.fallbackDirectories.removeAll()
                         self.mediaStorage.clearFallbackDatabase()
+                        // Working databases retain document paths into their source backup.
+                        // Restore attachment lookup from those roots when opened directly.
+                        let roots = Set(((try? newDb.allDocuments()) ?? []).compactMap { document -> URL? in
+                            let source = URL(fileURLWithPath: document.filePath)
+                            return source.pathComponents.indices.reversed().compactMap { index -> URL? in
+                                let component = source.pathComponents[index]
+                                guard ["marginbackupall", "marginbackup", "marginpkg"].contains((component as NSString).pathExtension.lowercased()) else { return nil }
+                                return URL(fileURLWithPath: NSString.path(withComponents: Array(source.pathComponents[...index])))
+                            }.first
+                        })
+                        self.mediaStorage.fallbackDirectories = roots.sorted { $0.path < $1.path }.map {
+                            $0.appendingPathComponent("MarginNotes.sqlite.files")
+                        }
+                        self.mediaStorage.fallbackDatabaseURL = roots.sorted { $0.path < $1.path }.first?
+                            .appendingPathComponent("MarginNotes.sqlite")
                         self.activeDatabaseName = url.lastPathComponent
                         self.activeDatabaseURL = url
                         self.isExternalDatabase = true

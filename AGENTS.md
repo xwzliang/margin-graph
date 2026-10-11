@@ -59,3 +59,7 @@ MARGINGRAPH_SIGNING_IDENTITY='Apple Development: Your Name (TEAMID)' bash script
 ```
 
 Keep the same signer and bundle identifier across builds. The script warns and uses ad hoc signing when no identity exists; that fallback does not promise approval persistence across code changes. Do not use identifier-only designated requirements, alter the TCC database, or grant Full Disk Access as a workaround. Verify with `codesign -d -r- .build/UITesting/MarginGraph.app`, restart without rebuilding, and then repeat after a rebuild signed by the same certificate. Only claim cross-build persistence after verifying that path.
+
+## Commit Completed Fixes
+
+Commit fixes automatically after implementation, mandatory live UI verification, and both required pre-commit tests pass. Do not leave a verified fix uncommitted unless the user requests it.
