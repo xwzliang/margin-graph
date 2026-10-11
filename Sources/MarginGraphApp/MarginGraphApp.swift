@@ -249,13 +249,8 @@ final class AppModel: ObservableObject {
         mediaStorage = try! MediaStorage()
         recentDatabasePaths = UserDefaults.standard.stringArray(forKey: "MarginGraph.RecentDatabases") ?? []
         reloadLibrary()
-        let db = database
-        Task.detached(priority: .utility) { [weak self] in
-            try? db.syncAvailableDocuments()
-            await MainActor.run { [weak self] in
-                self?.reloadLibrary()
-            }
-        }
+        // Launch should load catalog metadata, not probe every stored file path.
+        // Inaccessible files are not missing files; sync can also delete them.
 
         if let backupArgIndex = CommandLine.arguments.firstIndex(of: "--open-backup"),
            backupArgIndex + 1 < CommandLine.arguments.count {

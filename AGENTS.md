@@ -47,3 +47,15 @@ All agents working in this repository must strictly adhere to the guidelines and
 ### Mandatory Lesson Maintenance
 Before completing any task where a bug was diagnosed, an unexpected framework behavior was solved, or an architectural pattern was introduced, **YOU MUST PROACTIVELY UPDATE [`.agents/rules/project-lessons.md`](.agents/rules/project-lessons.md)**.
 
+
+## macOS File Permissions Across Rebuilds
+
+The UI test bundle keeps the same bundle identifier, but a default ad hoc code signature identifies only one build. macOS file-location approvals can recur when executable code changes. Different protected locations may require separate initial approvals; bookmarks or app preferences cannot substitute for macOS privacy approval. The “data from other apps” container-protection prompt is a separate case: its consent can last only for the current app instance, even with stable signing. Do not promise signing will persist that approval. Startup loads catalog metadata without running filesystem synchronization, and shelf/notebook cover previews load durable PNGs from MarginGraph/CoverThumbnails before touching their source files. Generate and persist a missing cover asynchronously; do not suppress covers solely because a source is in another app’s container. Initial generation may require consent, but cached previews must work without source access.
+
+`scripts/prepare-ui-test-app.sh` signs and verifies the entire bundle. It uses `MARGINGRAPH_SIGNING_IDENTITY` when set, otherwise an available Apple Development or Developer ID Application identity. Install a development signing identity through Xcode if none exists, then consistently build with that identity. For example:
+
+```bash
+MARGINGRAPH_SIGNING_IDENTITY='Apple Development: Your Name (TEAMID)' bash scripts/prepare-ui-test-app.sh
+```
+
+Keep the same signer and bundle identifier across builds. The script warns and uses ad hoc signing when no identity exists; that fallback does not promise approval persistence across code changes. Do not use identifier-only designated requirements, alter the TCC database, or grant Full Disk Access as a workaround. Verify with `codesign -d -r- .build/UITesting/MarginGraph.app`, restart without rebuilding, and then repeat after a rebuild signed by the same certificate. Only claim cross-build persistence after verifying that path.

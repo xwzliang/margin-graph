@@ -2276,6 +2276,9 @@ public struct DocumentCardView: View {
             return document.documentType
         }
         let url = URL(fileURLWithPath: document.filePath)
+        if DocumentFileAccess.requiresExplicitOpen(document.filePath) {
+            return MediaDocumentHelper.documentType(for: url)
+        }
         let sidecarFormat = url.deletingPathExtension().appendingPathExtension("format")
         if FileManager.default.fileExists(atPath: sidecarFormat.path),
            let fmt = try? String(contentsOf: sidecarFormat, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !fmt.isEmpty {
@@ -2703,10 +2706,15 @@ public struct DocumentCardView: View {
         if let cached = coverThumbnailCache.object(forKey: key) {
             return cached
         }
+        if let saved = DocumentCoverStore.load(path: path, variant: "shelf-v1") {
+            coverThumbnailCache.setObject(saved, forKey: key)
+            return saved
+        }
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         let url = URL(fileURLWithPath: path)
         if docType == "video" {
             if let img = MediaDocumentHelper.generatePosterFrame(url: url) {
+                DocumentCoverStore.save(img, path: path, variant: "shelf-v1")
                 coverThumbnailCache.setObject(img, forKey: key)
                 return img
             }
@@ -2714,6 +2722,7 @@ public struct DocumentCardView: View {
             // For EPUB, extract native high-resolution cover image directly if available
             if url.pathExtension.lowercased() == "epub" {
                 if let coverImg = MediaDocumentHelper.extractEPUBCoverImage(url: url) {
+                    DocumentCoverStore.save(coverImg, path: path, variant: "shelf-v1")
                     coverThumbnailCache.setObject(coverImg, forKey: key)
                     return coverImg
                 }
@@ -2734,6 +2743,7 @@ public struct DocumentCardView: View {
                 let cropBox = page.bounds(for: .cropBox)
                 let box: PDFDisplayBox = (cropBox.width > 0 && cropBox.height > 0) ? .cropBox : .mediaBox
                 let img = page.thumbnail(of: thumbSize, for: box)
+                DocumentCoverStore.save(img, path: path, variant: "shelf-v1")
                 coverThumbnailCache.setObject(img, forKey: key)
                 return img
             }

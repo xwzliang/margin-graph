@@ -2,6 +2,13 @@ import XCTest
 @testable import MarginGraphCore
 
 final class StudyNotebooksTests: XCTestCase {
+    func testProtectedContainerPathsRequireExplicitOpen() {
+        XCTAssertTrue(DocumentFileAccess.requiresExplicitOpen("/Users/test/Library/Containers/other.app/Data/book.pdf"))
+        XCTAssertTrue(DocumentFileAccess.requiresExplicitOpen("/Users/test/Library/Group Containers/group.other/book.pdf"))
+        XCTAssertFalse(DocumentFileAccess.requiresExplicitOpen("/Users/test/Library/Application Support/MarginGraph/Documents/book.pdf"))
+        XCTAssertFalse(DocumentFileAccess.requiresExplicitOpen("/Volumes/library/Containers/book.pdf"))
+    }
+
     @MainActor
     func testNotebookMatchingDoesNotRequireAnAvailableFile() {
         let document = Document(title: "Book", filePath: "/unavailable/share/book.pdf",

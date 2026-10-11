@@ -502,6 +502,8 @@ public struct NotebookCardView: View {
     }
 
     private nonisolated static func loadMiniCoverThumbnail(path: String) -> NSImage? {
+        if let saved = DocumentCoverStore.load(path: path, variant: "notebook-v1") { return saved }
+        if let shelf = DocumentCoverStore.load(path: path, variant: "shelf-v1") { return shelf }
         guard !path.isEmpty,
               FileManager.default.fileExists(atPath: path),
               let pdfDoc = PDFDocument(url: URL(fileURLWithPath: path)),
@@ -509,7 +511,9 @@ public struct NotebookCardView: View {
             return nil
         }
         let thumbSize = NSSize(width: 44, height: 60)
-        return page.thumbnail(of: thumbSize, for: .mediaBox)
+        let image = page.thumbnail(of: thumbSize, for: .mediaBox)
+        DocumentCoverStore.save(image, path: path, variant: "notebook-v1")
+        return image
     }
 }
 
