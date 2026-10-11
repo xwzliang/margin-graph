@@ -217,11 +217,43 @@ public enum MarginPackageExporter {
             }
         }
 
+        // MarginNote enters a notebook through ZTOPIC.ZMINDLINKS, rather than
+        // discovering arbitrary notes solely by their topic ID.
+        var exportCards = cards
+        var topicRoots: [UUID: UUID] = [:]
+        for topic in topics {
+            let topicCards = cards.filter { $0.topicId == topic.id }
+            let cardIDs = Set(topicCards.map(\.id))
+            let childrenByParent = Dictionary(grouping: topicCards, by: \.groupNoteId)
+            let roots = topicCards.filter { $0.groupNoteId == nil || !cardIDs.contains($0.groupNoteId!) }
+                .sorted(by: TreeLayout.cardOrder)
+            let rootID = Document.stableUUID("marginpkg-root-" + topic.id.uuidString)
+            topicRoots[topic.id] = rootID
+            var root = NoteCard(id: rootID, topicId: topic.id,
+                                bookMD5: documents.first?.md5, title: topic.title)
+            root.mindLinks = roots.map(\.id)
+            root.mindPos = CGPoint(x: 10000, y: 10000)
+            exportCards.append(root)
+            let layout = TreeLayout.layout(cards: topicCards)
+            for index in exportCards.indices where exportCards[index].topicId == topic.id && exportCards[index].id != rootID {
+                exportCards[index].mindLinks.removeAll { !cardIDs.contains($0) }
+                let children = (childrenByParent[exportCards[index].id] ?? [])
+                    .sorted(by: TreeLayout.cardOrder).map(\.id)
+                for child in children where !exportCards[index].mindLinks.contains(child) {
+                    exportCards[index].mindLinks.append(child)
+                }
+                if exportCards[index].mindPos == nil, let frame = layout.frames[exportCards[index].id] {
+                    exportCards[index].mindPos = CGPoint(x: 10300 + frame.minX, y: 10000 + frame.minY)
+                }
+            }
+        }
+
         try populateDatabase(
             dbURL: notesDBURL,
             documents: documents,
             topics: topics,
-            cards: cards,
+            cards: exportCards,
+            topicRoots: topicRoots,
             mediaStorage: mediaStorage
         )
 
@@ -232,7 +264,7 @@ public enum MarginPackageExporter {
 
         let ditto = Process()
         ditto.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        ditto.arguments = ["-c", "-k", "--sequesterRsrc", stagingDir.path, destinationURL.path]
+        ditto.arguments = ["-c", "-k", "--norsrc", stagingDir.path, destinationURL.path]
         try ditto.run()
         ditto.waitUntilExit()
 
@@ -246,6 +278,7 @@ public enum MarginPackageExporter {
         documents: [Document],
         topics: [Topic],
         cards: [NoteCard],
+        topicRoots: [UUID: UUID],
         mediaStorage: MediaStorage
     ) throws {
         var db: OpaquePointer?
@@ -255,6 +288,12 @@ public enum MarginPackageExporter {
         }
         guard let db else { throw MarginPackageExportError.sqliteError("Cannot open db") }
         defer { sqlite3_close(db) }
+
+        // Each export is a new Core Data store, not the template's store.
+        let storeUUID = UUID().uuidString
+        if sqlite3_exec(db, "UPDATE Z_METADATA SET Z_UUID = '\(storeUUID)'", nil, nil, nil) != SQLITE_OK {
+            throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
+        }
 
         let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
@@ -277,7 +316,7 @@ public enum MarginPackageExporter {
             let md5Short = String(doc.md5.prefix(32))
             sqlite3_bind_text(bookConfigStmt, 2, md5Short, -1, transient)
             sqlite3_bind_text(bookConfigStmt, 3, doc.md5, -1, transient)
-            sqlite3_bind_text(bookConfigStmt, 4, doc.title, -1, transient)
+            sqlite3_bind_text(bookConfigStmt, 4, URL(fileURLWithPath: doc.filePath).deletingPathExtension().lastPathComponent, -1, transient)
             if sqlite3_step(bookConfigStmt) != SQLITE_DONE {
                 throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
             }
@@ -288,8 +327,8 @@ public enum MarginPackageExporter {
         let topicSql = """
         INSERT INTO ZTOPIC (
             Z_PK, Z_ENT, Z_OPT, ZISCHINA, ZISLINK, ZPRIVATEFORUM, ZSYNCDIRTY, ZSYNCMODE, ZUSN,
-            ZDATE, ZHISTORYDATE, ZLASTVISIT, ZBOOKLIST, ZLOCALBOOKMD5, ZTITLE, ZTOPICID
-        ) VALUES (?, 11, 1, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?);
+            ZDATE, ZHISTORYDATE, ZLASTVISIT, ZBOOKLIST, ZLOCALBOOKMD5, ZTITLE, ZTOPICID, ZMINDLINKS
+        ) VALUES (?, 11, 1, 0, 0, 0, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         if sqlite3_prepare_v2(db, topicSql, -1, &topicStmt, nil) != SQLITE_OK {
             throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
@@ -303,11 +342,15 @@ public enum MarginPackageExporter {
             sqlite3_bind_double(topicStmt, 2, topic.createdAt.timeIntervalSinceReferenceDate)
             sqlite3_bind_double(topicStmt, 3, topic.updatedAt.timeIntervalSinceReferenceDate)
             sqlite3_bind_double(topicStmt, 4, topic.updatedAt.timeIntervalSinceReferenceDate)
-            let bList = topic.bookMD5List.isEmpty ? allDocMD5s : topic.bookMD5List.joined(separator: "|")
+            let exportedBooks = topic.bookMD5List.filter { hash in documents.contains { $0.md5 == hash } }
+            let bList = exportedBooks.isEmpty ? allDocMD5s : exportedBooks.joined(separator: "|")
             sqlite3_bind_text(topicStmt, 5, bList, -1, transient)
             sqlite3_bind_text(topicStmt, 6, bList, -1, transient)
             sqlite3_bind_text(topicStmt, 7, topic.title, -1, transient)
             sqlite3_bind_text(topicStmt, 8, topic.id.uuidString, -1, transient)
+            if let rootID = topicRoots[topic.id] {
+                sqlite3_bind_text(topicStmt, 9, rootID.uuidString, -1, transient)
+            }
             if sqlite3_step(topicStmt) != SQLITE_DONE {
                 throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
             }
@@ -392,7 +435,7 @@ public enum MarginPackageExporter {
             }
 
             if let pos = card.mindPos {
-                sqlite3_bind_text(noteStmt, 14, "{\(pos.x), \(pos.y)}", -1, transient)
+                sqlite3_bind_text(noteStmt, 14, "\(pos.x),\(pos.y)", -1, transient)
             } else {
                 sqlite3_bind_null(noteStmt, 14)
             }

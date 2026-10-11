@@ -1,5 +1,6 @@
 import XCTest
 import Foundation
+import SQLite3
 @testable import MarginGraphCore
 
 final class MarginPackageExporterTests: XCTestCase {
@@ -33,7 +34,7 @@ final class MarginPackageExporterTests: XCTestCase {
         let docMD5 = "sample_doc_md5_1234567890abcdef1234567890abcdef1234567890abcdef12345678"
         let doc = Document(
             id: Document.stableUUID(docMD5),
-            title: "SampleBook",
+            title: "SampleBook: Display Title",
             filePath: pdfFile.path,
             md5: docMD5,
             totalPages: 5,
@@ -75,6 +76,33 @@ final class MarginPackageExporterTests: XCTestCase {
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: exportURL.path))
         XCTAssertGreaterThan(try FileManager.default.attributesOfItem(atPath: exportURL.path)[.size] as? Int64 ?? 0, 1000)
+
+        // Validate the native package contract, independently of our importer.
+        let unpacked = tempDir.appendingPathComponent("native_package")
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        unzip.arguments = ["-x", "-k", exportURL.path, unpacked.path]
+        try unzip.run()
+        unzip.waitUntilExit()
+        XCTAssertEqual(unzip.terminationStatus, 0)
+        let notesURL = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: unpacked, includingPropertiesForKeys: nil)
+            .first { $0.pathExtension == "marginnotes" })
+        var nativeDB: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(notesURL.path, &nativeDB), SQLITE_OK)
+        defer { sqlite3_close(nativeDB) }
+        func scalar(_ sql: String) -> String? {
+            var statement: OpaquePointer?
+            guard sqlite3_prepare_v2(nativeDB, sql, -1, &statement, nil) == SQLITE_OK else { return nil }
+            defer { sqlite3_finalize(statement) }
+            guard sqlite3_step(statement) == SQLITE_ROW, let value = sqlite3_column_text(statement, 0) else { return nil }
+            return String(cString: value)
+        }
+        XCTAssertNotEqual(scalar("SELECT Z_UUID FROM Z_METADATA"), "6470D715-D0C6-4BEE-885D-BD40CAE72134")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: unpacked.appendingPathComponent("__MACOSX").path))
+        XCTAssertEqual(scalar("SELECT ZTITLE FROM ZBOOKCONFIG"), "SampleBook")
+        XCTAssertEqual(scalar("SELECT count(*) FROM ZTOPIC t JOIN ZBOOKNOTE n ON n.ZNOTEID=t.ZMINDLINKS AND n.ZTOPICID=t.ZTOPICID"), "1")
+        XCTAssertEqual(scalar("SELECT n.ZMINDLINKS FROM ZBOOKNOTE n JOIN ZTOPIC t ON n.ZNOTEID=t.ZMINDLINKS"), card.id.uuidString)
+        XCTAssertEqual(scalar("SELECT count(*) FROM ZBOOKNOTE WHERE ZMINDPOS IS NOT NULL"), "2")
 
         // Read package back using MarginNoteImporter
         let destDocs = tempDir.appendingPathComponent("imported_docs")
@@ -153,7 +181,7 @@ final class MarginPackageExporterTests: XCTestCase {
         let result = try importer.read()
 
         XCTAssertEqual(result.documents.count, 2)
-        XCTAssertEqual(result.cards.count, 2)
+        XCTAssertEqual(result.cards.count, 3) // Includes the notebook entry root.
     }
 
     @MainActor
