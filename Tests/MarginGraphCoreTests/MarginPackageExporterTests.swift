@@ -15,6 +15,22 @@ final class MarginPackageExporterTests: XCTestCase {
         try? FileManager.default.removeItem(at: tempDir)
     }
 
+    func testNativeSampledBookHashAndHexPalette() throws {
+        let file = tempDir.appendingPathComponent("samples.pdf")
+        var bytes = Data()
+        for index in 0..<100000 {
+            let value = (index * 17 + index / 997) % 256
+            bytes.append(UInt8(value))
+        }
+        try bytes.write(to: file)
+        // Independently calculated MD5 of first 61440 bytes + tail/middle samples.
+        XCTAssertEqual(try MarginPackageExporter.nativeBookHash(url: file), "4f1cc3e263c03b76d3e0f4b7b37b68cacb285c681178d88b9ba6327397000e06")
+        try Data("abc".utf8).write(to: file)
+        XCTAssertEqual(try MarginPackageExporter.nativeBookHash(url: file), "900150983cd24fb0d6963f7d28e17f72900150983cd24fb0d6963f7d28e17f72")
+        XCTAssertEqual(MarginPackageExporter.nativeHighlightStyle(colorIndex: 7), "mbooks-annotationa")
+        XCTAssertEqual(MarginPackageExporter.nativeHighlightStyle(colorIndex: 4), "mbooks-annotationf")
+    }
+
     func testSuggestedFilenameSanitizesBookAndFolderTitles() {
         XCTAssertEqual(MarginPackageExporter.sanitizeFilename("Homo Deus: A Brief History of Tomorrow"),
                        "Homo Deus_ A Brief History of Tomorrow")
@@ -59,10 +75,11 @@ final class MarginPackageExporterTests: XCTestCase {
             notesText: "My personal study commentary.",
             startPage: 2,
             endPage: 2,
-            colorIndex: 3,
-            highlightRects: [
-                HighlightRect(page: 2, x: 50, y: 100, width: 200, height: 18)
-            ]
+            colorIndex: 7,
+            highlightRects: [HighlightRect(page: 2, x: 50, y: 100, width: 200, height: 18),
+                             HighlightRect(page: 3, x: 50, y: 200, width: 200, height: 18)],
+            excerptSegments: [ExcerptSegment(text: "First selection", rects: [HighlightRect(page: 2, x: 50, y: 100, width: 200, height: 18)]),
+                              ExcerptSegment(text: "Second selection", rects: [HighlightRect(page: 3, x: 50, y: 200, width: 200, height: 18)])]
         )
         try db.insertCard(card)
 
@@ -112,7 +129,21 @@ final class MarginPackageExporterTests: XCTestCase {
         let blob = try XCTUnwrap(sqlite3_column_blob(highlightStatement, 0))
         let archive = Data(bytes: blob, count: Int(sqlite3_column_bytes(highlightStatement, 0)))
         let nativeHighlights = try XCTUnwrap(NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(archive) as? [[String: Any]])
-        XCTAssertEqual(nativeHighlights.count, 1)
+        XCTAssertEqual(nativeHighlights.count, 2)
+        XCTAssertEqual(nativeHighlights[0]["highlight_text"] as? String, "First selection")
+        XCTAssertEqual(nativeHighlights[1]["highlight_text"] as? String, "Second selection")
+        let secondJSON = try XCTUnwrap(MarginPackageExporter.decompressGzip(try XCTUnwrap(nativeHighlights[1]["textSelData"] as? Data)))
+        let secondRects = try XCTUnwrap(JSONSerialization.jsonObject(with: secondJSON) as? [[String: Any]])
+        XCTAssertEqual(secondRects.first?["pageNo"] as? Int, 4)
+        XCTAssertEqual(scalar("SELECT ZHIGHLIGHT_STYLE FROM ZBOOKNOTE WHERE ZNOTETITLE='Concept A'"), "mbooks-annotationa")
+        let nativeHash = try MarginPackageExporter.nativeBookHash(url: pdfFile)
+        XCTAssertEqual(scalar("SELECT ZMD5LONG FROM ZBOOKCONFIG"), nativeHash)
+        XCTAssertEqual(scalar("SELECT ZLOCALBOOKMD5 FROM ZTOPIC"), nativeHash)
+        XCTAssertEqual(scalar("SELECT ZBOOKMD5 FROM ZBOOKNOTE WHERE ZNOTETITLE='Concept A'"), nativeHash)
+        let owner = try XCTUnwrap(scalar("SELECT ZFORUMOWNER FROM ZTOPIC"))
+        let metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(owner.utf8)) as? [String: Any])
+        let groups = try XCTUnwrap(metadata["bookGroupNotes"] as? [String: [String: String]])
+        XCTAssertEqual(groups[nativeHash]?["noteid"], scalar("SELECT ZMINDLINKS FROM ZTOPIC"))
         let selectionData = try XCTUnwrap(nativeHighlights[0]["textSelData"] as? Data)
         XCTAssertEqual(Array(selectionData.prefix(2)), [0x1f, 0x8b])
         XCTAssertNil(nativeHighlights[0]["textSelLst"])
@@ -130,7 +161,7 @@ final class MarginPackageExporterTests: XCTestCase {
         let result = try importer.read()
 
         XCTAssertFalse(result.documents.isEmpty)
-        XCTAssertEqual(result.documents[0].md5, docMD5)
+        XCTAssertEqual(result.documents[0].md5, try MarginPackageExporter.nativeBookHash(url: pdfFile))
         XCTAssertEqual(result.documents[0].title, "SampleBook_ Display Title")
 
         XCTAssertFalse(result.topics.isEmpty)
@@ -283,7 +314,14 @@ final class MarginPackageExporterTests: XCTestCase {
         let result = try importer.read()
 
         XCTAssertEqual(result.documents.count, 2)
-        XCTAssertEqual(result.cards.count, 2) // Structural root is not an excerpt card.
+        XCTAssertEqual(result.cards.filter { $0.title == "L1 Card" || $0.title == "L2 Card" }.count, 2)
+        let bookRoots = result.cards.filter { $0.title == "Lecture1" || $0.title == "Lecture2" }
+        XCTAssertEqual(bookRoots.count, 2)
+        for root in bookRoots {
+            XCTAssertEqual(root.mindLinks.count, 1)
+            let child = try XCTUnwrap(result.cards.first { $0.id == root.mindLinks.first })
+            XCTAssertEqual(child.bookMD5, root.bookMD5)
+        }
     }
 
     @MainActor

@@ -68,6 +68,35 @@ public enum MarginPackageExporter {
         return decompressed.isEmpty ? nil : decompressed
     }
 
+    /// Native BookMd5FromFileHandle: MD5 of complete 4 KiB chunks before
+    /// the 64 KiB/EOF boundary, followed by MD5 of tail + middle samples.
+    static func nativeBookHash(url: URL) throws -> String {
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        let size = try file.seekToEnd()
+        try file.seek(toOffset: 0)
+        let prefixLength = size < 65536 ? size : 61440
+        let prefix = try file.read(upToCount: Int(prefixLength)) ?? Data()
+        func digest(_ data: Data) -> String {
+            Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        }
+        let first = digest(prefix)
+        guard size > 65536 else { return first + first }
+        try file.seek(toOffset: size - 8192)
+        var sample = try file.read(upToCount: 8192) ?? Data()
+        try file.seek(toOffset: size / 2 - 4096)
+        sample.append(try file.read(upToCount: 8192) ?? Data())
+        return first + digest(sample)
+    }
+
+    static func nativeHighlightStyle(colorIndex: Int) -> String {
+        // MarginGraph's pastel palette differs from MarginNote's native palette.
+        // In particular native 7 is red, not our teal. Use the nearest native hue.
+        let nativeColors = [0, 1, 2, 3, 15, 8, 13, 10, 3, 1, 6, 15, 8, 1, 2, 0]
+        let index = ((colorIndex % nativeColors.count) + nativeColors.count) % nativeColors.count
+        return "mbooks-annotation" + String(nativeColors[index], radix: 16)
+    }
+
     public static func exportDocument(
         document: Document,
         database: Database,
@@ -265,6 +294,7 @@ public enum MarginPackageExporter {
             return card
         }
         var topicRoots: [UUID: UUID] = [:]
+        var bookRoots: [UUID: [String: UUID]] = [:]
         for topic in topics {
             let topicCards = cards.filter { $0.topicId == topic.id }
             let cardIDs = Set(topicCards.map(\.id))
@@ -277,9 +307,27 @@ public enum MarginPackageExporter {
                                 bookMD5: documents.first?.md5, title: topic.title)
             root.mindLinks = roots.map(\.id)
             root.mindPos = CGPoint(x: 10000, y: 10000)
+            let topicBooks = documents.filter { book in topic.bookMD5List.contains(book.md5) || topicCards.contains(where: { card in card.bookMD5 == book.md5 }) }
+            let books = topicBooks.isEmpty ? documents : topicBooks
+            if books.count == 1, let book = books.first {
+                root.bookMD5 = book.md5
+                bookRoots[topic.id] = [book.md5: rootID]
+            } else {
+                root.bookMD5 = nil
+                root.mindLinks = roots.filter { $0.bookMD5 == nil }.map(\.id)
+                for (index, book) in books.enumerated() {
+                    let bookRootID = Document.stableUUID("marginpkg-book-root-" + topic.id.uuidString + book.md5)
+                    var bookRoot = NoteCard(id: bookRootID, topicId: topic.id, bookMD5: book.md5, title: book.title)
+                    bookRoot.mindLinks = roots.filter { $0.bookMD5 == book.md5 }.map(\.id)
+                    bookRoot.mindPos = CGPoint(x: 10300, y: 10000 + index * 300)
+                    exportCards.append(bookRoot)
+                    root.mindLinks.append(bookRootID)
+                    bookRoots[topic.id, default: [:]][book.md5] = bookRootID
+                }
+            }
             exportCards.append(root)
             let layout = TreeLayout.layout(cards: topicCards)
-            for index in exportCards.indices where exportCards[index].topicId == topic.id && exportCards[index].id != rootID {
+            for index in exportCards.indices where exportCards[index].topicId == topic.id && cardIDs.contains(exportCards[index].id) {
                 exportCards[index].mindLinks.removeAll { !cardIDs.contains($0) }
                 let children = (childrenByParent[exportCards[index].id] ?? [])
                     .sorted(by: TreeLayout.cardOrder).map(\.id)
@@ -292,12 +340,36 @@ public enum MarginPackageExporter {
             }
         }
 
+        // Reconstructed packages must identify the actual bundled bytes using
+        // MarginNote's sampled-file identity, independently of local catalog hashes.
+        var nativeHashes: [String: String] = [:]
+        for index in packagedDocuments.indices {
+            let oldHash = packagedDocuments[index].md5
+            let newHash = try nativeBookHash(url: URL(fileURLWithPath: packagedDocuments[index].filePath))
+            nativeHashes[oldHash] = newHash
+            packagedDocuments[index].md5 = newHash
+        }
+        for index in exportCards.indices {
+            if let oldHash = exportCards[index].bookMD5 { exportCards[index].bookMD5 = nativeHashes[oldHash] ?? oldHash }
+        }
+        var exportTopics = topics
+        for index in exportTopics.indices {
+            exportTopics[index].bookMD5List = exportTopics[index].bookMD5List.map { nativeHashes[$0] ?? $0 }
+        }
+        let nativeBookRoots = bookRoots.mapValues { roots in
+            roots.sorted { $0.key < $1.key }.reduce(into: [String: UUID]()) { result, entry in
+                let hash = nativeHashes[entry.key] ?? entry.key
+                if result[hash] == nil { result[hash] = entry.value }
+            }
+        }
+
         try populateDatabase(
             dbURL: notesDBURL,
             documents: packagedDocuments,
-            topics: topics,
+            topics: exportTopics,
             cards: exportCards,
             topicRoots: topicRoots,
+            bookRoots: nativeBookRoots,
             mediaStorage: mediaStorage
         )
 
@@ -323,6 +395,7 @@ public enum MarginPackageExporter {
         topics: [Topic],
         cards: [NoteCard],
         topicRoots: [UUID: UUID],
+        bookRoots: [UUID: [String: UUID]],
         mediaStorage: MediaStorage
     ) throws {
         var db: OpaquePointer?
@@ -371,8 +444,8 @@ public enum MarginPackageExporter {
         let topicSql = """
         INSERT INTO ZTOPIC (
             Z_PK, Z_ENT, Z_OPT, ZISCHINA, ZISLINK, ZPRIVATEFORUM, ZSYNCDIRTY, ZSYNCMODE, ZUSN,
-            ZDATE, ZHISTORYDATE, ZLASTVISIT, ZBOOKLIST, ZLOCALBOOKMD5, ZTITLE, ZTOPICID, ZMINDLINKS
-        ) VALUES (?, 11, 1, 0, 0, 0, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, ?);
+            ZDATE, ZHISTORYDATE, ZLASTVISIT, ZBOOKLIST, ZLOCALBOOKMD5, ZTITLE, ZTOPICID, ZMINDLINKS, ZFORUMOWNER
+        ) VALUES (?, 11, 1, 0, 0, 0, 0, 0, 0, ?, NULL, ?, ?, ?, ?, ?, ?, ?);
         """
         if sqlite3_prepare_v2(db, topicSql, -1, &topicStmt, nil) != SQLITE_OK {
             throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
@@ -396,6 +469,9 @@ public enum MarginPackageExporter {
             if let rootID = topicRoots[topic.id] {
                 sqlite3_bind_text(topicStmt, 8, rootID.uuidString, -1, transient)
             }
+            let groups = (bookRoots[topic.id] ?? [:]).mapValues { ["noteid": $0.uuidString] }
+            let ownerData = try JSONSerialization.data(withJSONObject: ["bookGroupNotes": groups, "enableTextLinks": true], options: [.sortedKeys])
+            sqlite3_bind_text(topicStmt, 9, String(decoding: ownerData, as: UTF8.self), -1, transient)
             if sqlite3_step(topicStmt) != SQLITE_DONE {
                 throw MarginPackageExportError.sqliteError(String(cString: sqlite3_errmsg(db)))
             }
@@ -467,7 +543,7 @@ public enum MarginPackageExporter {
                 sqlite3_bind_null(noteStmt, 9)
             }
 
-            let styleStr = "mbooks-annotation\(card.colorIndex)"
+            let styleStr = nativeHighlightStyle(colorIndex: card.colorIndex)
             sqlite3_bind_text(noteStmt, 10, styleStr, -1, transient)
             sqlite3_bind_text(noteStmt, 11, card.highlightText, -1, transient)
 
@@ -517,21 +593,24 @@ public enum MarginPackageExporter {
             }
 
             // ZHIGHLIGHTS
-            if !card.highlightRects.isEmpty {
-                let rectsList = card.highlightRects.map { r -> [String: Any] in
-                    ["pageNo": r.page + 1,
-                     "rect": ["_jsonvalueType": "CGRect", "x": r.x, "y": r.y,
-                              "w": r.width, "h": r.height]]
+            if !card.highlightRects.isEmpty || card.excerptSegments.contains(where: { !$0.rects.isEmpty }) {
+                let selections = card.excerptSegments.isEmpty
+                    ? [ExcerptSegment(text: card.highlightText, rects: card.highlightRects)]
+                    : card.excerptSegments
+                let highlights = NSMutableArray()
+                for selection in selections where !selection.rects.isEmpty {
+                    let rectsList = selection.rects.map { r -> [String: Any] in
+                        ["pageNo": r.page + 1,
+                         "rect": ["_jsonvalueType": "CGRect", "x": r.x, "y": r.y,
+                                  "w": r.width, "h": r.height]]
+                    }
+                    let json = try JSONSerialization.data(withJSONObject: rectsList, options: [.sortedKeys])
+                    highlights.add(NSMutableDictionary(dictionary: [
+                        "highlight_text": NSMutableString(string: selection.text),
+                        "textSelData": NSMutableData(data: try gzip(json)),
+                        "coords_hash": Insecure.MD5.hash(data: json).map { String(format: "%02x", $0) }.joined()
+                    ]))
                 }
-                let json = try JSONSerialization.data(withJSONObject: rectsList, options: [.sortedKeys])
-                let compressed = try gzip(json)
-                let hlDict = NSMutableDictionary(dictionary: [
-                    "highlight_text": NSMutableString(string: card.highlightText),
-                    "textSelData": NSMutableData(data: compressed),
-                    "coords_hash": Insecure.MD5.hash(data: json).map { String(format: "%02x", $0) }.joined()
-                ])
-                // Native MarginNote archives an ARRAY of highlight dictionaries.
-                let highlights = NSMutableArray(object: hlDict)
                 if let data = try? NSKeyedArchiver.archivedData(withRootObject: highlights, requiringSecureCoding: false) {
                     _ = data.withUnsafeBytes { rawBuf in
                         sqlite3_bind_blob(noteStmt, 21, rawBuf.baseAddress, Int32(data.count), transient)
