@@ -249,7 +249,7 @@ public final class MarginNoteImporter {
                            titleWithoutExt.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame
                 }) {
                     resolvedPath = match.path
-                } else if extractedDocuments.count == 1 {
+                } else if extractedDocuments.count == 1 && rawBookRows.count == 1 {
                     resolvedPath = extractedDocuments[0].path
                 } else if !fileName.isEmpty {
                     for dir in documentSearchPaths {
@@ -786,6 +786,8 @@ public final class MarginNoteImporter {
             try? database.execute("ROLLBACK;")
             throw error
         }
+
+        try ImportedPackageStore.retain(url: url, result: result, database: database)
 
         return result
     }

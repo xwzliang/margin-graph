@@ -1245,7 +1245,7 @@ final class AppModel: ObservableObject {
             reloadLibrary()
             reloadStudySet()
 
-            if let firstDoc = result.documents.first {
+            if let firstDoc = result.documents.first(where: { !$0.filePath.isEmpty }) {
                 openDocumentInReader(document: firstDoc)
             } else if let firstTopic = result.topics.first {
                 enterStudyWorkspace(topic: firstTopic)

@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 4
+    private static let currentSchemaVersion: Int32 = 5
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -177,6 +177,12 @@ public final class Database: @unchecked Sendable {
         }
 
         try execute("""
+        CREATE TABLE IF NOT EXISTS imported_packages(
+            document_md5 TEXT PRIMARY KEY,
+            topic_ids TEXT NOT NULL,
+            snapshot BLOB NOT NULL,
+            archive BLOB NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS documents(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, file_path TEXT NOT NULL,
             md5 TEXT NOT NULL UNIQUE, total_pages INTEGER NOT NULL, last_visited REAL,

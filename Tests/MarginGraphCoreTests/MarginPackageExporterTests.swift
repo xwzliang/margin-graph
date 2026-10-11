@@ -167,6 +167,69 @@ final class MarginPackageExporterTests: XCTestCase {
         XCTAssertThrowsError(try MarginPackageExporter.exportDocument(document: doc, database: db, mediaStorage: media, destinationURL: tempDir.appendingPathComponent("missing.marginpkg")))
     }
 
+    func testUnchangedImportedPackageExportsIdenticalBytesAndEditsInvalidateIt() throws {
+        let db = try Database(inMemory: true)
+        let media = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))
+        let pdf = tempDir.appendingPathComponent("source.pdf")
+        try Data("document bytes".utf8).write(to: pdf)
+        let doc = Document(title: "Native Source", filePath: pdf.path, md5: "native-book", totalPages: 1)
+        try db.insertDocument(doc)
+        let topic = Topic(title: "Native Notebook", bookMD5List: [doc.md5])
+        try db.insertTopic(topic)
+        let card = NoteCard(topicId: topic.id, bookMD5: doc.md5, title: "Original note")
+        try db.insertCard(card)
+        let original = tempDir.appendingPathComponent("original.marginpkg")
+        try MarginPackageExporter.exportDocument(document: doc, database: db, mediaStorage: media, destinationURL: original)
+        let importedDB = try Database(inMemory: true)
+        let result = try MarginNoteImporter(url: original, documentsDestinationDirectory: tempDir.appendingPathComponent("documents"), mediaStorage: media).importInto(importedDB)
+        let imported = try XCTUnwrap(result.documents.first)
+        let retainedDocument = try XCTUnwrap(importedDB.getDocumentByMD5(md5: imported.md5))
+        var visitedTopic = try XCTUnwrap(importedDB.allTopics().first)
+        visitedTopic.updatedAt = Date()
+        visitedTopic.mindPanX = 123
+        visitedTopic.mindZoomScale = 2
+        visitedTopic.lastDocumentMD5 = imported.md5
+        visitedTopic.bookMD5List.reverse()
+        try importedDB.updateTopic(visitedTopic)
+        let output = tempDir.appendingPathComponent("reexport.marginpkg")
+        try MarginPackageExporter.exportDocument(document: retainedDocument, database: importedDB, mediaStorage: media, destinationURL: output)
+        XCTAssertEqual(try Data(contentsOf: original), try Data(contentsOf: output))
+        var edited = try XCTUnwrap(importedDB.getCard(id: card.id))
+        edited.notesText = "A new edit must not be lost"
+        try importedDB.updateCard(edited)
+        XCTAssertNil(try ImportedPackageStore.originalArchive(document: retainedDocument, database: importedDB))
+        try MarginPackageExporter.exportDocument(document: retainedDocument, database: importedDB, mediaStorage: media, destinationURL: output)
+        XCTAssertNotEqual(try Data(contentsOf: original), try Data(contentsOf: output))
+        let editedResult = try MarginNoteImporter(url: output, documentsDestinationDirectory: tempDir.appendingPathComponent("edited_documents")).read()
+        XCTAssertEqual(editedResult.cards.first { $0.id == card.id }?.notesText, edited.notesText)
+    }
+
+    func testThreeNativeReferencePackagesRoundTripExactly() throws {
+        let names = [
+            "Ahrens_2017_How-to-take-smart-notes(2026-09-18-19-49-00).marginpkg",
+            "Adler_Doren_2014_How to Read a Book(2026-09-18-19-48-24).marginpkg",
+            "Save the Cat! _ The Last Book on Screenwriting You'll Ever -- Snyder, Blake -- Lightning Source Inc_ (Tier 1), [N_p_], 2005 -- Michael Wiese(2026-09-18-19-47-30).marginpkg"
+        ]
+        let sourceDirectory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        guard names.allSatisfy({ FileManager.default.fileExists(atPath: sourceDirectory.appendingPathComponent($0).path) }) else {
+            throw XCTSkip("Local native reference packages are unavailable")
+        }
+        let db = try Database(inMemory: true)
+        let media = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))
+        var importedDocuments: [Document] = []
+        for name in names {
+            let result = try MarginNoteImporter(url: sourceDirectory.appendingPathComponent(name),
+                documentsDestinationDirectory: tempDir.appendingPathComponent("documents"), mediaStorage: media).importInto(db)
+            importedDocuments.append(try XCTUnwrap(result.documents.first { !$0.filePath.isEmpty }))
+        }
+        for (index, document) in importedDocuments.enumerated() {
+            let stored = try XCTUnwrap(db.getDocumentByMD5(md5: document.md5))
+            let output = tempDir.appendingPathComponent("exact-\(index).marginpkg")
+            try MarginPackageExporter.exportDocument(document: stored, database: db, mediaStorage: media, destinationURL: output)
+            XCTAssertEqual(try Data(contentsOf: sourceDirectory.appendingPathComponent(names[index])), try Data(contentsOf: output), names[index])
+        }
+    }
+
     func testExportFolderAndImportBack() throws {
         let db = try Database(inMemory: true)
         let mediaStorage = try MediaStorage(directoryURL: tempDir.appendingPathComponent("media"))

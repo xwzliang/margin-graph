@@ -74,6 +74,12 @@ public enum MarginPackageExporter {
         mediaStorage: MediaStorage,
         destinationURL: URL
     ) throws {
+        if let original = try ImportedPackageStore.originalArchive(document: document, database: database) {
+            try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try original.write(to: destinationURL, options: .atomic)
+            return
+        }
+
         let allTopics = (try? database.allTopics()) ?? []
         let topics = allTopics.filter { $0.bookMD5List.contains(document.md5) }
         let targetTopics: [Topic]
