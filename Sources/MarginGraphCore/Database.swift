@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 3
+    private static let currentSchemaVersion: Int32 = 4
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -343,6 +343,13 @@ public final class Database: @unchecked Sendable {
         if version == 0 {
             try? execute("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
         }
+        try execute("""
+        CREATE TABLE IF NOT EXISTS topic_document_exclusions(
+            topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+            book_md5 TEXT NOT NULL,
+            PRIMARY KEY(topic_id, book_md5)
+        );
+        """)
         try repairDocumentIDs()
         try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
     }

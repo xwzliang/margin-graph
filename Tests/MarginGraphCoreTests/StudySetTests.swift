@@ -27,6 +27,40 @@ final class StudySetTests: XCTestCase {
         XCTAssertEqual(try database.documentsForTopic(id: topic.id).map(\.md5), [second.md5])
     }
 
+    func testDocumentRoutingUsesOwnCardsAndRespectsDetach() throws {
+        let database = try Database(inMemory: true)
+        let rock = Document(title: "Rock", filePath: "/tmp/rock.pdf", md5: "rock-hash", totalPages: 10)
+        let ahrens = Topic(title: "Rock", bookMD5List: ["ahrens-hash", rock.md5])
+        let own = Topic(title: "Rock", bookMD5List: [rock.md5])
+        try database.insertDocument(rock)
+        try database.insertTopic(ahrens)
+        try database.insertTopic(own)
+        for _ in 0..<10 {
+            try database.insertCard(NoteCard(topicId: ahrens.id, bookMD5: "ahrens-hash", title: "Ahrens card"))
+        }
+        try database.insertCard(NoteCard(topicId: own.id, bookMD5: rock.md5, title: "Rock card"))
+        XCTAssertEqual(try database.preferredTopic(for: rock, topics: [ahrens, own])?.id, own.id)
+
+        // Even a stale in-memory topic or matching card/title must not undo removal.
+        try database.removeDocument(from: own.id, md5: rock.md5)
+        XCTAssertNil(try database.preferredTopic(for: rock, topics: [own]))
+        XCTAssertTrue(try database.documentsForTopic(id: own.id).isEmpty)
+        try database.addDocument(to: own.id, md5: rock.md5)
+        XCTAssertEqual(try database.preferredTopic(for: rock, topics: [own])?.id, own.id)
+        XCTAssertEqual(try database.documentsForTopic(id: own.id).map(\.id), [rock.id])
+    }
+
+    func testDetachRemovesPrefixAttachmentAndLastDocument() throws {
+        let database = try Database(inMemory: true)
+        let topic = Topic(title: "Book", bookMD5List: ["abcdef"], lastDocumentMD5: "abcdef")
+        try database.insertTopic(topic)
+        try database.removeDocument(from: topic.id, md5: "abcdef123")
+        let updated = try XCTUnwrap(database.getTopic(id: topic.id))
+        XCTAssertTrue(updated.bookMD5List.isEmpty)
+        XCTAssertNil(updated.lastDocumentMD5)
+        XCTAssertFalse(Database.bookHashesMatch("", "abcdef"))
+    }
+
     func testMarkdownExporterHierarchyAndContent() {
         let topic = Topic(title: "Physics")
         let relationID = UUID()
