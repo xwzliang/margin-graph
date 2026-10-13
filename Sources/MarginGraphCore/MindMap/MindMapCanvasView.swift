@@ -1411,16 +1411,14 @@ public struct MindMapCanvasView: View {
         for link in displayedLinks where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
             guard let source = frames[link.sourceCardId], let target = frames[link.targetCardId] else { continue }
             var relation = Path()
-            relation.addPath(Path(TreeLayout.connectorPath(from: source, to: target)))
+            relation.move(to: CGPoint(x: source.midX, y: source.midY))
+            relation.addLine(to: CGPoint(x: target.midX, y: target.midY))
             context.stroke(
                 transformed(relation),
-                with: .color(Color.gray.opacity(0.75)),
-                style: StrokeStyle(lineWidth: 2.0, dash: [6, 3])
+                with: .color(Color.gray.opacity(0.35)),
+                style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
             )
 
-            var arrow = Path()
-            arrow.addPath(Path(TreeLayout.arrowHead(for: TreeLayout.connectorPath(from: source, to: target), at: target)))
-            context.fill(transformed(arrow), with: .color(Color.gray.opacity(0.85)))
         }
     }
 
