@@ -167,6 +167,11 @@ public enum TreeLayout {
         }
 
         let bodyHeight: CGFloat = bodyItemsCount > 0 ? (bodyContentHeight + 16.0) : 0
+        // Title-only cards render just the header. Reserving a minimum body height
+        // moves connector midpoints below the visible card's center.
+        if !card.title.isEmpty && bodyItemsCount == 0 {
+            return headerHeight
+        }
         let total = headerHeight + bodyHeight + 8.0
         if !card.title.isEmpty || hasExcerpt || hasNotes || hasImage || hasTags || isVideo {
             return max(70.0, total)

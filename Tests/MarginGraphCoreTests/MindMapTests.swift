@@ -5,6 +5,18 @@ import SwiftUI
 
 final class MindMapTests: XCTestCase {
     @MainActor
+    func testShortCardConnectorFrameMatchesRenderedHeight() throws {
+        for title in ["Simplify", "the best number of concepts you hold in mind at once"] {
+            let card = NoteCard(id: UUID(), topicId: UUID(), title: title)
+            let view = NSHostingView(rootView: CardNodeView(card: card, isSelected: false, hasChildren: false,
+                onSelect: {}, onToggleFold: {}).frame(width: 220))
+            let frame = try XCTUnwrap(TreeLayout.layout(cards: [card]).frames[card.id])
+            XCTAssertEqual(frame.height, view.fittingSize.height, accuracy: 1)
+            XCTAssertEqual(frame.midY - frame.minY, view.fittingSize.height / 2, accuracy: 0.5)
+        }
+    }
+
+    @MainActor
     func testRenderedLongCardFitsLayoutHeight() {
         for count in [1, 20, 100] {
             let card = NoteCard(id: UUID(), topicId: UUID(), title: "Long title wrapping across several lines in the card header",
@@ -174,7 +186,7 @@ final class MindMapTests: XCTestCase {
         let longHeight = TreeLayout.estimatedCardHeight(for: longCard, width: 220)
 
         XCTAssertGreaterThan(longHeight, shortHeight)
-        XCTAssertGreaterThanOrEqual(shortHeight, 44)
+        XCTAssertGreaterThanOrEqual(shortHeight, 30)
         XCTAssertGreaterThanOrEqual(longHeight, 140)
 
         let result = TreeLayout.layout(cards: [shortCard, longCard])
