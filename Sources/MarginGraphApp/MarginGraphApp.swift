@@ -128,6 +128,7 @@ final class AppModel: ObservableObject {
     @Published var activeReviewCards: [NoteCard] = []
     @Published var activeReviewDocuments: [Document] = []
     @Published var isReviewPresented = false
+    @Published var linkedMindMapCard: NoteCard? = nil
     @Published var editingCard: NoteCard? = nil
     @Published var editingCardTitleID: UUID? = nil
     @Published var documentBookmarks: Set<Int> = []
@@ -2621,6 +2622,18 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func previewNoteLink(_ url: URL) {
+        guard case .openCard(let id) = DeepLinkHandler.parse(url) else { return }
+        guard let card = try? database.getCard(id: id) else {
+            let alert = NSAlert()
+            alert.messageText = "Linked Note Unavailable"
+            alert.informativeText = "This note is not in the current library. Import its notebook or switch libraries."
+            alert.runModal()
+            return
+        }
+        linkedMindMapCard = card
+    }
+
     func handleDeepLink(_ url: URL) {
         guard let destination = DeepLinkHandler.parse(url) else { return }
 
@@ -3108,6 +3121,9 @@ struct StudyWorkspaceView: View {
             .clipped()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .sheet(item: $model.linkedMindMapCard) { card in
+            LinkedMindMapPreview(model: model, destination: card)
+        }
         .sheet(item: $model.editingCard) { card in
             CardEditorSheet(
                 card: card,
@@ -3471,7 +3487,7 @@ struct StudyWorkspaceView: View {
                 onAddToDeck: { card in
                     model.cardForAddToDeck = card
                 },
-                onOpenNoteLink: model.handleDeepLink,
+                onOpenNoteLink: model.previewNoteLink,
                 onSaveNoteLinks: model.updateCard,
                 searchQuery: model.mindMapSearchQuery,
                 searchScope: model.mindMapSearchScope,
