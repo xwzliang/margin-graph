@@ -133,9 +133,9 @@ public enum TreeLayout {
         if hasExcerpt {
             #if canImport(AppKit)
             let excerptFont = NSFont.systemFont(ofSize: 11.5, weight: .regular)
-            let excerptTextH = measureTextHeight(text: card.highlightText, font: excerptFont, width: availableTextWidth, lineSpacing: 2)
+            let excerptTextH = measureTextHeight(text: NoteTextLinks.displayText(card.highlightText), font: excerptFont, width: availableTextWidth, lineSpacing: 2)
             #else
-            let excerptTextH = fallbackMeasureTextHeight(text: card.highlightText, width: availableTextWidth, fontPointSize: 11.5, lineSpacing: 2)
+            let excerptTextH = fallbackMeasureTextHeight(text: NoteTextLinks.displayText(card.highlightText), width: availableTextWidth, fontPointSize: 11.5, lineSpacing: 2)
             #endif
             bodyContentHeight += excerptTextH
             bodyItemsCount += 1
@@ -144,9 +144,9 @@ public enum TreeLayout {
         if hasNotes {
             #if canImport(AppKit)
             let notesFont = NSFont.systemFont(ofSize: 11.5, weight: .bold)
-            let notesTextH = measureTextHeight(text: card.notesText, font: notesFont, width: availableTextWidth, lineSpacing: 2)
+            let notesTextH = measureTextHeight(text: NoteTextLinks.displayText(card.notesText), font: notesFont, width: availableTextWidth, lineSpacing: 2)
             #else
-            let notesTextH = fallbackMeasureTextHeight(text: card.notesText, width: availableTextWidth, fontPointSize: 11.5, lineSpacing: 2)
+            let notesTextH = fallbackMeasureTextHeight(text: NoteTextLinks.displayText(card.notesText), width: availableTextWidth, fontPointSize: 11.5, lineSpacing: 2)
             #endif
             bodyContentHeight += notesTextH
             bodyItemsCount += 1

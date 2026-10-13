@@ -7,7 +7,7 @@ public enum DeepLinkDestination: Equatable, Sendable {
 
 public enum DeepLinkHandler {
     public static func parse(_ url: URL) -> DeepLinkDestination? {
-        guard url.scheme?.lowercased() == "margin-graph" else { return nil }
+        guard ["margin-graph", "marginnote3app"].contains(url.scheme?.lowercased() ?? "") else { return nil }
         let kind = url.host?.lowercased()
         let component = url.pathComponents.first(where: { $0 != "/" })
         guard let component, let id = UUID(uuidString: component) else { return nil }

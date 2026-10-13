@@ -2630,7 +2630,13 @@ final class AppModel: ObservableObject {
             enterStudyWorkspace(topic: topic)
 
         case .openCard(let cardId):
-            guard let card = try? database.getCard(id: cardId) else { return }
+            guard let card = try? database.getCard(id: cardId) else {
+                let alert = NSAlert()
+                alert.messageText = "Linked Note Unavailable"
+                alert.informativeText = "This note is not in the current library. Import its notebook or switch to the library containing it."
+                alert.runModal()
+                return
+            }
             if selectedTopicID != card.topicId,
                let topic = topics.first(where: { $0.id == card.topicId }) {
                 selectTopic(topic)
@@ -2638,6 +2644,7 @@ final class AppModel: ObservableObject {
             reloadStudySet()
             isInStudyWorkspace = true
             select(card: card)
+            cardIDToCenter = card.id
         }
     }
 
@@ -3464,6 +3471,8 @@ struct StudyWorkspaceView: View {
                 onAddToDeck: { card in
                     model.cardForAddToDeck = card
                 },
+                onOpenNoteLink: model.handleDeepLink,
+                onSaveNoteLinks: model.updateCard,
                 searchQuery: model.mindMapSearchQuery,
                 searchScope: model.mindMapSearchScope,
                 currentSearchMatchID: model.matchingMindMapCards.indices.contains(model.currentMindMapMatchIndex) ? model.matchingMindMapCards[model.currentMindMapMatchIndex].id : nil,

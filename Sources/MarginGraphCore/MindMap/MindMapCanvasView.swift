@@ -56,6 +56,8 @@ public struct MindMapCanvasView: View {
     public var onNewChild: ((UUID) -> Void)?
     public var onNewNote: ((CGPoint) -> Void)?
     public var onUpdateTitle: ((UUID, String) -> Void)?
+    public var onOpenNoteLink: ((URL) -> Void)?
+    public var onSaveNoteLinks: ((NoteCard) -> Void)?
     public var onAddToDeck: ((NoteCard) -> Void)?
     public var initialPanOffset: CGPoint?
     public var initialZoomScale: CGFloat?
@@ -66,6 +68,7 @@ public struct MindMapCanvasView: View {
     public var currentSearchMatchID: UUID?
     public var isSearchActive: Bool
 
+    @State private var linkEditorCard: NoteCard?
     @State private var viewport = CanvasViewport()
     @State private var panStart: CGPoint?
     @State private var zoomStart: CGFloat?
@@ -115,11 +118,15 @@ public struct MindMapCanvasView: View {
         onNewNote: ((CGPoint) -> Void)? = nil,
         onUpdateTitle: ((UUID, String) -> Void)? = nil,
         onAddToDeck: ((NoteCard) -> Void)? = nil,
+        onOpenNoteLink: ((URL) -> Void)? = nil,
+        onSaveNoteLinks: ((NoteCard) -> Void)? = nil,
         searchQuery: String = "",
         searchScope: MindMapSearchScope = .all,
         currentSearchMatchID: UUID? = nil,
         isSearchActive: Bool = false
     ) {
+        self.onOpenNoteLink = onOpenNoteLink
+        self.onSaveNoteLinks = onSaveNoteLinks
         self.cards = cards
         self.links = links
         self.selectedCardID = selectedCardID
@@ -463,6 +470,9 @@ public struct MindMapCanvasView: View {
                 .zIndex(160)
         }
         .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+        .sheet(item: $linkEditorCard) { card in
+            NoteLinkEditor(card: card, candidates: cards) { onSaveNoteLinks?($0) }
+        }
         // Anchor the overview to the viewport, independently of zoomed card bounds.
         .overlay(alignment: .bottomTrailing) {
             // MiniMapView at bottom-right (toggleable)
@@ -581,7 +591,7 @@ public struct MindMapCanvasView: View {
                         editingCardTitleID = nil
                     },
                     onComment: { onEditCard?(card) },
-                    onLink: {},
+                    onLink: { linkEditorCard = card },
                     onMerge: {},
                     onBranchStyle: {
                         onChangeColor?(card.id, (card.colorIndex + 1) % 6)
@@ -596,6 +606,10 @@ public struct MindMapCanvasView: View {
                     onNewChild: onNewChild != nil ? { onNewChild?(card.id) } : nil,
                     onAddToDeck: { onAddToDeck?(card) }
                 )
+                .environment(\.openURL, OpenURLAction { url in
+                    onOpenNoteLink?(url)
+                    return .handled
+                })
                 .frame(width: frame.width, height: frame.height + extraHeight, alignment: .top)
                 .overlay {
                     if isCurrentMatch {
@@ -1391,19 +1405,22 @@ public struct MindMapCanvasView: View {
             linksToDraw = []
         }
 
-        for link in linksToDraw where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
+        let textLinks = NoteTextLinks.connections(in: MindMapLayers.cards(in: selectedMapLayerID, all: cards))
+        let textPairs = Set(textLinks.map { "\($0.sourceCardId)-\($0.targetCardId)" })
+        let displayedLinks = linksToDraw.filter { !textPairs.contains("\($0.sourceCardId)-\($0.targetCardId)") } + textLinks
+        for link in displayedLinks where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
             guard let source = frames[link.sourceCardId], let target = frames[link.targetCardId] else { continue }
             var relation = Path()
             relation.addPath(Path(TreeLayout.connectorPath(from: source, to: target)))
             context.stroke(
                 transformed(relation),
-                with: .color(Color(red: 0.25, green: 0.55, blue: 0.85).opacity(0.85)),
+                with: .color(Color.gray.opacity(0.75)),
                 style: StrokeStyle(lineWidth: 2.0, dash: [6, 3])
             )
 
             var arrow = Path()
             arrow.addPath(Path(TreeLayout.arrowHead(for: TreeLayout.connectorPath(from: source, to: target), at: target)))
-            context.fill(transformed(arrow), with: .color(Color(red: 0.25, green: 0.55, blue: 0.85).opacity(0.9)))
+            context.fill(transformed(arrow), with: .color(Color.gray.opacity(0.85)))
         }
     }
 

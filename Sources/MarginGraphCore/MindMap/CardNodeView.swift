@@ -169,7 +169,7 @@ public struct CardNodeView: View {
 
                         // Highlight / Excerpt text (shown when card does not have an image thumbnail)
                         if hasExcerpt && !hasImage {
-                            Text(styledExcerptText)
+                            Text(NoteTextLinks.references(in: card.highlightText).isEmpty ? styledExcerptText : NoteTextLinks.attributed(card.highlightText))
                                 .font(.system(size: 11.5, weight: .regular))
                                 .foregroundStyle(Color(white: 0.20))
                                 .lineSpacing(2)
@@ -178,7 +178,7 @@ public struct CardNodeView: View {
 
                         // User comments / notes
                         if hasNotes {
-                            Text(card.notesText)
+                            Text(NoteTextLinks.attributed(card.notesText))
                                 .font(.system(size: 11.5, weight: .bold))
                                 .foregroundStyle(Color(white: 0.32))
                                 .lineSpacing(2)
