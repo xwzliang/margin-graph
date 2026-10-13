@@ -1409,15 +1409,13 @@ public struct MindMapCanvasView: View {
         let textPairs = Set(textLinks.map { "\($0.sourceCardId)-\($0.targetCardId)" })
         let displayedLinks = linksToDraw.filter { !textPairs.contains("\($0.sourceCardId)-\($0.targetCardId)") } + textLinks
         for link in displayedLinks where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
-            guard let source = frames[link.sourceCardId], let target = frames[link.targetCardId] else { continue }
-            var relation = Path()
-            relation.move(to: CGPoint(x: source.midX, y: source.midY))
-            relation.addLine(to: CGPoint(x: target.midX, y: target.midY))
+            guard let geometry = ReferenceLinkGeometry.make(link: link, links: displayedLinks, frames: frames) else { continue }
             context.stroke(
-                transformed(relation),
-                with: .color(Color.gray.opacity(0.35)),
-                style: StrokeStyle(lineWidth: 1.5, dash: [6, 4])
+                transformed(Path(geometry.path)),
+                with: .color(Color.gray.opacity(0.20)),
+                style: StrokeStyle(lineWidth: 1.2, dash: [6, 4])
             )
+            context.fill(transformed(Path(geometry.arrow)), with: .color(Color.gray.opacity(0.40)))
 
         }
     }
