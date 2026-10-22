@@ -225,6 +225,7 @@ final class AppModel: ObservableObject {
     @Published var activeDatabaseURL: URL? = nil
     @Published var isExternalDatabase: Bool = false
     @Published var isOpeningDatabase: Bool = false
+    @Published var isExportingDocument: Bool = false
     @Published var databaseOpeningStatus: String = ""
     @Published var databaseErrorMessage: String? = nil
     @Published var recentDatabasePaths: [String] = []
@@ -1121,20 +1122,13 @@ final class AppModel: ObservableObject {
         }
         guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
 
-        do {
+        let database = self.database, mediaStorage = self.mediaStorage
+        let hideNumbers = PDFPageNumberPreferences.isHidden(for: document.md5)
+        runPackageExport(to: destinationURL) {
             try MarginPackageExporter.exportDocument(
-                document: document,
-                database: self.database,
-                mediaStorage: self.mediaStorage,
-                destinationURL: destinationURL
+                document: document, database: database, mediaStorage: mediaStorage,
+                destinationURL: destinationURL, hidesPageNumbers: hideNumbers
             )
-            NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Export Failed"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .critical
-            alert.runModal()
         }
     }
 
@@ -1152,22 +1146,33 @@ final class AppModel: ObservableObject {
         }
         guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
 
-        do {
+        let database = self.database, mediaStorage = self.mediaStorage
+        let folders = documentFolders, documents = self.documents
+        let hidden = Set(documents.filter { PDFPageNumberPreferences.isHidden(for: $0.md5) }.map(\.md5))
+        runPackageExport(to: destinationURL) {
             try MarginPackageExporter.exportFolder(
-                folder: folder,
-                allFolders: self.documentFolders,
-                allDocuments: self.documents,
-                database: self.database,
-                mediaStorage: self.mediaStorage,
-                destinationURL: destinationURL
+                folder: folder, allFolders: folders, allDocuments: documents,
+                database: database, mediaStorage: mediaStorage, destinationURL: destinationURL,
+                hiddenPageNumberDocumentMD5s: hidden
             )
-            NSWorkspace.shared.activateFileViewerSelecting([destinationURL])
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Export Failed"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .critical
-            alert.runModal()
+        }
+    }
+
+    private func runPackageExport(to destination: URL, operation: @escaping @Sendable () throws -> Void) {
+        guard !isExportingDocument else { return }
+        isExportingDocument = true
+        Task {
+            defer { isExportingDocument = false }
+            do {
+                try await Task.detached(priority: .userInitiated, operation: operation).value
+                NSWorkspace.shared.activateFileViewerSelecting([destination])
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Export Failed"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .critical
+                alert.runModal()
+            }
         }
     }
 
@@ -3933,14 +3938,14 @@ struct MarginGraphApp: App {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                if model.isOpeningDatabase {
+                if model.isOpeningDatabase || model.isExportingDocument {
                     ZStack {
                         Color.black.opacity(0.35)
                             .ignoresSafeArea()
                         VStack(spacing: 16) {
                             ProgressView()
                                 .controlSize(.large)
-                            Text(model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus)
+                            Text(model.isExportingDocument ? "Exporting PDF and notes…" : (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus))
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.white)
                         }

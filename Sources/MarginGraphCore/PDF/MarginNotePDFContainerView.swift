@@ -228,7 +228,7 @@ public struct MarginNotePDFContainerView: View {
                 HStack(spacing: 10) {
                     Button {
                         hidesPageNumbers.toggle()
-                        UserDefaults.standard.set(hidesPageNumbers, forKey: "pdf.hidePageNumbers.\(manager.md5)")
+                        UserDefaults.standard.set(hidesPageNumbers, forKey: PDFPageNumberPreferences.key(for: manager.md5))
                     } label: {
                         Image(systemName: hidesPageNumbers ? "number.circle.fill" : "number.circle")
                             .font(.system(size: 15))
@@ -242,7 +242,7 @@ public struct MarginNotePDFContainerView: View {
                     .accessibilityValue(hidesPageNumbers ? "Hidden" : "Visible")
                     .marginNoteTooltip(hidesPageNumbers
                         ? "Show Page Numbers"
-                        : "Hide Page Numbers from View and New Highlights")
+                        : "Hide Page Numbers from View, Highlights and Exports")
 
                     // Search button
                     Button {
@@ -890,7 +890,7 @@ public struct MarginNotePDFContainerView: View {
             }
         }
         .onChange(of: manager.md5, initial: true) { _, md5 in
-            hidesPageNumbers = UserDefaults.standard.bool(forKey: "pdf.hidePageNumbers.\(md5)")
+            hidesPageNumbers = PDFPageNumberPreferences.isHidden(for: md5)
         }
         .onAppear {
             totalPageCount = manager.pageCount

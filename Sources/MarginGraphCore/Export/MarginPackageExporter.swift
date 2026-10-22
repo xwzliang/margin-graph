@@ -101,9 +101,11 @@ public enum MarginPackageExporter {
         document: Document,
         database: Database,
         mediaStorage: MediaStorage,
-        destinationURL: URL
+        destinationURL: URL,
+        hidesPageNumbers: Bool? = nil
     ) throws {
-        if let original = try ImportedPackageStore.originalArchive(document: document, database: database) {
+        let hideNumbers = hidesPageNumbers ?? PDFPageNumberPreferences.isHidden(for: document.md5)
+        if !hideNumbers, let original = try ImportedPackageStore.originalArchive(document: document, database: database) {
             try FileManager.default.createDirectory(at: destinationURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try original.write(to: destinationURL, options: .atomic)
             return
@@ -129,7 +131,8 @@ public enum MarginPackageExporter {
             cards: matchingCards,
             database: database,
             mediaStorage: mediaStorage,
-            destinationURL: destinationURL
+            destinationURL: destinationURL,
+            hiddenPageNumberDocumentMD5s: hideNumbers ? [document.md5] : []
         )
     }
 
@@ -139,7 +142,8 @@ public enum MarginPackageExporter {
         allDocuments: [Document],
         database: Database,
         mediaStorage: MediaStorage,
-        destinationURL: URL
+        destinationURL: URL,
+        hiddenPageNumberDocumentMD5s: Set<String>? = nil
     ) throws {
         var folderIDs: Set<UUID> = [folder.id]
         var addedMore = true
@@ -208,7 +212,9 @@ public enum MarginPackageExporter {
             cards: matchingCards,
             database: database,
             mediaStorage: mediaStorage,
-            destinationURL: destinationURL
+            destinationURL: destinationURL,
+            hiddenPageNumberDocumentMD5s: hiddenPageNumberDocumentMD5s
+                ?? Set(docsInFolder.filter { PDFPageNumberPreferences.isHidden(for: $0.md5) }.map(\.md5))
         )
     }
 
@@ -220,7 +226,8 @@ public enum MarginPackageExporter {
         cards: [NoteCard],
         database: Database,
         mediaStorage: MediaStorage,
-        destinationURL: URL
+        destinationURL: URL,
+        hiddenPageNumberDocumentMD5s: Set<String>
     ) throws {
         let fileManager = FileManager.default
         let tempDir = fileManager.temporaryDirectory.appendingPathComponent("marginpkg_exp_\(UUID().uuidString)")
@@ -274,7 +281,11 @@ public enum MarginPackageExporter {
             usedPaths.insert(rel)
             let targetURL = stagingDir.appendingPathComponent(rel)
             try fileManager.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fileManager.copyItem(at: sourceURL, to: targetURL)
+            if sourceURL.pathExtension.lowercased() == "pdf", hiddenPageNumberDocumentMD5s.contains(doc.md5) {
+                try PDFPageNumberExport.write(source: sourceURL, destination: targetURL, hidingPageNumbers: true)
+            } else {
+                try fileManager.copyItem(at: sourceURL, to: targetURL)
+            }
             packagedDocuments[index].filePath = targetURL.path
         }
 
