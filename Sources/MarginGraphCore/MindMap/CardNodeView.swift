@@ -461,8 +461,7 @@ public struct CardNodeView: View {
     }
 
     private var thumbnail: NSImage? {
-        guard let hash = card.highlightPicHash,
-              let data = mediaStorage?.loadImage(hash: hash) else { return nil }
-        return NSImage(data: data)
+        guard let hash = card.highlightPicHash else { return nil }
+        return mediaStorage?.displayImage(hash: hash)
     }
 }

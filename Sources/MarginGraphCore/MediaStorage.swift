@@ -16,6 +16,7 @@ public final class MediaStorage: @unchecked Sendable {
     public var fallbackDatabaseURL: URL?
     public var mediaBlobResolver: (@Sendable (String) -> Data?)?
 
+    private let displayImageCache = NSCache<NSString, NSImage>()
     private let memoryCache = NSCache<NSString, NSData>()
     private let dbQueue = DispatchQueue(label: "com.margingraph.mediastorage.db")
     private var cachedDbPointer: OpaquePointer?
@@ -120,6 +121,17 @@ public final class MediaStorage: @unchecked Sendable {
         var actualTime = CMTime.zero
         let cgImage = try generator.copyCGImage(at: targetTime, actualTime: &actualTime)
         return try saveCGImage(cgImage, format: "heic", quality: quality)
+    }
+
+    /// Keep the decoded display representation across viewport redraws and card culling.
+    /// Hashes are content identities; failed loads are deliberately not cached.
+    @MainActor
+    public func displayImage(hash: String) -> NSImage? {
+        if let image = displayImageCache.object(forKey: hash as NSString) { return image }
+        guard let data = loadImage(hash: hash), let image = NSImage(data: data) else { return nil }
+        displayImageCache.countLimit = 256
+        displayImageCache.setObject(image, forKey: hash as NSString)
+        return image
     }
 
     public func loadImage(hash: String) -> Data? {

@@ -1,4 +1,5 @@
 import XCTest
+import AppKit
 @testable import MarginGraphCore
 
 final class MindMapInteractionPerformanceTests: XCTestCase {
@@ -28,5 +29,41 @@ final class MindMapInteractionPerformanceTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
         print("1200-card drag index + 600 hit tests/text resolutions: \(elapsed * 1000) ms")
         XCTAssertLessThan(elapsed, 0.1)
+    }
+}
+
+extension MindMapInteractionPerformanceTests {
+    func testCachedBranchesCullOffscreenButKeepCrossingPathsAndTrackDragging() {
+        let topic = UUID(), parent = UUID(), child = UUID()
+        let cards = [NoteCard(id: parent, topicId: topic, title: "Parent"),
+                     NoteCard(id: child, topicId: topic, title: "Child", groupNoteId: parent)]
+        var frames = [parent: CGRect(x: -300, y: 100, width: 100, height: 40),
+                      child: CGRect(x: 500, y: 100, width: 100, height: 40)]
+        let branches = MindMapBranchGeometry.build(cards: cards, frames: frames, visible: [parent, child])
+        XCTAssertEqual(branches.count, 1)
+        let branch = branches[0]
+        // Both cards are offscreen, but their connector crosses the viewport.
+        XCTAssertTrue(branch.intersects(CGRect(x: 0, y: 0, width: 200, height: 200)))
+        XCTAssertFalse(branch.intersects(CGRect(x: 0, y: 400, width: 200, height: 200)))
+        frames[child] = CGRect(x: 500, y: 500, width: 100, height: 40)
+        let moving = branch.moving(frames: frames)
+        XCTAssertEqual(moving.path.currentPoint, CGPoint(x: 500, y: 520))
+        XCTAssertEqual(branch.path.currentPoint, CGPoint(x: 500, y: 120))
+        XCTAssertTrue(MindMapBranchGeometry.build(cards: cards, frames: frames, visible: [parent]).isEmpty)
+    }
+
+    @MainActor
+    func testDisplayImagesReuseDecodedRepresentationWithoutCachingFailures() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storage = try MediaStorage(directoryURL: directory)
+        XCTAssertNil(storage.displayImage(hash: "missing"))
+        let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8,
+                                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                                   isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 32, bitsPerPixel: 32))
+        let bytes = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        let hash = try storage.saveImage(bytes, format: "png")
+        let first = try XCTUnwrap(storage.displayImage(hash: hash))
+        XCTAssertTrue(first === storage.displayImage(hash: hash))
     }
 }

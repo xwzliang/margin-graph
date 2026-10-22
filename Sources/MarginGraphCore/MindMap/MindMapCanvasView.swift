@@ -75,6 +75,9 @@ public struct MindMapCanvasView: View {
     @State private var layerCards: [NoteCard] = []
     @State private var cardIndex: [UUID: NoteCard] = [:]
     @State private var parentIDs = Set<UUID>()
+    @State private var branchGeometry: [MindMapBranchGeometry] = []
+    @State private var contentBounds: CGRect = .null
+    @State private var cachedReferences: [CardLink] = []
     @State private var cachedTextLinks: [CardLink] = []
     @State private var referenceGeometry: [UUID: ReferenceLinkGeometry.Geometry] = [:]
     @State private var dragTargets: MindMapDragTargets?
@@ -474,10 +477,6 @@ public struct MindMapCanvasView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .zIndex(150)
 
-            // Bottom-left Mode Toggles (MarginNote 3 signature Drag & Select stacked buttons)
-            bottomLeftControls
-                .zIndex(150)
-
             // Draggable Vertical & Horizontal Scrollbars
             scrollBars(proxy: proxy, frames: frames)
                 .zIndex(160)
@@ -486,6 +485,10 @@ public struct MindMapCanvasView: View {
         .sheet(item: $linkEditorCard) { card in
             NoteLinkEditor(card: card, candidates: cards) { onSaveNoteLinks?($0) }
         }
+        // HUD controls must not participate in the zoomed content's layout.
+        .overlay(alignment: .bottomLeading) {
+            bottomLeftControls
+        }
         // Anchor the overview to the viewport, independently of zoomed card bounds.
         .overlay(alignment: .bottomTrailing) {
             // MiniMapView at bottom-right (toggleable)
@@ -493,6 +496,7 @@ public struct MindMapCanvasView: View {
                 MiniMapView(
                     cards: visibleCards,
                     frames: frames,
+                    bounds: contentBounds,
                     viewport: $viewport,
                     canvasSize: proxy.size,
                     onClose: {
@@ -1067,7 +1071,6 @@ public struct MindMapCanvasView: View {
         }
         .padding(.leading, 16)
         .padding(.bottom, 20)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     }
 
     private func rebuildCanvasCache() {
@@ -1076,6 +1079,8 @@ public struct MindMapCanvasView: View {
         parentIDs = Set(cards.compactMap(\.groupNoteId))
         cachedTextLinks = NoteTextLinks.connections(in: layerCards)
         layoutResult = TreeLayout.layout(cards: layerCards)
+        branchGeometry = MindMapBranchGeometry.build(cards: layerCards, frames: layoutResult.frames, visible: layoutResult.visibleCardIDs)
+        contentBounds = layoutResult.frames.values.reduce(CGRect.null) { $0.union($1) }
         rebuildReferenceCache()
     }
 
@@ -1088,6 +1093,7 @@ public struct MindMapCanvasView: View {
 
     private func rebuildReferenceCache() {
         let references = displayedReferenceLinks
+        cachedReferences = references
         referenceGeometry = references.reduce(into: [:]) { result, link in
             result[link.id] = ReferenceLinkGeometry.make(link: link, links: references, frames: layoutResult.frames)
         }
@@ -1382,69 +1388,50 @@ public struct MindMapCanvasView: View {
     ) {
         let isSearching = isSearchActive && !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-        for card in layerCards where visible.contains(card.id) {
-            if let parentID = card.groupNoteId,
-               visible.contains(parentID),
-               let parent = frames[parentID],
-               let child = frames[card.id] {
-                var path = Path()
-                path.addPath(Path(TreeLayout.connectorPath(from: parent, to: child)))
-                let parentCard = cardIndex[parentID]
-                let baseColor = parentCard.map { MarginNoteTheme.cardColors(for: $0.colorIndex).accent } ?? Color(red: 0.70, green: 0.66, blue: 0.58)
-                let strokeColor: Color
-                if isSearching {
-                    let parentMatch = parentCard.map { MindMapSearchMatcher.matches(card: $0, query: searchQuery, scope: searchScope) } ?? false
-                    let childMatch = MindMapSearchMatcher.matches(card: card, query: searchQuery, scope: searchScope)
-                    strokeColor = (parentMatch || childMatch) ? baseColor : baseColor.opacity(0.18)
-                } else {
-                    strokeColor = baseColor
-                }
-                context.stroke(
-                    transformed(path),
-                    with: .color(strokeColor),
-                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
-                )
-            }
-        }
-
-        // Draw short horizontal stem for collapsed cards with children
-        for card in layerCards where visible.contains(card.id) && card.isFolded {
-            let hasChildren = parentIDs.contains(card.id)
-            if hasChildren, let parent = frames[card.id] {
-                var stem = Path()
-                stem.move(to: CGPoint(x: parent.maxX, y: parent.midY))
-                stem.addLine(to: CGPoint(x: parent.maxX + 14, y: parent.midY))
-                let strokeColor = MarginNoteTheme.cardColors(for: card.colorIndex).accent
-                context.stroke(
-                    transformed(stem),
-                    with: .color(strokeColor),
-                    style: StrokeStyle(lineWidth: 1.8, lineCap: .round)
-                )
-            }
+        let visibleRect = CGRect(origin: viewport.screenToCanvas(.zero),
+                                 size: CGSize(width: viewport.viewportSize.width / viewport.zoomScale,
+                                              height: viewport.viewportSize.height / viewport.zoomScale)).insetBy(dx: -12 / viewport.zoomScale, dy: -12 / viewport.zoomScale)
+        // Transform the drawing context once, rather than copying every path.
+        context.translateBy(x: viewport.panOffset.x, y: viewport.panOffset.y)
+        context.scaleBy(x: viewport.zoomScale, y: viewport.zoomScale)
+        for resting in branchGeometry {
+            let moving = draggingCardID == resting.sourceID || (draggingCardID != nil && draggingCardID == resting.targetID)
+            let branch = moving ? resting.moving(frames: frames) : resting
+            guard branch.intersects(visibleRect) else { continue }
+            let baseColor = MarginNoteTheme.cardColors(for: branch.colorIndex).accent
+            let sourceMatch = isSearching && (cardIndex[branch.sourceID].map { MindMapSearchMatcher.matches(card: $0, query: searchQuery, scope: searchScope) } ?? false)
+            let targetMatch = isSearching && (branch.targetID.flatMap { cardIndex[$0] }.map { MindMapSearchMatcher.matches(card: $0, query: searchQuery, scope: searchScope) } ?? false)
+            let dimmed = isSearching && branch.targetID != nil && !sourceMatch && !targetMatch
+            context.stroke(Path(branch.path), with: .color(dimmed ? baseColor.opacity(0.18) : baseColor),
+                           style: StrokeStyle(lineWidth: 1.8 / viewport.zoomScale, lineCap: .round))
         }
 
         // Geometry is independent of pan/zoom. Rebuild only incident links while dragging.
-        let references = displayedReferenceLinks
+        let references = cachedReferences
         for link in references where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
             let moving = draggingCardID == link.sourceCardId || draggingCardID == link.targetCardId
             guard let geometry = moving
                 ? ReferenceLinkGeometry.make(link: link, links: references, frames: frames)
                 : referenceGeometry[link.id] else { continue }
+            guard geometry.path.boundingBoxOfPath.insetBy(dx: -12, dy: -12).intersects(visibleRect) else { continue }
             context.stroke(
-                transformed(Path(geometry.path)),
+                Path(geometry.path),
                 with: .color(Color.gray.opacity(0.20)),
-                style: StrokeStyle(lineWidth: 1.2, dash: [6, 4])
+                style: StrokeStyle(lineWidth: 1.2 / viewport.zoomScale, dash: [6 / viewport.zoomScale, 4 / viewport.zoomScale])
             )
-            context.fill(transformed(Path(geometry.arrow)), with: .color(Color.gray.opacity(0.40)))
+            context.fill(Path(geometry.arrow), with: .color(Color.gray.opacity(0.40)))
 
         }
     }
 
     @ViewBuilder
     private func scrollBars(proxy: GeometryProxy, frames: [UUID: CGRect]) -> some View {
-        let allCardFrames = Array(frames.values)
-        if !allCardFrames.isEmpty {
-            let cardsBounds = allCardFrames.dropFirst().reduce(allCardFrames[0]) { $0.union($1) }.insetBy(dx: -120, dy: -120)
+        if !contentBounds.isNull {
+            let movingBounds = dragLocations.reduce(contentBounds) { bounds, entry in
+                guard let frame = frames[entry.key] else { return bounds }
+                return bounds.union(frame)
+            }
+            let cardsBounds = movingBounds.insetBy(dx: -120, dy: -120)
             let visibleOrigin = viewport.screenToCanvas(.zero)
             let visibleEnd = viewport.screenToCanvas(CGPoint(x: proxy.size.width, y: proxy.size.height))
             let visibleRect = CGRect(
@@ -1549,17 +1536,6 @@ public struct MindMapCanvasView: View {
         }
     }
 
-    private func transformed(_ path: Path) -> Path {
-        path.applying(CGAffineTransform(
-            a: viewport.zoomScale,
-            b: 0,
-            c: 0,
-            d: viewport.zoomScale,
-            tx: viewport.panOffset.x,
-            ty: viewport.panOffset.y
-        ))
-    }
-
     public enum ArrowDirection: Sendable {
         case up, down, left, right
     }
@@ -1655,27 +1631,19 @@ public struct MindMapCanvasView: View {
     }
 }
 
-private struct MiniMapView: View {
+/// The overview's card image does not depend on the viewport. Keep it out of
+/// pan/zoom redraws; only the inexpensive blue viewport rectangle moves.
+private struct MiniMapCardDrawing: View, Equatable {
     let cards: [NoteCard]
     let frames: [UUID: CGRect]
-    @Binding var viewport: CanvasViewport
-    let canvasSize: CGSize
-    var onClose: (() -> Void)? = nil
+    let bounds: CGRect
 
     var body: some View {
-        let allFrames = Array(frames.values)
         Canvas { context, size in
-            guard let first = allFrames.first else { return }
-            let bounds = allFrames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
-            let sx = size.width / max(1, bounds.width)
-            let sy = size.height / max(1, bounds.height)
-            let scale = min(sx, sy)
-
-            let contentWidth = bounds.width * scale
-            let contentHeight = bounds.height * scale
-            let offsetX = (size.width - contentWidth) / 2.0
-            let offsetY = (size.height - contentHeight) / 2.0
-
+            guard !bounds.isNull else { return }
+            let scale = min(size.width / max(1, bounds.width), size.height / max(1, bounds.height))
+            let offsetX = (size.width - bounds.width * scale) / 2
+            let offsetY = (size.height - bounds.height * scale) / 2
             let cardColorsByID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, NSColor(MarginNoteTheme.cardColors(for: $0.colorIndex).accent)) })
 
             for (cardID, frame) in frames {
@@ -1689,6 +1657,31 @@ private struct MiniMapView: View {
                 context.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(accent.opacity(0.8)))
             }
 
+        }
+    }
+}
+
+private struct MiniMapView: View {
+    let cards: [NoteCard]
+    let frames: [UUID: CGRect]
+    let bounds: CGRect
+    @Binding var viewport: CanvasViewport
+    let canvasSize: CGSize
+    var onClose: (() -> Void)? = nil
+
+    var body: some View {
+        let bounds = bounds.insetBy(dx: -40, dy: -40)
+        Canvas { context, size in
+            guard !bounds.isNull else { return }
+            let sx = size.width / max(1, bounds.width)
+            let sy = size.height / max(1, bounds.height)
+            let scale = min(sx, sy)
+
+            let contentWidth = bounds.width * scale
+            let contentHeight = bounds.height * scale
+            let offsetX = (size.width - contentWidth) / 2.0
+            let offsetY = (size.height - contentHeight) / 2.0
+
             let visibleOrigin = viewport.screenToCanvas(.zero)
             let visibleEnd = viewport.screenToCanvas(CGPoint(x: canvasSize.width, y: canvasSize.height))
             let visible = CGRect(
@@ -1700,10 +1693,11 @@ private struct MiniMapView: View {
             context.fill(Path(visible), with: .color(Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.12)))
             context.stroke(Path(visible), with: .color(Color(red: 0.15, green: 0.45, blue: 0.85)), lineWidth: 1.5)
         }
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color(white: 0.96))
-        )
+        .background {
+            MiniMapCardDrawing(cards: cards, frames: frames, bounds: bounds)
+                .equatable()
+                .background(Color(white: 0.96), in: RoundedRectangle(cornerRadius: 6))
+        }
         .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(red: 0.80, green: 0.76, blue: 0.70), lineWidth: 0.8))
         .shadow(color: .black.opacity(0.08), radius: 4, y: 1)
         .overlay(alignment: .topTrailing) {
@@ -1724,8 +1718,7 @@ private struct MiniMapView: View {
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { gesture in
-                    guard let first = allFrames.first else { return }
-                    let bounds = allFrames.dropFirst().reduce(first) { $0.union($1) }.insetBy(dx: -40, dy: -40)
+                    guard !bounds.isNull else { return }
                     let sx = 150.0 / max(1, bounds.width)
                     let sy = 100.0 / max(1, bounds.height)
                     let scale = min(sx, sy)
