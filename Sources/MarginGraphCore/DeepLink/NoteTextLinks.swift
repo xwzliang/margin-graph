@@ -10,11 +10,15 @@ public enum NoteTextLinks {
         public let label: String
     }
 
-    public static func references(in text: String) -> [Reference] {
+    private static let regex: NSRegularExpression = {
         let uuid = "[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}"
         let url = "(?:margin-graph|marginnote3app)://note/(\(uuid))"
         let pattern = "\\[([^\\]\\n]+)\\]\\(\(url)\\)|\(url)(?:[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)*([^\\r\\n]+))?"
-        let regex = try! NSRegularExpression(pattern: pattern, options: .caseInsensitive)
+        return try! NSRegularExpression(pattern: pattern, options: .caseInsensitive)
+    }()
+
+    public static func references(in text: String) -> [Reference] {
+        guard text.localizedCaseInsensitiveContains("://note/") else { return [] }
         let source = text as NSString
         return regex.matches(in: text, range: NSRange(location: 0, length: source.length)).compactMap { match in
             let markdown = match.range(at: 2).location != NSNotFound
@@ -44,7 +48,9 @@ public enum NoteTextLinks {
     }
 
     public static func displayText(_ text: String) -> String {
-        String(attributed(text).characters)
+        let matches = references(in: text)
+        guard !matches.isEmpty else { return text }
+        return replacing(in: text, edits: matches.map { ($0.range, $0.label) })
     }
 
     public static func markup(label: String, target: UUID) -> String {

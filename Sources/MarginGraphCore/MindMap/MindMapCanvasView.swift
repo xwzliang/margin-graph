@@ -72,6 +72,13 @@ public struct MindMapCanvasView: View {
     @State private var viewport = CanvasViewport()
     @State private var panStart: CGPoint?
     @State private var zoomStart: CGFloat?
+    @State private var layerCards: [NoteCard] = []
+    @State private var cardIndex: [UUID: NoteCard] = [:]
+    @State private var parentIDs = Set<UUID>()
+    @State private var cachedTextLinks: [CardLink] = []
+    @State private var referenceGeometry: [UUID: ReferenceLinkGeometry.Geometry] = [:]
+    @State private var dragTargets: MindMapDragTargets?
+    @State private var lastDropTargetCheck: TimeInterval = 0
     @State private var dragLocations: [UUID: CGPoint] = [:]
     @State private var canvasMode: String = "Drag" // "Drag" or "Select"
     @State private var isDraggingVScroll = false
@@ -169,13 +176,13 @@ public struct MindMapCanvasView: View {
         GeometryReader { proxy in
             let layout = layoutResult
             let frames = displayFrames(layout: layout)
-            let visibleCards = MindMapLayers.cards(in: selectedMapLayerID, all: cards).filter { layout.visibleCardIDs.contains($0.id) }
+            let visibleCards = layerCards.filter { layout.visibleCardIDs.contains($0.id) }
 
             canvasZStack(proxy: proxy, layout: layout, frames: frames, visibleCards: visibleCards)
                 .coordinateSpace(name: "MindMapCanvas")
                 .onChange(of: cards) { _, newCards in
                     let oldFrames = layoutResult.frames
-                    layoutResult = TreeLayout.layout(cards: MindMapLayers.cards(in: selectedMapLayerID, all: newCards))
+                    rebuildCanvasCache()
                     if viewport.viewportSize.width < 50 && proxy.size.width > 50 {
                         viewport.viewportSize = proxy.size
                     }
@@ -220,9 +227,7 @@ public struct MindMapCanvasView: View {
                     if let target = cardIDToCenter ?? selectedCardID {
                         selectedMapLayerID = MindMapLayers.layer(for: target, cards: cards)
                     }
-                    if layoutResult.frames.isEmpty {
-                        layoutResult = TreeLayout.layout(cards: MindMapLayers.cards(in: selectedMapLayerID, all: cards))
-                    }
+                    rebuildCanvasCache()
                     let frames = layoutResult.frames
                     if proxy.size.width > 20 && proxy.size.height > 20 {
                         viewport.viewportSize = proxy.size
@@ -291,10 +296,18 @@ public struct MindMapCanvasView: View {
                     }
                 }
                 .onDisappear {
+                    NSCursor.arrow.set()
+                    if let window = NSApp.keyWindow, let content = window.contentView { window.invalidateCursorRects(for: content) }
+                    dragTargets = nil
+                    dragLocations = [:]
+                    draggingCardID = nil
+                    hoverTargetCardID = nil
                     viewportDebounceWorkItem?.perform()
                     viewportDebounceWorkItem = nil
                 }
+                .onChange(of: links) { _, _ in rebuildReferenceCache() }
                 .onChange(of: selectedCardID) { _, newID in
+                    rebuildReferenceCache()
                     if let newID {
                         let layer = MindMapLayers.layer(for: newID, cards: cards)
                         if layer != selectedMapLayerID { selectMapLayer(layer) }
@@ -568,7 +581,7 @@ public struct MindMapCanvasView: View {
                 CardNodeView(
                     card: card,
                     isSelected: isCardSelected,
-                    hasChildren: cards.contains(where: { $0.groupNoteId == card.id }),
+                    hasChildren: parentIDs.contains(card.id),
                     mediaStorage: mediaStorage,
                     isEditingTitle: editingCardTitleID == card.id,
                     onSelect: {
@@ -650,7 +663,7 @@ public struct MindMapCanvasView: View {
         // MarginNote 3 Branch Fold/Unfold circular toggle buttons
         ForEach(culledCards, id: \.id) { card in
             if let frame = frames[card.id] {
-                let hasChildren = cards.contains(where: { $0.groupNoteId == card.id })
+                let hasChildren = parentIDs.contains(card.id)
                 if hasChildren {
                     branchFoldButton(card: card, frame: frame)
                 }
@@ -1057,10 +1070,33 @@ public struct MindMapCanvasView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
     }
 
+    private func rebuildCanvasCache() {
+        layerCards = MindMapLayers.cards(in: selectedMapLayerID, all: cards)
+        cardIndex = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
+        parentIDs = Set(cards.compactMap(\.groupNoteId))
+        cachedTextLinks = NoteTextLinks.connections(in: layerCards)
+        layoutResult = TreeLayout.layout(cards: layerCards)
+        rebuildReferenceCache()
+    }
+
+    private var displayedReferenceLinks: [CardLink] {
+        let explicit = selectedCardID.map { id in links.filter { $0.sourceCardId == id || $0.targetCardId == id } }
+            ?? (links.count <= 15 ? links : [])
+        let pairs = Set(cachedTextLinks.map { "\($0.sourceCardId)-\($0.targetCardId)" })
+        return explicit.filter { !pairs.contains("\($0.sourceCardId)-\($0.targetCardId)") } + cachedTextLinks
+    }
+
+    private func rebuildReferenceCache() {
+        let references = displayedReferenceLinks
+        referenceGeometry = references.reduce(into: [:]) { result, link in
+            result[link.id] = ReferenceLinkGeometry.make(link: link, links: references, frames: layoutResult.frames)
+        }
+    }
+
     private func selectMapLayer(_ id: UUID?) {
         selectedMapLayerID = id
         showingMapLayers = false
-        layoutResult = TreeLayout.layout(cards: MindMapLayers.cards(in: id, all: cards))
+        rebuildCanvasCache()
         viewport.zoomToFit(nodes: Array(layoutResult.frames.values))
     }
 
@@ -1135,11 +1171,8 @@ public struct MindMapCanvasView: View {
 
     private func displayFrames(layout: TreeLayoutResult) -> [UUID: CGRect] {
         var result = layout.frames
-        for card in cards where layout.visibleCardIDs.contains(card.id) {
-            if let drag = dragLocations[card.id],
-               let automatic = result[card.id] {
-                result[card.id] = CGRect(origin: drag, size: automatic.size)
-            }
+        for (id, origin) in dragLocations {
+            if let frame = result[id] { result[id] = CGRect(origin: origin, size: frame.size) }
         }
         return result
     }
@@ -1149,7 +1182,11 @@ public struct MindMapCanvasView: View {
             .onChanged { value in
                 let distance = hypot(value.translation.width, value.translation.height)
                 if distance >= 4 {
-                    draggingCardID = card.id
+                    if draggingCardID != card.id {
+                        draggingCardID = card.id
+                        dragTargets = MindMapDragTargets(draggedID: card.id, cards: layerCards,
+                                                          frames: staticFrames, visible: layoutResult.visibleCardIDs)
+                    }
                     let canvasDelta = CGPoint(
                         x: value.translation.width / viewport.zoomScale,
                         y: value.translation.height / viewport.zoomScale
@@ -1160,11 +1197,22 @@ public struct MindMapCanvasView: View {
                     )
                     dragLocations[card.id] = currentOrigin
 
-                    let mouseCanvasPoint = viewport.screenToCanvas(value.location)
-                    hoverTargetCardID = findMouseOverlapTarget(draggedID: card.id, mousePoint: mouseCanvasPoint, frames: staticFrames)
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if now - lastDropTargetCheck >= 1.0 / 30.0 {
+                        lastDropTargetCheck = now
+                        let mouseCanvasPoint = viewport.screenToCanvas(value.location)
+                        let target = findMouseOverlapTarget(draggedID: card.id, mousePoint: mouseCanvasPoint, frames: staticFrames)
+                        if hoverTargetCardID != target { hoverTargetCardID = target }
+                    }
                 }
             }
             .onEnded { value in
+                defer {
+                    NSCursor.arrow.set()
+                    if let window = NSApp.keyWindow, let content = window.contentView { window.invalidateCursorRects(for: content) }
+                    dragTargets = nil
+                    lastDropTargetCheck = 0
+                }
                 let distance = hypot(value.translation.width, value.translation.height)
                 if distance < 4 {
                     draggingCardID = nil
@@ -1172,7 +1220,8 @@ public struct MindMapCanvasView: View {
                     return
                 }
 
-                let finalOrigin = dragLocations[card.id] ?? initialFrame.origin
+                let finalOrigin = CGPoint(x: initialFrame.minX + value.translation.width / viewport.zoomScale,
+                                          y: initialFrame.minY + value.translation.height / viewport.zoomScale)
                 let mouseCanvasPoint = viewport.screenToCanvas(value.location)
                 let overlapTarget = findMouseOverlapTarget(draggedID: card.id, mousePoint: mouseCanvasPoint, frames: staticFrames)
 
@@ -1321,25 +1370,9 @@ public struct MindMapCanvasView: View {
     }
 
     private func findMouseOverlapTarget(draggedID: UUID, mousePoint: CGPoint, frames: [UUID: CGRect]) -> UUID? {
-        var descendants = Set<UUID>()
-        var queue = [draggedID]
-        while !queue.isEmpty {
-            let curr = queue.removeFirst()
-            for c in cards where c.groupNoteId == curr {
-                if descendants.insert(c.id).inserted {
-                    queue.append(c.id)
-                }
-            }
-        }
-
-        for other in cards.reversed() where other.id != draggedID && !descendants.contains(other.id) {
-            guard layoutResult.visibleCardIDs.contains(other.id),
-                  let otherFrame = frames[other.id] else { continue }
-            if otherFrame.contains(mousePoint) {
-                return other.id
-            }
-        }
-        return nil
+        let targets = dragTargets ?? MindMapDragTargets(draggedID: draggedID, cards: layerCards,
+                                                       frames: frames, visible: layoutResult.visibleCardIDs)
+        return targets.target(at: mousePoint)
     }
 
     private func drawConnectors(
@@ -1349,14 +1382,14 @@ public struct MindMapCanvasView: View {
     ) {
         let isSearching = isSearchActive && !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 
-        for card in MindMapLayers.cards(in: selectedMapLayerID, all: cards) where visible.contains(card.id) {
+        for card in layerCards where visible.contains(card.id) {
             if let parentID = card.groupNoteId,
                visible.contains(parentID),
                let parent = frames[parentID],
                let child = frames[card.id] {
                 var path = Path()
                 path.addPath(Path(TreeLayout.connectorPath(from: parent, to: child)))
-                let parentCard = cards.first(where: { $0.id == parentID })
+                let parentCard = cardIndex[parentID]
                 let baseColor = parentCard.map { MarginNoteTheme.cardColors(for: $0.colorIndex).accent } ?? Color(red: 0.70, green: 0.66, blue: 0.58)
                 let strokeColor: Color
                 if isSearching {
@@ -1375,8 +1408,8 @@ public struct MindMapCanvasView: View {
         }
 
         // Draw short horizontal stem for collapsed cards with children
-        for card in MindMapLayers.cards(in: selectedMapLayerID, all: cards) where visible.contains(card.id) && card.isFolded {
-            let hasChildren = cards.contains(where: { $0.groupNoteId == card.id })
+        for card in layerCards where visible.contains(card.id) && card.isFolded {
+            let hasChildren = parentIDs.contains(card.id)
             if hasChildren, let parent = frames[card.id] {
                 var stem = Path()
                 stem.move(to: CGPoint(x: parent.maxX, y: parent.midY))
@@ -1390,26 +1423,13 @@ public struct MindMapCanvasView: View {
             }
         }
 
-        // Draw cross-links contextually
-        // When there are many links (e.g. hundreds of cross-links in imported MarginNote notebooks),
-        // drawing every link globally causes a visual spiderweb that obscures cards.
-        // In MarginNote, cross-links are contextual:
-        // - If a card is selected, show links connected to that card prominently.
-        // - If no card is selected, only show links if the link count is small (<= 15).
-        let linksToDraw: [CardLink]
-        if let selID = selectedCardID {
-            linksToDraw = links.filter { $0.sourceCardId == selID || $0.targetCardId == selID }
-        } else if links.count <= 15 {
-            linksToDraw = links
-        } else {
-            linksToDraw = []
-        }
-
-        let textLinks = NoteTextLinks.connections(in: MindMapLayers.cards(in: selectedMapLayerID, all: cards))
-        let textPairs = Set(textLinks.map { "\($0.sourceCardId)-\($0.targetCardId)" })
-        let displayedLinks = linksToDraw.filter { !textPairs.contains("\($0.sourceCardId)-\($0.targetCardId)") } + textLinks
-        for link in displayedLinks where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
-            guard let geometry = ReferenceLinkGeometry.make(link: link, links: displayedLinks, frames: frames) else { continue }
+        // Geometry is independent of pan/zoom. Rebuild only incident links while dragging.
+        let references = displayedReferenceLinks
+        for link in references where visible.contains(link.sourceCardId) && visible.contains(link.targetCardId) {
+            let moving = draggingCardID == link.sourceCardId || draggingCardID == link.targetCardId
+            guard let geometry = moving
+                ? ReferenceLinkGeometry.make(link: link, links: references, frames: frames)
+                : referenceGeometry[link.id] else { continue }
             context.stroke(
                 transformed(Path(geometry.path)),
                 with: .color(Color.gray.opacity(0.20)),
