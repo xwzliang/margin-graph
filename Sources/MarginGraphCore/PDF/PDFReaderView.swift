@@ -178,12 +178,25 @@ final class SelectionCursorOverlayView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        guard let pdfView, let doc = pdfView.document else { return }
+        guard let pdfView, pdfView.document != nil else { return }
 
         let visiblePages = pdfView.visiblePages
         guard !visiblePages.isEmpty else { return }
 
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+
+        if pdfView.hidesPageNumbers {
+            ctx.saveGState()
+            ctx.setFillColor(NSColor.white.cgColor)
+            for page in visiblePages {
+                let pageFrame = pdfView.convert(page.bounds(for: .cropBox), from: page)
+                for footer in pdfView.pageNumberFilter.footers(on: page) {
+                    let rect = pdfView.convert(footer.bounds.insetBy(dx: -1, dy: -1), from: page)
+                    ctx.fill(rect.intersection(pageFrame).intersection(bounds))
+                }
+            }
+            ctx.restoreGState()
+        }
 
         for handle in [startHandle, endHandle].compactMap({ $0 }) {
             guard visiblePages.contains(handle.page) else { continue }
@@ -872,6 +885,7 @@ public struct PDFReaderView: NSViewRepresentable {
     public var displayMode: PDFReaderDisplayMode
     public var tool: PDFSelectionTool
     public var highlightColor: NSColor
+    public var hidesPageNumbers: Bool
     public var cards: [NoteCard]
     public var selectedCardID: UUID?
     public var activeToolbarOwner: ToolbarOwner
@@ -902,6 +916,7 @@ public struct PDFReaderView: NSViewRepresentable {
         displayMode: PDFReaderDisplayMode = .continuous,
         tool: PDFSelectionTool = .textSelection,
         highlightColor: NSColor = .systemYellow,
+        hidesPageNumbers: Bool = false,
         cards: [NoteCard] = [],
         selectedCardID: UUID? = nil,
         activeToolbarOwner: ToolbarOwner = .none,
@@ -931,6 +946,7 @@ public struct PDFReaderView: NSViewRepresentable {
         self.displayMode = displayMode
         self.tool = tool
         self.highlightColor = highlightColor
+        self.hidesPageNumbers = hidesPageNumbers
         self.cards = cards
         self.selectedCardID = selectedCardID
         self.activeToolbarOwner = activeToolbarOwner
@@ -1073,6 +1089,7 @@ public struct PDFReaderView: NSViewRepresentable {
     }
 
     private func configure(_ view: InteractivePDFView) {
+        view.hidesPageNumbers = hidesPageNumbers
         view.selectionTool = tool
         view.marqueeColor = highlightColor
         view.cards = cards
@@ -1307,6 +1324,23 @@ public final class InteractivePDFView: PDFView {
     private var pendingRestorePosition: (pageIndex: Int, pageOffsetY: CGFloat)? = nil
     private var lastScrollPositionUpdateTime: TimeInterval = 0
     private var scrollPositionDebounceWorkItem: DispatchWorkItem? = nil
+    let pageNumberFilter = PDFPageNumberFilter()
+    var hidesPageNumbers = false {
+        didSet {
+            guard oldValue != hidesPageNumbers else { return }
+            clearPendingSelection()
+            clearSelection()
+            hideToolbar()
+            ensureSelectionCursorOverlay()
+            selectionCursorOverlay?.needsDisplay = true
+        }
+    }
+
+    func filteredSelection(_ selection: PDFSelection?) -> PDFSelection? {
+        guard let selection else { return nil }
+        return hidesPageNumbers ? pageNumberFilter.excludingPageNumbers(from: selection) : selection
+    }
+
     var selectionTool: PDFSelectionTool = .textSelection
     var marqueeColor: NSColor = .systemYellow
     var bookMD5: String = ""
@@ -2450,7 +2484,7 @@ public final class InteractivePDFView: PDFView {
         let page = tracker.page
         let pagePoint = tracker.pagePoint
 
-        guard let wordSel = page.selectionForWord(at: pagePoint) ?? page.selection(for: NSRange(location: max(0, page.characterIndex(at: pagePoint)), length: 1)),
+        guard let wordSel = filteredSelection(page.selectionForWord(at: pagePoint) ?? page.selection(for: NSRange(location: max(0, page.characterIndex(at: pagePoint)), length: 1))),
               let str = wordSel.string, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
         }
@@ -2557,7 +2591,7 @@ public final class InteractivePDFView: PDFView {
             holdTracker?.timer?.invalidate()
             holdTracker = nil
             selectedEmphasisPhrase = nil
-            if let wordSel = page.selectionForWord(at: pagePoint),
+            if let wordSel = filteredSelection(page.selectionForWord(at: pagePoint)),
                let str = wordSel.string, !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                let document {
                 let rects = PDFHighlightResolver.lineRects(from: wordSel, document: document)
@@ -2785,7 +2819,7 @@ public final class InteractivePDFView: PDFView {
             let endPoint = handleDrag.movingStart ? handleDrag.endPoint : currentPoint
 
             guard let document,
-                  let selection = makeMultiPageSelection(from: startPage, at: startPoint, to: endPage, at: endPoint) ?? handleDrag.latestSelection
+                  let selection = makeMultiPageSelection(from: startPage, at: startPoint, to: endPage, at: endPoint)
             else { return }
 
             let rects = PDFHighlightResolver.lineRects(from: selection, document: document)
@@ -2852,7 +2886,7 @@ public final class InteractivePDFView: PDFView {
                let document,
                let pageIndex = pageIndex(of: start.page, in: document),
                let factory = excerptFactory {
-                let rawText = start.page.selection(for: bounds)?.string ?? ""
+                let rawText = filteredSelection(start.page.selection(for: bounds))?.string ?? ""
                 let text = PDFHighlightResolver.normalizeExcerptParagraphs(rawText)
                 excerptHandler?(factory(pageIndex, bounds, text))
             }
@@ -2880,7 +2914,7 @@ public final class InteractivePDFView: PDFView {
         super.mouseUp(with: event)
 
         guard selectionTool == .textSelection,
-              let selection = currentSelection,
+              let selection = filteredSelection(currentSelection),
               let str = selection.string,
               !str.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               let document else { return }
@@ -3044,13 +3078,13 @@ public final class InteractivePDFView: PDFView {
         let endIndex = document.index(for: endPage)
         guard startIndex != NSNotFound, endIndex != NSNotFound else { return nil }
 
-        return PDFHighlightResolver.selection(
+        return filteredSelection(PDFHighlightResolver.selection(
             in: document,
             startPage: startIndex,
             startPoint: startPoint,
             endPage: endIndex,
             endPoint: endPoint
-        )
+        ))
     }
 
     func installHandleAnnotations(for lineRects: [HighlightRect], accent: NSColor = .systemYellow) {

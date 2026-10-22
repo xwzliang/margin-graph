@@ -89,6 +89,7 @@ public struct MarginNotePDFContainerView: View {
     public var onUpdateTypography: ((TypographyOptions) -> Void)?
     public var onImportHighlights: (() -> Void)?
 
+    @State private var hidesPageNumbers = false
     @State private var activeTool: MarginNotePDFTool = .hand
     @State private var highlightColor: Color = .yellow
     @State private var currentPageIndex: Int = 0
@@ -195,6 +196,8 @@ public struct MarginNotePDFContainerView: View {
                 VStack(spacing: 0) {
                     // Row 1: PDF Annotation Toolbar (MarginNote 3 standard)
                     HStack(spacing: 12) {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 12) {
                 // Main Tools Group
                 HStack(spacing: 6) {
                     toolButton(.hand)
@@ -216,10 +219,31 @@ public struct MarginNotePDFContainerView: View {
                     toolButton(.list)
                 }
 
-                Spacer()
+                    }
+                }
+                .scrollIndicators(.hidden)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 // Right Utility Icons
                 HStack(spacing: 10) {
+                    Button {
+                        hidesPageNumbers.toggle()
+                        UserDefaults.standard.set(hidesPageNumbers, forKey: "pdf.hidePageNumbers.\(manager.md5)")
+                    } label: {
+                        Image(systemName: hidesPageNumbers ? "number.circle.fill" : "number.circle")
+                            .font(.system(size: 15))
+                            .foregroundStyle(hidesPageNumbers ? Color.accentColor : Color(white: 0.35))
+                            .frame(width: 28, height: 28)
+                            .background(RoundedRectangle(cornerRadius: 4)
+                                .fill(hidesPageNumbers ? Color.accentColor.opacity(0.12) : Color.clear))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(hidesPageNumbers ? "Show Page Numbers" : "Hide Page Numbers")
+                    .accessibilityValue(hidesPageNumbers ? "Hidden" : "Visible")
+                    .marginNoteTooltip(hidesPageNumbers
+                        ? "Show Page Numbers"
+                        : "Hide Page Numbers from View and New Highlights")
+
                     // Search button
                     Button {
                         isSearching.toggle()
@@ -515,6 +539,7 @@ public struct MarginNotePDFContainerView: View {
                     displayMode: displayMode,
                     tool: selectionTool,
                     highlightColor: NSColor(highlightColor),
+                    hidesPageNumbers: hidesPageNumbers,
                     cards: cards,
                     selectedCardID: selectedCardID,
                     activeToolbarOwner: activeToolbarOwner,
@@ -863,6 +888,9 @@ public struct MarginNotePDFContainerView: View {
                     moreOptionsButtonFrame = f
                 }
             }
+        }
+        .onChange(of: manager.md5, initial: true) { _, md5 in
+            hidesPageNumbers = UserDefaults.standard.bool(forKey: "pdf.hidePageNumbers.\(md5)")
         }
         .onAppear {
             totalPageCount = manager.pageCount
