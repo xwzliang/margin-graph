@@ -6,6 +6,31 @@ import SQLite3
 #endif
 
 public extension Database {
+    /// Catalog-only retirement after an explicit Replace. Source bytes and bookmarks remain intact.
+    @discardableResult
+    func retireUnreferencedImportDocument(id: UUID) throws -> Bool {
+        guard let doc = try getDocument(id: id), !doc.md5.isEmpty,
+              try cardsForDocument(md5: doc.md5).isEmpty else { return false }
+        func matches(_ hash: String) -> Bool {
+            !hash.isEmpty && (hash == doc.md5 || hash.hasPrefix(doc.md5) || doc.md5.hasPrefix(hash))
+        }
+        guard try !allTopics().contains(where: { topic in
+            topic.bookMD5List.contains(where: matches) || topic.lastDocumentMD5.map(matches) == true
+        }) else { return false }
+        if !doc.filePath.isEmpty {
+            try withStatement("INSERT OR REPLACE INTO retired_import_documents(file_path,md5) VALUES(?,?)") { statement in
+                bind(URL(fileURLWithPath: doc.filePath).standardizedFileURL.path, to: 1, in: statement)
+                bind(doc.md5, to: 2, in: statement)
+                try requireDone(statement)
+            }
+        }
+        try withStatement("DELETE FROM documents WHERE id = ?") { statement in
+            bind(id.uuidString, to: 1, in: statement)
+            try requireDone(statement)
+        }
+        return true
+    }
+
     func deleteDocument(id: UUID) throws {
         // First find the document's md5 to clean up associated cards
         if let doc = try allDocuments().first(where: { $0.id == id }) {
@@ -135,6 +160,11 @@ public extension Database {
             } ?? docs[0]
 
             for doc in docs where doc.id != bestDoc.id {
+                // Distinct revisions can legitimately remain in different notebooks after Replace.
+                // Title equality alone must not move their notes onto another PDF.
+                guard (topicCountByBookMD5[doc.md5] ?? 0) == 0,
+                      try cardsForDocument(md5: doc.md5).isEmpty else { continue }
+
                 try migrateDocumentMD5(from: doc.md5, to: bestDoc.md5)
                 try deleteDocument(id: doc.id)
 
@@ -194,6 +224,11 @@ public extension Database {
         var seenDirs = Set<String>()
         searchDirectories = searchDirectories.filter { seenDirs.insert($0.standardizedFileURL.path).inserted }
 
+        let retiredPaths: Set<String> = try withStatement("SELECT file_path FROM retired_import_documents") { statement in
+            var paths = Set<String>()
+            while sqlite3_step(statement) == SQLITE_ROW { if let path = text(statement, 0) { paths.insert(path) } }
+            return paths
+        }
         let existingDocsForScan = (try? allDocuments()) ?? []
         var existingPaths = Set(existingDocsForScan.map(\.filePath))
         let existingMD5s = Set(existingDocsForScan.map(\.md5))
@@ -215,7 +250,7 @@ public extension Database {
                 }
 
                 // If document is already registered for this physical file path, skip all heavy checks immediately!
-                if existingPaths.contains(fileURL.path) {
+                if existingPaths.contains(fileURL.path) || retiredPaths.contains(fileURL.standardizedFileURL.path) {
                     continue
                 }
 

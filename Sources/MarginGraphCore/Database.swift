@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 5
+    private static let currentSchemaVersion: Int32 = 6
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -182,6 +182,9 @@ public final class Database: @unchecked Sendable {
             topic_ids TEXT NOT NULL,
             snapshot BLOB NOT NULL,
             archive BLOB NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS retired_import_documents(
+            file_path TEXT PRIMARY KEY, md5 TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS documents(
             id TEXT PRIMARY KEY, title TEXT NOT NULL, file_path TEXT NOT NULL,
@@ -460,8 +463,13 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    public func insertDocument(_ document: Document) throws {
+    public func insertDocument(_ document: Document, deduplicateByTitle: Bool = true) throws {
         var doc = document
+        // An explicit import can restore a previously retired source; discovery skips it.
+        try withStatement("DELETE FROM retired_import_documents WHERE file_path = ?") { statement in
+            bind(URL(fileURLWithPath: document.filePath).standardizedFileURL.path, to: 1, in: statement)
+            try requireDone(statement)
+        }
 
         // 1. Existing by MD5: preserve canonical ID and file path if incoming is empty
         if let existing = try getDocumentByMD5(md5: document.md5) {
@@ -509,7 +517,7 @@ public final class Database: @unchecked Sendable {
 
         // 3. Existing by Folder & Title: prevent duplicate document names in the same folder
         let cleanTitle = doc.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !cleanTitle.isEmpty,
+        if deduplicateByTitle, !cleanTitle.isEmpty,
            let existingByTitle = try? allDocuments().first(where: {
                $0.id != doc.id &&
                $0.folderId == doc.folderId &&

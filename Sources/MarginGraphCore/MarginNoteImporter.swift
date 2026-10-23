@@ -696,100 +696,76 @@ public final class MarginNoteImporter {
         _ database: Database,
         conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?
     ) throws -> MarginNoteImportResult? {
-        let result = try read()
-        let existingTopics = (try? database.allTopics()) ?? []
+        guard let result = try Self.apply(try read(), to: database, conflictResolver: conflictResolver) else { return nil }
+        try ImportedPackageStore.retain(url: url, result: result, database: database)
+        return result
+    }
 
-        var topicsToInsert: [Topic] = []
-        var topicIdMapping: [UUID: UUID] = [:]
-
-        for importedTopic in result.topics {
-            let matchingExisting = existingTopics.first {
-                $0.title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(
-                    importedTopic.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                ) == .orderedSame
+    /// Resolve every prompt before changing the catalog, then replace notes and their unused
+    /// predecessor documents together. A different imported hash is still the replacement PDF.
+    static func apply(_ result: MarginNoteImportResult, to database: Database,
+                      conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?) throws -> MarginNoteImportResult? {
+        let existingTopics = try database.allTopics()
+        let existingDocuments = try database.allDocuments()
+        var decisions: [(Topic, Topic?, NotebookConflictResolution)] = []
+        for imported in result.topics {
+            let existing = existingTopics.first {
+                $0.id == imported.id || $0.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .localizedCaseInsensitiveCompare(imported.title.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
             }
-
-            if let existing = matchingExisting {
-                let resolution = conflictResolver?(existing, importedTopic) ?? .replace
-                switch resolution {
-                case .cancel:
-                    return nil
-                case .replace:
-                    let oldCards = (try? database.cardsForTopic(id: existing.id)) ?? []
-                    for c in oldCards { try? database.deleteCard(id: c.id) }
-                    let oldLinks = (try? database.linksForTopic(id: existing.id)) ?? []
-                    for l in oldLinks { try? database.deleteLink(id: l.id) }
-                    try? database.deleteTopic(id: existing.id)
-
-                    // Also delete any orphan/dummy topics with matching title that have 0 cards
-                    for other in existingTopics where other.id != existing.id {
-                        let cleanOther = other.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        let cleanImp = importedTopic.title.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if cleanOther.localizedCaseInsensitiveCompare(cleanImp) == .orderedSame ||
-                           cleanOther.localizedCaseInsensitiveContains(cleanImp) ||
-                           cleanImp.localizedCaseInsensitiveContains(cleanOther) {
-                            let otherCards = (try? database.cardsForTopic(id: other.id)) ?? []
-                            if otherCards.isEmpty {
-                                try? database.deleteTopic(id: other.id)
-                            }
-                        }
-                    }
-
-                    topicsToInsert.append(importedTopic)
-                    topicIdMapping[importedTopic.id] = importedTopic.id
-
-                case .merge:
+            let resolution = existing.map { conflictResolver?($0, imported) ?? .replace } ?? .replace
+            if case .cancel = resolution { return nil }
+            decisions.append((imported, existing, resolution))
+        }
+        var mapping: [UUID: UUID] = [:]
+        var replacementHashes = Set<String>()
+        var retiredCandidates = Set<UUID>()
+        try database.transaction {
+            for (imported, existing, resolution) in decisions {
+                if let existing, case .merge = resolution {
                     var merged = existing
-                    for bmd5 in importedTopic.bookMD5List where !merged.bookMD5List.contains(bmd5) {
-                        merged.bookMD5List.append(bmd5)
-                    }
+                    for hash in imported.bookMD5List where !merged.bookMD5List.contains(hash) { merged.bookMD5List.append(hash) }
                     merged.updatedAt = Date()
                     try database.updateTopic(merged)
-                    topicIdMapping[importedTopic.id] = existing.id
+                    mapping[imported.id] = existing.id
+                } else {
+                    if let existing {
+                        let oldHashes = Set(existing.bookMD5List + (try database.cardsForTopic(id: existing.id)).compactMap(\.bookMD5))
+                        let newHashes = Set(imported.bookMD5List + result.cards.filter { $0.topicId == imported.id }.compactMap(\.bookMD5))
+                        replacementHashes.formUnion(newHashes)
+                        // A notes-only import has no replacement PDF to retire a document for.
+                        if result.documents.contains(where: { newHashes.contains($0.md5) }) {
+                            retiredCandidates.formUnion(existingDocuments.filter { oldHashes.contains($0.md5) && !newHashes.contains($0.md5) }.map(\.id))
+                        }
+                        try database.deleteTopic(id: existing.id)
+                    }
+                    try database.insertTopic(imported)
+                    mapping[imported.id] = imported.id
                 }
-            } else {
-                topicsToInsert.append(importedTopic)
-                topicIdMapping[importedTopic.id] = importedTopic.id
             }
-        }
-
-        try database.execute("BEGIN TRANSACTION;")
-        do {
-            for folder in result.folders {
-                try? database.insertFolder(folder)
-            }
-            for topic in topicsToInsert {
-                try database.insertTopic(topic)
-            }
+            // Remove only unused catalog entries, never shared documents or physical source files.
+            // Do this before insertDocument's legacy same-title deduplication can adopt the old hash.
+            for id in retiredCandidates { _ = try database.retireUnreferencedImportDocument(id: id) }
+            for folder in result.folders { try database.insertFolder(folder) }
             for document in result.documents {
-                try database.insertDocument(document)
+                try database.insertDocument(document, deduplicateByTitle: !replacementHashes.contains(document.md5))
             }
-            for card in result.cards {
-                var cardToInsert = card
-                if let targetTopicId = topicIdMapping[card.topicId] {
-                    cardToInsert.topicId = targetTopicId
-                }
-                try database.insertCard(cardToInsert)
+            for var card in result.cards {
+                card.topicId = mapping[card.topicId] ?? card.topicId
+                try database.insertCard(card)
             }
-            for link in result.links {
-                var linkToInsert = link
-                if let targetTopicId = topicIdMapping[link.topicId] {
-                    linkToInsert.topicId = targetTopicId
-                }
-                try? database.insertLink(linkToInsert)
+            for var link in result.links {
+                link.topicId = mapping[link.topicId] ?? link.topicId
+                try database.insertLink(link)
             }
-            for item in result.reviewItems {
-                try? database.upsertReviewItem(item)
-            }
-            try database.execute("COMMIT;")
-        } catch {
-            try? database.execute("ROLLBACK;")
-            throw error
+            for item in result.reviewItems { try database.upsertReviewItem(item) }
         }
-
-        try ImportedPackageStore.retain(url: url, result: result, database: database)
-
-        return result
+        var applied = result
+        applied.topics = try result.topics.map { try database.getTopic(id: mapping[$0.id] ?? $0.id) ?? $0 }
+        applied.cards = result.cards.map { var card = $0; card.topicId = mapping[card.topicId] ?? card.topicId; return card }
+        applied.links = result.links.map { var link = $0; link.topicId = mapping[link.topicId] ?? link.topicId; return link }
+        applied.documents = try result.documents.map { try database.getDocumentByPath(filePath: $0.filePath) ?? $0 }
+        return applied
     }
 
     @discardableResult
