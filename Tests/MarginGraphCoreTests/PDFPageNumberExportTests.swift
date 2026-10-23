@@ -43,6 +43,43 @@ final class PDFPageNumberExportTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: output), original)
     }
 
+    func testBackgroundExportHandlesLongLinkedObjectGraph() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("linked.pdf")
+        let output = root.appendingPathComponent("export.pdf")
+        // Real books can link thousands of outline items through Next/Prev and
+        // back to their parent/pages. Exercise the same small-stack worker as the app.
+        let count = 4_000
+        var objects = [
+            "<< /Type /Catalog /Pages 2 0 R /Outlines 6 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+            "", "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+            "<< /Type /Outlines /First 7 0 R /Last \(count + 6) 0 R /Count \(count) >>"
+        ]
+        let content = String(repeating: "% comment with delimiters [()]\nq 1 0 0 1 0 0 cm Q\n", count: 10_000)
+            + "BT /F1 14 Tf 1 0 0 1 50 700 Tm [(Body) 10 ( number 42)] TJ 0 -650 Td [(4) 10 <32>] TJ ET"
+        objects[3] = "<< /Length \(content.utf8.count) >>\nstream\n\(content)\nendstream"
+        for index in 0..<count {
+            let id = index + 7
+            let next = index + 1 < count ? "/Next \(id + 1) 0 R" : ""
+            let previous = index > 0 ? "/Prev \(id - 1) 0 R" : ""
+            objects.append("<< /Title (Chapter \(index)) /Parent 6 0 R /Dest [3 0 R /Fit] \(next) \(previous) >>")
+        }
+        try pdfData(objects: objects).write(to: source)
+        try await Task.detached {
+            try PDFPageNumberExport.write(source: source, destination: output, hidingPageNumbers: true)
+        }.value
+        let pdf = try XCTUnwrap(PDFDocument(url: output))
+        XCTAssertEqual(pdf.page(at: 0)?.string, "Body number 42")
+        let outline = try XCTUnwrap(pdf.outlineRoot)
+        XCTAssertEqual(outline.numberOfChildren, count)
+        XCTAssertEqual(outline.child(at: count - 1)?.label, "Chapter \(count - 1)")
+        XCTAssertEqual(outline.child(at: count - 1)?.destination?.page, pdf.page(at: 0))
+    }
+
     func testPackageUsesSettingAndRecomputesNativeHashIncludingRetainedArchive() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -155,12 +192,16 @@ final class PDFPageNumberExportTests: XCTestCase {
             "<< /Type /Annot /Subtype /Link /Rect [50 697 160 715] /Border [0 0 0] /A << /S /URI /URI (https://example.com/) >> /P 3 0 R >>",
             "<< /Title (Footer export test) >>"
         ]
+        return pdfData(objects: objects, info: " /Info 11 0 R")
+    }
+
+    private func pdfData(objects: [String], info: String = "") -> Data {
         var result = "%PDF-1.7\n", offsets = [0]
         for (index, object) in objects.enumerated() { offsets.append(result.utf8.count); result += "\(index + 1) 0 obj\n\(object)\nendobj\n" }
         let xref = result.utf8.count
         result += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
         for offset in offsets.dropFirst() { result += String(format: "%010d 00000 n \n", offset) }
-        result += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R /Info 11 0 R >>\nstartxref\n\(xref)\n%%EOF\n"
+        result += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R\(info) >>\nstartxref\n\(xref)\n%%EOF\n"
         return Data(result.utf8)
     }
 }

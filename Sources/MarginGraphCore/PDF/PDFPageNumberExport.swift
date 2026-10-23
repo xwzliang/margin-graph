@@ -124,6 +124,23 @@ private final class PDFObjectWriter {
     var overrides: [CGPDFDictionaryRef: [String: String]] = [:]
     private var objects: [Data] = []
     private var references: [OpaquePointer: Int] = [:]
+    private enum Pending {
+        case dictionary(CGPDFDictionaryRef)
+        case array(CGPDFArrayRef)
+        case stream(CGPDFStreamRef)
+    }
+    private var pending: [(Int, Pending)] = []
+
+    // PDF graphs contain long /Next chains and cycles through /Parent and page
+    // references. Reserve references now; serialize one object at a time in finish.
+    // Recursively walking those links exhausts a background worker's small stack.
+    private func enqueue(_ pointer: OpaquePointer, _ value: Pending) -> String {
+        if let id = references[pointer] { return reference(id) }
+        let id = reserve()
+        references[pointer] = id
+        pending.append((id, value))
+        return reference(id)
+    }
 
     private func reserve() -> Int { objects.append(Data()); return objects.count }
     private func reference(_ id: Int) -> String { "\(id) 0 R" }
@@ -168,10 +185,7 @@ private final class PDFObjectWriter {
         return "<< " + fields.keys.sorted().map { Self.name($0) + " " + fields[$0]! }.joined(separator: "\n") + " >>"
     }
     private func dictionaryReference(_ dictionary: CGPDFDictionaryRef) throws -> String {
-        if let id = references[dictionary] { return reference(id) }
-        let id = reserve(); references[dictionary] = id
-        objects[id - 1] = Data(try self.dictionary(dictionary, changes: overrides[dictionary] ?? [:]).utf8)
-        return reference(id)
+        enqueue(dictionary, .dictionary(dictionary))
     }
     func stream(data: Data, dictionary: CGPDFDictionaryRef? = nil, changes: [String: String] = [:], format: CGPDFDataFormat = .raw) throws -> String {
         add(try streamBody(data: data, dictionary: dictionary, changes: changes, format: format))
@@ -224,31 +238,41 @@ private final class PDFObjectWriter {
         case .array:
             var value: CGPDFArrayRef?; CGPDFObjectGetValue(object, .array, &value)
             guard let value else { return "[]" }
-            if let id = references[value] { return reference(id) }
-            let id = reserve(); references[value] = id
-            let values = try (0..<CGPDFArrayGetCount(value)).map { index -> String in
-                var item: CGPDFObjectRef?; CGPDFArrayGetObject(value, index, &item)
-                return try item.map { try self.object($0) } ?? "null"
-            }
-            objects[id - 1] = Data(("[" + values.joined(separator: " ") + "]").utf8)
-            return reference(id)
+            return enqueue(value, .array(value))
         case .dictionary:
             var value: CGPDFDictionaryRef?; CGPDFObjectGetValue(object, .dictionary, &value)
             return try value.map { try dictionaryReference($0) } ?? "<<>>"
         case .stream:
             var value: CGPDFStreamRef?; CGPDFObjectGetValue(object, .stream, &value)
             guard let value else { throw PDFPageNumberExportError.unsupported("invalid stream reference") }
-            if let id = references[value] { return reference(id) }
-            let id = reserve(); references[value] = id
-            let (data, format) = try Self.decoded(value)
-            objects[id - 1] = try streamBody(data: data, dictionary: CGPDFStreamGetDictionary(value), changes: [:], format: format)
-            return reference(id)
+            return enqueue(value, .stream(value))
         @unknown default: throw PDFPageNumberExportError.unsupported("unknown PDF object")
         }
     }
     func finish(catalog: CGPDFDictionaryRef, info: CGPDFDictionaryRef?) throws -> Data {
         let root = try dictionaryReference(catalog)
         let metadata = try info.map { try dictionaryReference($0) }
+        var cursor = 0
+        while cursor < pending.count {
+            let (id, value) = pending[cursor]
+            cursor += 1
+            // Rendering may enqueue more objects. Never recursively render them.
+            switch value {
+            case .dictionary(let dictionary):
+                objects[id - 1] = Data(try self.dictionary(dictionary, changes: overrides[dictionary] ?? [:]).utf8)
+            case .array(let array):
+                var values: [String] = []
+                for index in 0..<CGPDFArrayGetCount(array) {
+                    var item: CGPDFObjectRef?
+                    CGPDFArrayGetObject(array, index, &item)
+                    values.append(try item.map { try object($0) } ?? "null")
+                }
+                objects[id - 1] = Data(("[" + values.joined(separator: " ") + "]").utf8)
+            case .stream(let stream):
+                let (data, format) = try Self.decoded(stream)
+                objects[id - 1] = try streamBody(data: data, dictionary: CGPDFStreamGetDictionary(stream), changes: [:], format: format)
+            }
+        }
         var data = Data("%PDF-1.7\n%\u{00e2}\u{00e3}\u{00cf}\u{00d3}\n".utf8)
         var offsets = [0]
         for (index, object) in objects.enumerated() {
@@ -293,7 +317,12 @@ private enum PDFFooterStream {
         }
         while let token = try nextToken(bytes, cursor: &cursor) {
             if token.operand { operands.append(token); continue }
-            let n = numbers()
+            // Text arrays can be large; only parse numbers for operators that use them.
+            let n: [CGFloat]
+            switch token.value {
+            case "cm", "Tm", "Td", "TD", "TL", "Ts": n = numbers()
+            default: n = []
+            }
             switch token.value {
             case "BI":
                 // Never guess where arbitrary inline-image bytes end or silently export unchanged footers.
@@ -363,8 +392,18 @@ private enum PDFFooterStream {
         }
         return String(decoding: result, as: UTF8.self)
     }
-    private static func whitespace(_ b: UInt8) -> Bool { [0, 9, 10, 12, 13, 32].contains(b) }
-    private static func delimiter(_ b: UInt8) -> Bool { whitespace(b) || Array("()<>[]{}/%".utf8).contains(b) }
+    private static func whitespace(_ b: UInt8) -> Bool {
+        switch b {
+        case 0, 9, 10, 12, 13, 32: return true
+        default: return false
+        }
+    }
+    private static func delimiter(_ b: UInt8) -> Bool {
+        switch b {
+        case 0, 9, 10, 12, 13, 32, 40, 41, 60, 62, 91, 93, 123, 125, 47, 37: return true
+        default: return false
+        }
+    }
     private static func skipSpace(_ bytes: [UInt8], cursor: inout Int) {
         while cursor < bytes.count {
             if whitespace(bytes[cursor]) { cursor += 1 }
@@ -373,7 +412,8 @@ private enum PDFFooterStream {
             } else { break }
         }
     }
-    private static func nextToken(_ bytes: [UInt8], cursor: inout Int) throws -> Token? {
+    private static func nextToken(_ bytes: [UInt8], cursor: inout Int, materialize: Bool = true, depth: Int = 0) throws -> Token? {
+        guard depth < 64 else { throw PDFPageNumberExportError.unsupported("excessively nested PDF operands") }
         skipSpace(bytes, cursor: &cursor)
         guard cursor < bytes.count else { return nil }
         let start = cursor, first = bytes[cursor]; cursor += 1
@@ -396,7 +436,7 @@ private enum PDFFooterStream {
                     (dictionary && cursor + 1 < bytes.count && bytes[cursor] == 62 && bytes[cursor + 1] == 62)) {
                     cursor += dictionary ? 2 : 1; closed = true; break
                 }
-                _ = try nextToken(bytes, cursor: &cursor)
+                _ = try nextToken(bytes, cursor: &cursor, materialize: false, depth: depth + 1)
             }
             guard closed else { throw PDFPageNumberExportError.unsupported("unterminated PDF object") }
         } else if first == 60 {
@@ -406,8 +446,15 @@ private enum PDFFooterStream {
         } else {
             while cursor < bytes.count && !delimiter(bytes[cursor]) { cursor += 1 }
         }
+        // Nested array members only need their end offset, not allocated strings.
+        guard materialize else { return Token(range: start..<cursor, value: "", operand: true) }
         let value = String(decoding: bytes[start..<cursor], as: UTF8.self)
-        return Token(range: start..<cursor, value: value,
-                     operand: [40, 47, 60, 91].contains(first) || Double(value) != nil || ["true", "false", "null"].contains(value))
+        let operand: Bool
+        switch first {
+        case 40, 47, 60, 91: operand = true
+        case 43, 45, 46, 48...57: operand = Double(value) != nil
+        default: operand = value == "true" || value == "false" || value == "null"
+        }
+        return Token(range: start..<cursor, value: value, operand: operand)
     }
 }
