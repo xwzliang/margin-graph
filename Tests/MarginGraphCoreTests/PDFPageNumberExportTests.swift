@@ -54,8 +54,11 @@ final class PDFPageNumberExportTests: XCTestCase {
         let doc = Document(id: Document.stableUUID(md5), title: "Book", filePath: source.path, md5: md5, totalPages: 2, documentType: "pdf")
         try db.insertDocument(doc)
         let topic = Topic(title: "Notes", bookMD5List: [md5]); try db.insertTopic(topic)
-        let card = NoteCard(topicId: topic.id, bookMD5: md5, highlightText: "Body number 42", startPage: 0,
-                            highlightRects: [HighlightRect(page: 0, x: 50, y: 697, width: 100, height: 15)])
+        let originalPDF = try XCTUnwrap(PDFDocument(url: source))
+        let selection = try XCTUnwrap(originalPDF.page(at: 0)?.selection(for: CGRect(x: 0, y: 0, width: 612, height: 792)))
+        let card = NoteCard(topicId: topic.id, bookMD5: md5,
+            highlightText: PDFHighlightResolver.normalizeExcerptParagraphs(selection), startPage: 0,
+            highlightRects: PDFHighlightResolver.lineRects(from: selection, document: originalPDF))
         try db.insertCard(card)
         let media = try MediaStorage(directoryURL: root.appendingPathComponent("media"))
         let originalPackage = root.appendingPathComponent("Original.marginpkg")
@@ -85,6 +88,13 @@ final class PDFPageNumberExportTests: XCTestCase {
         defer { sqlite3_finalize(statement) }
         XCTAssertEqual(sqlite3_step(statement), SQLITE_ROW)
         XCTAssertEqual(String(cString: sqlite3_column_text(statement, 0)), try MarginPackageExporter.nativeBookHash(url: pdfURL))
+        var noteStatement: OpaquePointer?
+        XCTAssertEqual(sqlite3_prepare_v2(sqlite, "SELECT ZHIGHLIGHT_TEXT FROM ZBOOKNOTE WHERE ZHIGHLIGHT_TEXT IS NOT NULL", -1, &noteStatement, nil), SQLITE_OK)
+        defer { sqlite3_finalize(noteStatement) }
+        XCTAssertEqual(sqlite3_step(noteStatement), SQLITE_ROW)
+        let exportedText = String(cString: sqlite3_column_text(noteStatement, 0))
+        XCTAssertEqual(exportedText, PDFNotePageNumberCleaner(document: originalPDF).clean(card).highlightText)
+        XCTAssertNotEqual(exportedText, card.highlightText)
         UserDefaults.standard.set(false, forKey: key)
         try MarginPackageExporter.exportDocument(document: doc, database: db, mediaStorage: media, destinationURL: cleanPackage)
         XCTAssertEqual(try Data(contentsOf: cleanPackage), try Data(contentsOf: originalPackage))

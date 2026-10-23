@@ -1778,6 +1778,58 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private var cleaningPageNumberDocuments = Set<String>()
+
+    func cleanExistingNotePageNumbers() {
+        guard let manager, cleaningPageNumberDocuments.insert(manager.md5).inserted else { return }
+        let md5 = manager.md5, url = manager.url, database = self.database
+        Task {
+            defer { cleaningPageNumberDocuments.remove(md5) }
+            do {
+                let changes = try await Task.detached(priority: .userInitiated) {
+                    guard let pdf = PDFDocument(url: url) else { throw CocoaError(.fileReadCorruptFile) }
+                    let cleaner = PDFNotePageNumberCleaner(document: pdf)
+                    return try database.cardsForDocument(md5: md5).compactMap { old -> (NoteCard, NoteCard)? in
+                        let new = cleaner.clean(old)
+                        return old == new ? nil : (old, new)
+                    }
+                }.value
+                guard self.database === database, PDFPageNumberPreferences.isHidden(for: md5) else { return }
+                // Do not overwrite notes edited while the PDF was being scanned.
+                let current = try changes.filter { try database.getCard(id: $0.0.id) == $0.0 }
+                try applyPageNumberCleanup(current.map { $0.1 }, opposite: current.map { $0.0 })
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Could Not Clean Existing Notes"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
+    }
+
+    private func applyPageNumberCleanup(_ cards: [NoteCard], opposite: [NoteCard]) throws {
+        guard !cards.isEmpty else { return }
+        try database.transaction {
+            for var card in cards {
+                card.updatedAt = Date()
+                try database.updateCard(card)
+                PDFHighlightResolver.invalidateLineRectsCache(for: card.id)
+            }
+        }
+        undoManager.registerUndo(withTarget: self) { target in
+            MainActor.assumeIsolated {
+                do { try target.applyPageNumberCleanup(opposite, opposite: cards) }
+                catch {
+                    let alert = NSAlert(); alert.messageText = "Could Not Restore Notes"
+                    alert.informativeText = error.localizedDescription; alert.runModal()
+                }
+            }
+        }
+        undoManager.setActionName("Remove Page Numbers from Notes")
+        reloadStudySet()
+        objectWillChange.send()
+    }
+
     private func registerCardUndo(oldCard: NoteCard, newCard: NoteCard, actionName: String) {
         undoManager.registerUndo(withTarget: self) { target in
             MainActor.assumeIsolated {
@@ -3611,7 +3663,8 @@ struct StudyWorkspaceView: View {
                     if let doc = model?.activeDocument {
                         model?.importPDFHighlightsManually(for: doc)
                     }
-                }
+                },
+                onCleanPageNumbers: { [weak model] in model?.cleanExistingNotePageNumbers() }
             )
         } else if let doc = model.activeDocument, doc.documentType == "video" || doc.documentType == "audio" {
             MediaPlaybackContainerView(

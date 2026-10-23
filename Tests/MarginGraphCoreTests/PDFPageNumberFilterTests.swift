@@ -60,6 +60,62 @@ final class PDFPageNumberFilterTests: XCTestCase {
         XCTAssertEqual(filter.footers(on: page).count, 1)
     }
 
+    func testExistingNotesCleanTextSegmentsAndPaddedHighlightsWithoutChangingUserNotes() throws {
+        let pdf = try makeDocument()
+        let selection = PDFSelection(document: pdf)
+        for index in 0..<pdf.pageCount { selection.add(try XCTUnwrap(pdf.page(at: index)?.selection(for: pdf.page(at: index)!.bounds(for: .mediaBox)))) }
+        let text = PDFHighlightResolver.normalizeExcerptParagraphs(selection)
+        let rects = PDFHighlightResolver.lineRects(from: selection, document: pdf).map { rect -> HighlightRect in
+            var rect = rect
+            if rect.y < 50 { rect.x -= 2; rect.y -= 2; rect.width += 4; rect.height += 4 }
+            return rect
+        }
+        let segment = ExcerptSegment(text: text, rects: rects)
+        let original = NoteCard(topicId: UUID(), bookMD5: "book", title: "42 is my title",
+            highlightText: "My edited prefix. " + text, notesText: "Keep my note 42 and xiv.",
+            startPage: 0, endPage: 2, highlightRects: rects, emphasisRects: rects.filter { $0.y < 50 }, excerptSegments: [segment])
+        let cleaner = PDFNotePageNumberCleaner(document: pdf)
+        let cleaned = cleaner.clean(original)
+        XCTAssertFalse(cleaned.highlightText.contains("Page 42"))
+        XCTAssertFalse(cleaned.highlightText.contains("xiv"))
+        XCTAssertFalse(cleaned.highlightText.contains("— 44 —"))
+        XCTAssertTrue(cleaned.highlightText.contains("Body ends with 42"))
+        XCTAssertTrue(cleaned.highlightText.hasPrefix("My edited prefix. "))
+        XCTAssertEqual(cleaned.notesText, original.notesText)
+        XCTAssertEqual(cleaned.title, original.title)
+        XCTAssertEqual(cleaned.excerptSegments.first?.id, segment.id)
+        XCTAssertFalse(cleaned.excerptSegments[0].text.contains("Page 42"))
+        XCTAssertTrue(cleaned.highlightRects.allSatisfy { $0.y > 50 })
+        XCTAssertTrue(cleaned.excerptSegments[0].rects.allSatisfy { $0.y > 50 })
+        XCTAssertTrue(cleaned.emphasisRects.isEmpty)
+        XCTAssertEqual(cleaner.clean(cleaned), cleaned)
+        let db = try Database(inMemory: true)
+        try db.insertTopic(Topic(id: original.topicId, title: "Cleanup"))
+        try db.insertCard(original)
+        try db.updateCard(cleaned)
+        XCTAssertEqual(try db.getCard(id: original.id)?.highlightText, cleaned.highlightText)
+        try db.updateCard(original)
+        XCTAssertEqual(try db.getCard(id: original.id)?.highlightRects, original.highlightRects)
+    }
+
+    func testCleanupRequiresFooterGeometryAndPreservesAmbiguousEdits() throws {
+        let pdf = try makeDocument()
+        let cleaner = PDFNotePageNumberCleaner(document: pdf)
+        let body = NoteCard(topicId: UUID(), highlightText: "Page 42 and xiv", highlightRects: [HighlightRect(page: 0, x: 60, y: 690, width: 220, height: 25)])
+        XCTAssertEqual(cleaner.clean(body), body)
+        let page = try XCTUnwrap(pdf.page(at: 0))
+        let footer = try XCTUnwrap(page.selection(for: CGRect(x: 270, y: 30, width: 120, height: 25)))
+        let rects = PDFHighlightResolver.lineRects(from: footer, document: pdf)
+        let only = NoteCard(topicId: UUID(), highlightText: "Page 42", notesText: "My comment", highlightRects: rects)
+        XCTAssertTrue(cleaner.clean(only).highlightText.isEmpty)
+        XCTAssertTrue(cleaner.clean(only).highlightRects.isEmpty)
+        XCTAssertEqual(cleaner.clean(only).notesText, "My comment")
+        var ambiguous = only; ambiguous.highlightText = "Page 42 and Page 42"
+        XCTAssertEqual(cleaner.clean(ambiguous).highlightText, ambiguous.highlightText)
+        ambiguous.highlightText = "My edited reference to Page 42"
+        XCTAssertEqual(cleaner.clean(ambiguous).highlightText, ambiguous.highlightText)
+    }
+
     private func makeDocument(footers: [String] = ["Page 42", "xiv", "— 44 —"]) throws -> PDFDocument {
         let data = NSMutableData()
         let consumer = try XCTUnwrap(CGDataConsumer(data: data))

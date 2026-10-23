@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import PDFKit
 import SQLite3
 import zlib
 import CryptoKit
@@ -251,6 +252,7 @@ public enum MarginPackageExporter {
         let notesDBURL = stagingDir.appendingPathComponent(notesFileName)
         try templateData.write(to: notesDBURL)
 
+        var cleanedCards = cards
         var packagedDocuments = documents
         var usedPaths = Set<String>()
         var convertedEPUBHashes = Set<String>()
@@ -282,6 +284,14 @@ public enum MarginPackageExporter {
             let targetURL = stagingDir.appendingPathComponent(rel)
             try fileManager.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             if sourceURL.pathExtension.lowercased() == "pdf", hiddenPageNumberDocumentMD5s.contains(doc.md5) {
+                if let pdf = PDFDocument(url: sourceURL) {
+                    let cleaner = PDFNotePageNumberCleaner(document: pdf)
+                    cleanedCards = cleanedCards.map { card in
+                        guard let hash = card.bookMD5,
+                              hash == doc.md5 || hash.hasPrefix(doc.md5) || doc.md5.hasPrefix(hash) else { return card }
+                        return cleaner.clean(card)
+                    }
+                }
                 try PDFPageNumberExport.write(source: sourceURL, destination: targetURL, hidingPageNumbers: true)
             } else {
                 try fileManager.copyItem(at: sourceURL, to: targetURL)
@@ -291,7 +301,7 @@ public enum MarginPackageExporter {
 
         // MarginNote enters a notebook through ZTOPIC.ZMINDLINKS, rather than
         // discovering arbitrary notes solely by their topic ID.
-        var exportCards = cards.map { original -> NoteCard in
+        var exportCards = cleanedCards.map { original -> NoteCard in
             var card = original
             if let hash = card.bookMD5, convertedEPUBHashes.contains(hash) {
                 // Cached PDF page coordinates cannot identify EPUB text ranges.

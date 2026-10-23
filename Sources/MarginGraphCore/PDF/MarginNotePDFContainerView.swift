@@ -69,6 +69,7 @@ public struct MarginNotePDFContainerView: View {
     public var onManageDocuments: (() -> Void)?
     public var onExcerpt: (PDFExcerpt) -> Void
     public var onCreateCardWithColor: ((PDFExcerpt, Int) -> Void)?
+    public var onCleanPageNumbers: (() -> Void)?
     public var onEditCard: ((UUID) -> Void)?
     public var onChangeCardColor: ((UUID, Int) -> Void)?
     public var onDeleteCard: ((UUID) -> Void)?
@@ -149,8 +150,10 @@ public struct MarginNotePDFContainerView: View {
         onEmphasize: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onUpdateTypography: ((TypographyOptions) -> Void)? = nil,
-        onImportHighlights: (() -> Void)? = nil
+        onImportHighlights: (() -> Void)? = nil,
+        onCleanPageNumbers: (() -> Void)? = nil
     ) {
+        self.onCleanPageNumbers = onCleanPageNumbers
         self.manager = manager
         self.cards = cards
         self.selectedCardID = selectedCardID
@@ -229,6 +232,7 @@ public struct MarginNotePDFContainerView: View {
                     Button {
                         hidesPageNumbers.toggle()
                         UserDefaults.standard.set(hidesPageNumbers, forKey: PDFPageNumberPreferences.key(for: manager.md5))
+                        if hidesPageNumbers { onCleanPageNumbers?() }
                     } label: {
                         Image(systemName: hidesPageNumbers ? "number.circle.fill" : "number.circle")
                             .font(.system(size: 15))
@@ -891,6 +895,7 @@ public struct MarginNotePDFContainerView: View {
         }
         .onChange(of: manager.md5, initial: true) { _, md5 in
             hidesPageNumbers = PDFPageNumberPreferences.isHidden(for: md5)
+            if hidesPageNumbers { onCleanPageNumbers?() }
         }
         .onAppear {
             totalPageCount = manager.pageCount
