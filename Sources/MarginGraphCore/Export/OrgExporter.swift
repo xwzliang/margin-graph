@@ -1,6 +1,11 @@
 import Foundation
 
 public enum OrgExporter {
+    public enum ReferenceKind: Sendable {
+        case book
+        case video
+    }
+
     /// Use the notebook's creation time so subsequent exports suggest the same filename.
     public static func suggestedFilename(for topic: Topic, timeZone: TimeZone = .current) -> String {
         let stamp = formatter("yyyyMMddHHmmss", timeZone: timeZone).string(from: topic.createdAt)
@@ -25,22 +30,47 @@ public enum OrgExporter {
         topic: Topic,
         cards: [NoteCard],
         documents: [Document] = [],
+        reference: BibTeXEntry? = nil,
+        referenceKind: ReferenceKind? = nil,
         timeZone: TimeZone = .current
     ) -> String {
         let timestamp = formatter("yyyy-MM-dd EEE HH:mm", timeZone: timeZone)
-        let title = singleLine(topic.title).isEmpty ? "Untitled" : singleLine(topic.title)
+        let candidateTitle = singleLine(reference.flatMap { $0.title.isEmpty ? nil : $0.title } ?? topic.title)
+        let title = candidateTitle.isEmpty ? "Untitled" : candidateTitle
         let documentPaths = documents.compactMap { document -> (hash: String, path: String)? in
             guard document.documentType == "pdf", !document.filePath.isEmpty else { return nil }
             return (document.md5, singleLine(document.filePath))
         }
         let inheritedPath = documents.count == 1 ? documentPaths.first?.path : nil
-        let sourceTags = documents.isEmpty
+        var sourceTags = documents.isEmpty
             ? [cards.isEmpty || cards.contains(where: { !isMedia($0) }) ? "book" : "video"]
             : ["book", "video"].filter { tag in
                 documents.contains { document in
                     (document.documentType == "video" || document.documentType == "audio") == (tag == "video")
                 }
             }
+
+        let videoReference = reference.map { ["movie", "video", "audio"].contains($0.type) } ?? false
+        if let referenceKind {
+            sourceTags = referenceKind == .video ? ["video"] : ["book"]
+        } else if documents.isEmpty, videoReference {
+            sourceTags = ["video"]
+        }
+        if let reference, tagCharacters.isSuperset(of: CharacterSet(charactersIn: reference.key)) {
+            sourceTags.insert(reference.key, at: 0)
+        }
+        let referenceFile = singleLine(reference?.fields["file"] ?? "")
+        let videoDirectory: String? = sourceTags.contains("video") && !sourceTags.contains("book") ? {
+            let folders = Set(documents.filter { !$0.filePath.isEmpty }.map {
+                URL(fileURLWithPath: $0.filePath).deletingLastPathComponent().path
+            })
+            if folders.count == 1 { return folders.first }
+            guard documents.isEmpty, !referenceFile.isEmpty else { return nil }
+            let url = URL(fileURLWithPath: referenceFile)
+            let videoExtensions = ["mp4", "m4v", "mov", "mkv", "avi", "webm", "mpeg", "mpg", "m4a", "mp3", "wav"]
+            return videoExtensions.contains(url.pathExtension.lowercased())
+                ? url.deletingLastPathComponent().path : referenceFile
+        }() : nil
 
         let cardIDs = Set(cards.map(\.id))
         var parents: [UUID: UUID] = [:]
@@ -66,14 +96,21 @@ public enum OrgExporter {
         var lines = [
             ":PROPERTIES:",
             ":ID:       \(topic.id.uuidString.lowercased())",
+        ]
+        if let reference { lines.append(":ROAM_REFS: cite:&\(reference.key)") }
+        lines.append(contentsOf: [
             ":END:",
             "#+title: \(title)",
             "#+filetags: :\((sourceTags + ["literature"]).joined(separator: ":")):",
             "",
             "* \(title)"
-        ]
+        ])
         if sourceTags.contains("book") {
-            let property = inheritedPath.map { ":NOTER_DOCUMENT: \($0)" } ?? ":NOTER_DOCUMENT:"
+            let path = inheritedPath ?? (documents.isEmpty ? referenceFile : "")
+            let property = path.isEmpty ? ":NOTER_DOCUMENT:" : ":NOTER_DOCUMENT: \(path)"
+            lines.append(contentsOf: [":PROPERTIES:", property, ":END:"])
+        } else if sourceTags.contains("video") {
+            let property = videoDirectory.map { ":MPV_VIDEO_DIRECTORY: \($0)" } ?? ":MPV_VIDEO_DIRECTORY:"
             lines.append(contentsOf: [":PROPERTIES:", property, ":END:"])
         }
         lines.append("")
@@ -107,7 +144,11 @@ public enum OrgExporter {
                     if let hash = card.bookMD5,
                        let document = documents.first(where: { Database.bookHashesMatch(hash, $0.md5) }),
                        !document.filePath.isEmpty {
-                        lines.append(":MPV_VIDEO_FILENAME: \(singleLine(URL(fileURLWithPath: document.filePath).lastPathComponent))")
+                        let url = URL(fileURLWithPath: document.filePath)
+                        if videoDirectory == nil {
+                            lines.append(":MPV_VIDEO_DIRECTORY: \(singleLine(url.deletingLastPathComponent().path))")
+                        }
+                        lines.append(":MPV_VIDEO_FILENAME: \(singleLine(url.lastPathComponent))")
                     }
                     if let start = videoTimestamp(card.videoStartTime) {
                         lines.append(":MPV_POSITION_START: \(start)")

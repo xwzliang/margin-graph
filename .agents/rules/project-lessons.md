@@ -1245,3 +1245,18 @@ Structure each entry concisely with actionable rules:
 - **Rule**: Center symbols in the same 26-point icon frame and use 30-by-32-point plain button targets with uniform spacing. Give Share the same secondary foreground as Edit Card and Org Export in its default state. Host Share and Notebook Settings in the mind map pane's `InWindowPopoverContainer` and resolve their anchors from the triggers' actual bounds.
 - **Verified**: Live Rock testing checked the alignment and inactive tint at normal and 320-point split widths. Share stayed inside the narrow pane, and Notebook Settings stayed inside the right window edge in MindMap Only. Markdown and Org opened their attached save sheets. Edit Card, search, outline, Back, settings dismissal, Split View restoration, and the reader More menu were exercised.
 - **Optical alignment and spacing**: Centered symbols can still have different visible lower edges. Set the Share symbol to 12 points and lift it half a point within its fixed frame. Use the reader annotation groups' 6-point gap when space permits, and reduce only the gaps as the mind map pane approaches its 320-point minimum. Final live screenshots showed the Share, Edit Card, and Org glyphs ending on the same Retina pixel row at both widths. Share opened from outside the glyph, and the Share and reader More menus were contained and dismissible.
+
+
+## Shared Ebib and Org-roam Files
+
+- **Trap**: Re-serializing a bibliography can remove Ebib metadata and BibTeX macros.
+  Replacing an existing linked Org export can destroy edited notes and create duplicate
+  Org-roam IDs.
+- **Rule**: Save a BibTeX edit against the current source range and reject a changed
+  entry. Resolve existing bibliography records before ISBN lookup. Find literature
+  files by their file-level citation key, preserve their Org IDs and hand-written
+  content, and insert only card IDs that are missing. Keep PDF scanning and parsing
+  off the main actor.
+- **Reference layout**: Give the bibliography tabs a bounded height and allocate
+  the remaining height to the list and detail panes. An unconstrained native split
+  view can leave the list at the bottom of a tall shelf window.

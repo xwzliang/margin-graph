@@ -17,6 +17,8 @@ public enum WorkspaceViewMode: String, CaseIterable, Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     @Published var selectedMainTab: MainNavigationTab = .document
+    let referenceWorkspace = ReferenceWorkspace()
+    @Published var isExportingOrg = false
     @Published var isInStudyWorkspace: Bool = false
     @Published var isOutlineVisible: Bool = false
     @Published var workspaceMode: WorkspaceViewMode = .splitView
@@ -2584,12 +2586,37 @@ final class AppModel: ObservableObject {
     }
 
     func exportOrg() {
-        guard let topic = selectedTopic else { return }
-        saveExport(
-            content: OrgExporter.export(topic: topic, cards: mindMapCards, documents: studyDocuments),
-            suggestedName: OrgExporter.suggestedFilename(for: topic),
-            type: UTType(filenameExtension: "org", conformingTo: .plainText) ?? .plainText
-        )
+        guard let topic = selectedTopic, !isExportingOrg else { return }
+        let cards = mindMapCards
+        let documents = studyDocuments
+        isExportingOrg = true
+        Task {
+            defer { isExportingOrg = false }
+            do {
+                if let (url, key) = try await referenceWorkspace.export(topic: topic, cards: cards, documents: documents) {
+                    showOrgExportResult(url: url, key: key)
+                }
+            } catch {
+                let alert = NSAlert(error: error)
+                if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+                    alert.beginSheetModal(for: window, completionHandler: nil)
+                } else { alert.runModal() }
+            }
+        }
+    }
+
+    private func showOrgExportResult(url: URL, key: String) {
+        let alert = NSAlert()
+        alert.messageText = "Literature Note Saved"
+        alert.informativeText = "\(key)\n\(url.path)"
+        alert.addButton(withTitle: "Done")
+        alert.addButton(withTitle: "Show in Finder")
+        let respond: (NSApplication.ModalResponse) -> Void = { result in
+            if result == .alertSecondButtonReturn { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+        }
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            alert.beginSheetModal(for: window, completionHandler: respond)
+        } else { respond(alert.runModal()) }
     }
 
     func exportAnki() {
@@ -3846,6 +3873,8 @@ struct MarginGraphApp: App {
                                     model.deleteDeck(deck)
                                 }
                             )
+                        case .reference:
+                            ReferencePage(workspace: model.referenceWorkspace, search: $model.shelfSearchQuery)
                         }
                     }
                     }
@@ -3853,14 +3882,16 @@ struct MarginGraphApp: App {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                if model.isOpeningDatabase || model.isExportingDocument {
+                if model.isOpeningDatabase || model.isExportingDocument || model.isExportingOrg {
                     ZStack {
                         Color.black.opacity(0.35)
                             .ignoresSafeArea()
                         VStack(spacing: 16) {
                             ProgressView()
                                 .controlSize(.large)
-                            Text(model.isExportingDocument ? "Exporting PDF and notes…" : (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus))
+                            Text(model.isExportingOrg ? "Preparing literature note…" :
+                                 model.isExportingDocument ? "Exporting PDF and notes…" :
+                                 (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus))
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.white)
                         }

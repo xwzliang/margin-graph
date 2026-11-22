@@ -4,6 +4,7 @@ public enum MainNavigationTab: String, CaseIterable, Identifiable {
     case document = "Document"
     case study = "Study"
     case review = "Review"
+    case reference = "Reference"
 
     public var id: String { rawValue }
 
@@ -12,6 +13,7 @@ public enum MainNavigationTab: String, CaseIterable, Identifiable {
         case .document: return "doc.text.fill"
         case .study: return "arrow.triangle.branch"
         case .review: return "rectangle.stack.badge.play"
+        case .reference: return "books.vertical"
         }
     }
 }
