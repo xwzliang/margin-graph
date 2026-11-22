@@ -202,7 +202,7 @@ public struct MarginNotePDFContainerView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 12) {
                 // Main Tools Group
-                HStack(spacing: 6) {
+                HStack(spacing: MarginNoteTheme.topToolbarButtonSpacing) {
                     toolButton(.hand)
                     toolButton(.text)
                     toolButton(.marquee)
@@ -214,7 +214,7 @@ public struct MarginNotePDFContainerView: View {
                     .frame(height: 16)
 
                 // Pens & Drawing Tools
-                HStack(spacing: 6) {
+                HStack(spacing: MarginNoteTheme.topToolbarButtonSpacing) {
                     toolButton(.pen)
                     toolButton(.highlighter)
                     toolButton(.eraser)

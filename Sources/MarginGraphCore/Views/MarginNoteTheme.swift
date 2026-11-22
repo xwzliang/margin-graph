@@ -16,6 +16,7 @@ public struct MarginNoteTheme {
     public static let headerBarBackground = Color(red: 0.98, green: 0.965, blue: 0.935)
     public static let separatorColor = Color(red: 0.88, green: 0.85, blue: 0.79) // #E0D9C9
     public static let topToolbarHeight: CGFloat = 44.0
+    public static let topToolbarButtonSpacing: CGFloat = 6
 
     // Card Colors (Pastels strictly aligned with MarginNote 3)
     public static let cardDefault = Color(red: 0.96, green: 0.94, blue: 0.86) // #f5efdc

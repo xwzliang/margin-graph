@@ -14,6 +14,7 @@ struct StudyMindMapPane<Content: View>: View {
     }
 
     private let selectionColor = Color(red: 0.15, green: 0.45, blue: 0.85)
+    private let buttonWidth: CGFloat = 30
 
     var body: some View {
         VStack(spacing: 0) {
@@ -40,7 +41,27 @@ struct StudyMindMapPane<Content: View>: View {
     }
 
     private var toolbar: some View {
-        HStack(spacing: 3) {
+        GeometryReader { geometry in
+            // Keep nine full-size hit targets and eight gaps even at the minimum split width.
+            let availableForGaps = geometry.size.width - 9 * buttonWidth
+            let spacing = min(MarginNoteTheme.topToolbarButtonSpacing, max(0, availableForGaps / 8))
+            toolbarButtons(spacing: spacing)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .padding(.horizontal, 8)
+        .frame(height: MarginNoteTheme.topToolbarHeight)
+        .background(MarginNoteTheme.headerBarBackground)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .frame(height: 0.5)
+                .foregroundStyle(MarginNoteTheme.separatorColor)
+        }
+        .tooltipContainer()
+        .zIndex(100)
+    }
+
+    private func toolbarButtons(spacing: CGFloat) -> some View {
+        HStack(spacing: spacing) {
             toolbarButton("Back to Notebooks", icon: "chevron.left", color: .primary, weight: .semibold) {
                 model.exitStudyWorkspace()
             }
@@ -66,33 +87,26 @@ struct StudyMindMapPane<Content: View>: View {
             toolbarButton("Edit Card", icon: "square.and.pencil") {
                 model.editingCard = model.mindMapCards.first { $0.id == model.selectedCardID } ?? model.mindMapCards.first
             }
-            menuTrigger("Share / Export", icon: "square.and.arrow.up", menu: .share)
+            menuTrigger("Share / Export", icon: "square.and.arrow.up", menu: .share, iconSize: 12, iconOffsetY: -0.5)
             toolbarButton("Export to Emacs Org", icon: "arrow.down.document", action: model.exportOrg)
                 .disabled(model.selectedTopic == nil)
 
-            Spacer(minLength: 0)
-
-            toolbarButton(
-                "Search MindMap", icon: "magnifyingglass", isSelected: model.isMindMapSearchPresented,
-                tooltip: "Search MindMap (⌘F)", action: model.toggleMindMapSearch
-            )
-            menuTrigger("Notebook Settings", icon: "ellipsis", menu: .settings)
+            HStack(spacing: spacing) {
+                toolbarButton(
+                    "Search MindMap", icon: "magnifyingglass", isSelected: model.isMindMapSearchPresented,
+                    tooltip: "Search MindMap (⌘F)", action: model.toggleMindMapSearch
+                )
+                menuTrigger("Notebook Settings", icon: "ellipsis", menu: .settings)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(.horizontal, 8)
-        .frame(height: MarginNoteTheme.topToolbarHeight)
-        .background(MarginNoteTheme.headerBarBackground)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .frame(height: 0.5)
-                .foregroundStyle(MarginNoteTheme.separatorColor)
-        }
-        .tooltipContainer()
-        .zIndex(100)
     }
 
     private func toolbarButton(
         _ title: String,
         icon: String,
+        iconSize: CGFloat? = nil,
+        iconOffsetY: CGFloat = 0,
         color: Color = .secondary,
         weight: Font.Weight = .regular,
         isSelected: Bool = false,
@@ -101,22 +115,25 @@ struct StudyMindMapPane<Content: View>: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 13, weight: isSelected ? .bold : weight))
+                .font(.system(size: iconSize ?? 13, weight: isSelected ? .bold : weight))
                 .foregroundStyle(isSelected ? selectionColor : color)
+                .offset(y: iconOffsetY)
                 .frame(width: 26, height: 26)
                 .background(
                     isSelected ? selectionColor.opacity(0.15) : .clear,
                     in: RoundedRectangle(cornerRadius: 4)
                 )
-                .enlargedHitTarget(width: 30, height: 32)
+                .enlargedHitTarget(width: buttonWidth, height: 32)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
         .marginNoteTooltip(tooltip ?? title)
     }
 
-    private func menuTrigger(_ title: String, icon: String, menu: ToolbarMenu) -> some View {
-        toolbarButton(title, icon: icon, isSelected: self.menu == menu) {
+    private func menuTrigger(
+        _ title: String, icon: String, menu: ToolbarMenu, iconSize: CGFloat? = nil, iconOffsetY: CGFloat = 0
+    ) -> some View {
+        toolbarButton(title, icon: icon, iconSize: iconSize, iconOffsetY: iconOffsetY, isSelected: self.menu == menu) {
             self.menu = self.menu == menu ? nil : menu
         }
         .anchorPreference(key: StudyToolbarMenuAnchor.self, value: .bounds) {
