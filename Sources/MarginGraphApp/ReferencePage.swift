@@ -37,7 +37,7 @@ struct ReferencePage: View {
         let id = UUID()
         let file: URL
         let original: BibTeXEntry?
-        let source: String
+        let draft: BibTeXEntryDraft
     }
 
     private struct Deletion {
@@ -122,9 +122,9 @@ struct ReferencePage: View {
             }
         }
         .sheet(item: $editor) { item in
-            ReferenceEntryEditor(source: item.source, isEditing: item.original != nil) { source in
-                try await workspace.save(source, replacing: item.original, in: item.file)
-                workspace.selectedEntryKey = try BibTeXLibrary.entry(source).key
+            ReferenceEntryEditor(draft: item.draft, isEditing: item.original != nil) { entry in
+                try await workspace.save(entry, replacing: item.original, in: item.file)
+                workspace.selectedEntryKey = entry.key
             }
         }
         .alert("Look up a book by ISBN", isPresented: $isISBNPresented) {
@@ -226,7 +226,7 @@ struct ReferencePage: View {
                 HStack(spacing: 8) {
                     Button("Add Entry…") {
                         guard let file = workspace.selectedFile else { return }
-                        editor = Editor(file: file, original: nil, source: "@book{key,\n    title = {},\n    author = {},\n    year = {}\n}")
+                        editor = Editor(file: file, original: nil, draft: BibTeXEntryDraft())
                     }
                     Button("From ISBN…") { isbn = ""; isISBNPresented = true }
                     Button("From PDF…") {
@@ -347,7 +347,11 @@ struct ReferencePage: View {
 
     @ViewBuilder
     private func editButtons(for entry: BibTeXEntry, in file: URL) -> some View {
-        Button("Edit…") { editor = Editor(file: file, original: entry, source: entry.source) }
+        Button("Edit…") {
+            workspace.execute {
+                editor = Editor(file: file, original: entry, draft: try BibTeXEntryDraft(entry))
+            }
+        }
         Button("Open Literature Note…") { pendingNote = entry }
         Button("Delete…", role: .destructive) { pendingDelete = Deletion(file: file, entry: entry) }
     }
@@ -374,44 +378,7 @@ struct ReferencePage: View {
             workspace.message = "This reference is already in \(existingFile.lastPathComponent)."
             return
         }
-        editor = Editor(file: file, original: nil, source: proposal.entry.source)
-    }
-}
-
-private struct ReferenceEntryEditor: View {
-    @Environment(\.dismiss) private var dismiss
-    @State var source: String
-    let isEditing: Bool
-    let save: (String) async throws -> Void
-    @State private var error: String?
-    @State private var busy = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(isEditing ? "Edit Reference" : "Add Reference").font(.headline)
-            TextEditor(text: $source)
-                .font(.system(.body, design: .monospaced))
-                .border(Color.secondary.opacity(0.25))
-                .accessibilityLabel("BibTeX entry")
-            if let error { Text(error).foregroundStyle(.red) }
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Save Entry") {
-                    busy = true
-                    Task {
-                        defer { busy = false }
-                        do { try await save(source); dismiss() }
-                        catch { self.error = error.localizedDescription }
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-                .disabled(source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .padding(18)
-        .frame(minWidth: 550, minHeight: 370)
-        .disabled(busy)
+        editor = Editor(file: file, original: nil, draft: try BibTeXEntryDraft(proposal.entry))
     }
 }
 

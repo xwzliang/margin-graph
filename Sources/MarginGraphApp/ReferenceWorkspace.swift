@@ -157,8 +157,7 @@ final class ReferenceWorkspace: ObservableObject {
         Proposal(entry: entry, existingFile: catalog.first { $0.entries.contains(entry) }?.file)
     }
 
-    func save(_ source: String, replacing original: BibTeXEntry? = nil, in file: URL) async throws {
-        let entry = try BibTeXLibrary.entry(source)
+    func save(_ entry: BibTeXEntry, replacing original: BibTeXEntry? = nil, in file: URL) async throws {
         if original == nil {
             let catalog = try await snapshot()
             guard !catalog.contains(where: { $0.key == entry.key }) else { throw BibTeXError.duplicate(entry.key) }

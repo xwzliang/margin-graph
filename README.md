@@ -14,8 +14,9 @@ A native macOS application providing the full feature set of MarginNote 3:
    files you open in Ebib. Use **New Bibliography…** if you need an empty database.
    Pick the file that should receive new entries.
 2. Choose **Literature Folder…** and select your Org-roam `literature` directory.
-3. Add or edit a BibLaTeX entry directly, enter an ISBN with **From ISBN…**, or pick a
-   PDF with **From PDF…**. PDF lookup checks the text, uses local OCR for scanned
+3. Use **Add Entry…** or **Edit…** to change individual field names and values.
+   **Add Field** inserts a custom field and the minus button removes a field.
+   You can also enter an ISBN with **From ISBN…** or pick a PDF with **From PDF…**. PDF lookup checks the text, uses local OCR for scanned
    front matter, and queries Open Library by ISBN. PDF metadata and front matter
    provide a draft when a lookup returns no result or no ISBN is available.
 4. Select an entry and choose **Open PDF & Mind Map** to open its study workspace.

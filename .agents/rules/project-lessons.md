@@ -1265,3 +1265,12 @@ Structure each entry concisely with actionable rules:
   Org export updates the resolved entry in its own bibliography, preserving existing
   attachments. Use the standard Study workspace for linked references so the PDF
   and the notebook open together, and keep the selected citation when returning.
+- **BibTeX field editor**: Keep field identities and original UTF-8 source ranges
+  while editing. Reuse the BibTeX lexer and patch only changed names, values, and
+  separators. Unchanged macros and LaTeX groups must survive, even when their
+  expanded values are displayed in the form. Keep coordinated saving and the
+  unchanged-entry check for edits made concurrently in Ebib.
+- **Multiline BibTeX values**: A rounded macOS TextField can accept line breaks
+  while displaying only one line, even with a vertical axis. Use a wrapping
+  TextEditor with bounded height so titles, abstracts, and pasted notes are
+  readable without pushing the editor actions below the sheet.

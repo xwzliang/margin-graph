@@ -30,6 +30,10 @@ public enum BibTeXError: LocalizedError {
     case invalidEntry
     case changed(String)
     case keyChanged
+    case invalidCitationKey
+    case invalidEntryType
+    case invalidFieldName(String)
+    case duplicateField(String)
 
     public var errorDescription: String? {
         switch self {
@@ -38,6 +42,11 @@ public enum BibTeXError: LocalizedError {
         case .invalidEntry: "Enter exactly one BibTeX entry with a citation key."
         case .changed(let key): "“\(key)” changed on disk. Reload the bibliography and try again."
         case .keyChanged: "Keep the existing citation key to preserve links from your notes."
+        case .invalidCitationKey: "Enter a citation key without spaces, commas, or braces."
+        case .invalidEntryType: "Enter an entry type such as book, article, or online."
+        case .invalidFieldName(let name):
+            name.isEmpty ? "Enter a name for each field." : "Start “\(name)” with a letter and use only letters, numbers, underscores, or hyphens."
+        case .duplicateField(let name): "The field “\(name)” is already in this entry."
         }
     }
 }
@@ -146,8 +155,8 @@ public struct BibTeXLibrary: Sendable {
         let comma = (open + 1..<close).first { bytes[$0] == 44 }
         var fileRange: Range<Int>?
         if let comma {
-            _ = fields(bytes, from: comma + 1, to: close, macros: [:]) { name, range in
-                if name == "file" { fileRange = range }
+            _ = fields(bytes, from: comma + 1, to: close, macros: [:]) { field, _ in
+                if field.name == "file" { fileRange = field.value }
             }
         }
         let path = pdf.path.contains(";") || pdf.path.contains(where: \.isNewline)
@@ -210,7 +219,7 @@ public struct BibTeXLibrary: Sendable {
         return Data(result)
     }
 
-    private static func entryEnd(_ bytes: [UInt8], open: Int) -> Int? {
+    static func entryEnd(_ bytes: [UInt8], open: Int) -> Int? {
         let close: UInt8 = bytes[open] == 123 ? 125 : 41
         var position = open + 1
         var braces = 0
@@ -232,9 +241,15 @@ public struct BibTeXLibrary: Sendable {
         return nil
     }
 
-    private static func fields(_ bytes: [UInt8], from start: Int, to end: Int,
+    struct FieldRange {
+        let name: String
+        let label: Range<Int>
+        let value: Range<Int>
+    }
+
+    static func fields(_ bytes: [UInt8], from start: Int, to end: Int,
                                macros: [String: String],
-                               recordRange: ((String, Range<Int>) -> Void)? = nil) -> [String: String] {
+                               recordRange: ((FieldRange, String) -> Void)? = nil) -> [String: String] {
         var position = start
         var output: [String: String] = [:]
         while position < end {
@@ -247,7 +262,8 @@ public struct BibTeXLibrary: Sendable {
             if bytes[position] == 44 { position += 1; continue }
             let nameStart = position
             while position < end, isName(bytes[position]) { position += 1 }
-            let name = text(bytes, nameStart..<position).lowercased()
+            let nameRange = nameStart..<position
+            let name = text(bytes, nameRange).lowercased()
             skipWhitespace(bytes, position: &position, end: end)
             guard !name.isEmpty, position < end, bytes[position] == 61 else { break }
             position += 1
@@ -264,8 +280,9 @@ public struct BibTeXLibrary: Sendable {
                 guard position < end, bytes[position] == 35 else { break }
                 position += 1
             } while true
-            output[name] = pieces.joined()
-            recordRange?(name, valueStart..<valueEnd)
+            let value = pieces.joined()
+            output[name] = value
+            recordRange?(FieldRange(name: name, label: nameRange, value: valueStart..<valueEnd), value)
         }
         return output
     }
@@ -300,12 +317,12 @@ public struct BibTeXLibrary: Sendable {
         return text(bytes, start..<position)
     }
 
-    private static func isName(_ byte: UInt8) -> Bool {
+    static func isName(_ byte: UInt8) -> Bool {
         (65...90).contains(byte) || (97...122).contains(byte) || (48...57).contains(byte) ||
             byte == 95 || byte == 45
     }
 
-    private static func isWhitespace(_ byte: UInt8) -> Bool {
+    static func isWhitespace(_ byte: UInt8) -> Bool {
         byte == 32 || byte == 9 || byte == 10 || byte == 13
     }
 
@@ -313,13 +330,13 @@ public struct BibTeXLibrary: Sendable {
         while position < end, isWhitespace(bytes[position]) { position += 1 }
     }
 
-    private static func endOfLine(_ bytes: [UInt8], from start: Int) -> Int {
+    static func endOfLine(_ bytes: [UInt8], from start: Int) -> Int {
         var end = start
         while end < bytes.count, bytes[end] != 10 { end += 1 }
         return end
     }
 
-    private static func text(_ bytes: [UInt8], _ range: Range<Int>) -> String {
+    static func text(_ bytes: [UInt8], _ range: Range<Int>) -> String {
         String(decoding: bytes[range], as: UTF8.self)
     }
 }
