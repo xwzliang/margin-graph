@@ -1237,6 +1237,8 @@ Structure each entry concisely with actionable rules:
 - **Toolbar sizing**: Count the enlarged hit-target frames, spacing, spacer minimum, and horizontal padding when adding controls to the mind map header. Their combined width must fit within the 320-point minimum pane. Otherwise SwiftUI centers the oversized row and clips the leading and trailing hit targets.
 - **Verified**: All 236 tests passed, including the required performance and layout checks. Live Rock exports from the child map and the 320-point main pane produced identical files. Emacs parsed 471 unique note headings, matching every displayed notebook card. Cancel left no file. The final build rendered both panes, kept the reader More menu inside the window, and opened the existing Markdown save sheet.
 
+- **Org-roam format**: Put the stable notebook ID at file scope and place all exported cards under one notebook heading. Use the notebook creation stamp and a lowercase, underscore-separated title slug limited to 60 columns. Keep PDF paths in the inherited Org Noter drawer only when there is one source document. For multiple sources, attach the matching path to the card. Bibliography references require a real citation key.
+
 ## Mind Map Toolbar Buttons Share One Layout
 
 - **Trap**: A borderless SwiftUI menu applies native label insets and tint. Mixing it with plain icon buttons and giving actions different hit-target widths shifted the Share icon and broke the horizontal rhythm.

@@ -1,6 +1,25 @@
 import Foundation
 
 public enum OrgExporter {
+    /// Use the notebook's creation time so subsequent exports suggest the same filename.
+    public static func suggestedFilename(for topic: Topic, timeZone: TimeZone = .current) -> String {
+        let stamp = formatter("yyyyMMddHHmmss", timeZone: timeZone).string(from: topic.createdAt)
+        let title = singleLine(topic.title).folding(options: .diacriticInsensitive, locale: posixLocale)
+        let slug = title.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: "_")
+        var result = ""
+        var width = 0
+        for character in slug {
+            // Org-roam's truncate-string-to-width counts wide CJK characters as two columns.
+            let characterWidth = String(character).range(of: wideCharacter, options: .regularExpression) == nil ? 1 : 2
+            guard width + characterWidth <= 60 else { break }
+            width += characterWidth
+            result.append(character)
+        }
+        return "\(stamp)-\(result.isEmpty ? "untitled" : result.lowercased()).org"
+    }
+
     /// Pass the notebook's full set of displayed cards, including folded notes and child maps.
     public static func export(
         topic: Topic,
@@ -8,11 +27,20 @@ public enum OrgExporter {
         documents: [Document] = [],
         timeZone: TimeZone = .current
     ) -> String {
-        let timestamp = DateFormatter()
-        timestamp.locale = Locale(identifier: "en_US_POSIX")
-        timestamp.calendar = Calendar(identifier: .gregorian)
-        timestamp.timeZone = timeZone
-        timestamp.dateFormat = "yyyy-MM-dd EEE HH:mm"
+        let timestamp = formatter("yyyy-MM-dd EEE HH:mm", timeZone: timeZone)
+        let title = singleLine(topic.title).isEmpty ? "Untitled" : singleLine(topic.title)
+        let documentPaths = documents.compactMap { document -> (hash: String, path: String)? in
+            guard document.documentType == "pdf", !document.filePath.isEmpty else { return nil }
+            return (document.md5, singleLine(document.filePath))
+        }
+        let inheritedPath = documents.count == 1 ? documentPaths.first?.path : nil
+        let sourceTags = documents.isEmpty
+            ? [cards.isEmpty || cards.contains(where: { !isMedia($0) }) ? "book" : "video"]
+            : ["book", "video"].filter { tag in
+                documents.contains { document in
+                    (document.documentType == "video" || document.documentType == "audio") == (tag == "video")
+                }
+            }
 
         let cardIDs = Set(cards.map(\.id))
         var parents: [UUID: UUID] = [:]
@@ -35,12 +63,25 @@ public enum OrgExporter {
         }
         let ordered = cards.sorted(by: TreeLayout.cardOrder)
         let children = Dictionary(grouping: ordered, by: { parents[$0.id] })
-        var lines = ["#+TITLE: \(singleLine(topic.title))", ""]
+        var lines = [
+            ":PROPERTIES:",
+            ":ID:       \(topic.id.uuidString.lowercased())",
+            ":END:",
+            "#+title: \(title)",
+            "#+filetags: :\((sourceTags + ["literature"]).joined(separator: ":")):",
+            "",
+            "* \(title)"
+        ]
+        if sourceTags.contains("book") {
+            let property = inheritedPath.map { ":NOTER_DOCUMENT: \($0)" } ?? ":NOTER_DOCUMENT:"
+            lines.append(contentsOf: [":PROPERTIES:", property, ":END:"])
+        }
+        lines.append("")
         var visited = Set<UUID>()
 
         // The second pass gives any disconnected cycles a root and still emits each note once.
         for root in (children[nil] ?? []) + ordered {
-            var pending: [(card: NoteCard, level: Int)] = [(root, 1)]
+            var pending: [(card: NoteCard, level: Int)] = [(root, 2)]
             while let (card, level) = pending.popLast() {
                 guard visited.insert(card.id).inserted else { continue }
                 let excerpt = card.highlightText.isEmpty
@@ -58,13 +99,11 @@ public enum OrgExporter {
                 lines.append("\(String(repeating: "*", count: level)) \(title)\(tagSuffix)")
                 lines.append(contentsOf: [
                     ":PROPERTIES:",
-                    ":ID: \(card.id.uuidString)",
+                    ":ID:       \(card.id.uuidString)",
                     ":CREATED: [\(timestamp.string(from: card.createdAt))]",
-                    ":MODIFIED: [\(timestamp.string(from: card.updatedAt))]",
-                    ":MARGINNOTE_LINK: marginnote3app://note/\(card.id.uuidString)",
-                    ":MARGINGRAPH_LINK: \(card.deepLinkURL.absoluteString)"
+                    ":MODIFIED: [\(timestamp.string(from: card.updatedAt))]"
                 ])
-                if card.mediaType == "video" || card.videoStartTime != nil {
+                if isMedia(card) {
                     if let hash = card.bookMD5,
                        let document = documents.first(where: { Database.bookHashesMatch(hash, $0.md5) }),
                        !document.filePath.isEmpty {
@@ -77,6 +116,10 @@ public enum OrgExporter {
                         lines.append(":MPV_POSITION_END: \(end)")
                     }
                 } else {
+                    if inheritedPath == nil, let hash = card.bookMD5,
+                       let source = documentPaths.first(where: { Database.bookHashesMatch(hash, $0.hash) }) {
+                        lines.append(":NOTER_DOCUMENT: \(source.path)")
+                    }
                     if let start = card.startPage, start >= 0 {
                         lines.append(":NOTER_PAGE: \(UInt(start) + 1)")
                     }
@@ -85,6 +128,8 @@ public enum OrgExporter {
                     }
                 }
                 lines.append(":HIGHLIGHT_COLOR_INDEX: \(card.colorIndex)")
+                lines.append(":MARGINNOTE_LINK: marginnote3app://note/\(card.id.uuidString)")
+                lines.append(":MARGINGRAPH_LINK: \(card.deepLinkURL.absoluteString)")
                 let merged = !card.notesText.isEmpty || card.excerptSegments.count > 1
                 lines.append(":IS_MERGED: \(merged)")
                 if !otherTags.isEmpty {
@@ -103,6 +148,22 @@ public enum OrgExporter {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    private static let posixLocale = Locale(identifier: "en_US_POSIX")
+    private static let wideCharacter = #"\p{ea=W}|\p{ea=F}"#
+
+    private static func formatter(_ format: String, timeZone: TimeZone) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = posixLocale
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = timeZone
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private static func isMedia(_ card: NoteCard) -> Bool {
+        card.mediaType == "video" || card.mediaType == "audio" || card.videoStartTime != nil
     }
 
     private static let tagCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_@#%"))

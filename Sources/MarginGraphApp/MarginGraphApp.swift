@@ -2587,7 +2587,7 @@ final class AppModel: ObservableObject {
         guard let topic = selectedTopic else { return }
         saveExport(
             content: OrgExporter.export(topic: topic, cards: mindMapCards, documents: studyDocuments),
-            suggestedName: "\(MarginPackageExporter.sanitizeFilename(topic.title)).org",
+            suggestedName: OrgExporter.suggestedFilename(for: topic),
             type: UTType(filenameExtension: "org", conformingTo: .plainText) ?? .plainText
         )
     }
