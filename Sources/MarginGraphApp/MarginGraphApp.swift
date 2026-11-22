@@ -2583,6 +2583,15 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func exportOrg() {
+        guard let topic = selectedTopic else { return }
+        saveExport(
+            content: OrgExporter.export(topic: topic, cards: mindMapCards, documents: studyDocuments),
+            suggestedName: "\(MarginPackageExporter.sanitizeFilename(topic.title)).org",
+            type: UTType(filenameExtension: "org", conformingTo: .plainText) ?? .plainText
+        )
+    }
+
     func exportAnki() {
         guard let topic = selectedTopic else { return }
         saveExport(
@@ -2722,8 +2731,26 @@ final class AppModel: ObservableObject {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [type]
         panel.nameFieldStringValue = suggestedName
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        try? content.write(to: url, atomically: true, encoding: .utf8)
+        let window = NSApp.keyWindow ?? NSApp.mainWindow
+            ?? NSApp.windows.first { $0.canBecomeMain && $0.isVisible && !$0.isMiniaturized }
+        let save: (NSApplication.ModalResponse) -> Void = { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try content.write(to: url, atomically: true, encoding: .utf8)
+            } catch {
+                let alert = NSAlert(error: error)
+                if let window {
+                    alert.beginSheetModal(for: window)
+                } else {
+                    alert.runModal()
+                }
+            }
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: save)
+        } else {
+            save(panel.runModal())
+        }
     }
 
     private func safeFilename(_ value: String) -> String {
@@ -2773,7 +2800,7 @@ struct StudyWorkspaceHeaderView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 3) {
                 // Back button (<) to Library
                 Button {
                     model.exitStudyWorkspace()
@@ -2782,7 +2809,7 @@ struct StudyWorkspaceHeaderView: View {
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(.primary)
                         .frame(width: 26, height: 26)
-                        .enlargedHitTarget(width: 36, height: 32)
+                        .enlargedHitTarget(width: 30, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Back to Notebooks")
@@ -2828,7 +2855,7 @@ struct StudyWorkspaceHeaderView: View {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(model.isOutlineVisible ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
                         )
-                        .enlargedHitTarget(width: 34, height: 32)
+                        .enlargedHitTarget(width: 30, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Toggle Outline")
@@ -2846,7 +2873,7 @@ struct StudyWorkspaceHeaderView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(Color.secondary)
                         .frame(width: 26, height: 26)
-                        .enlargedHitTarget(width: 34, height: 32)
+                        .enlargedHitTarget(width: 30, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Edit Card")
@@ -2870,7 +2897,19 @@ struct StudyWorkspaceHeaderView: View {
                 .frame(width: 34, height: 32)
                 .marginNoteTooltip("Share / Export")
 
-                Spacer()
+                Button(action: model.exportOrg) {
+                    Image(systemName: "arrow.down.document")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .enlargedHitTarget(width: 30, height: 32)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Export to Emacs Org")
+                .marginNoteTooltip("Export to Emacs Org…")
+                .disabled(model.selectedTopic == nil)
+
+                Spacer(minLength: 0)
 
                 // MindMap Search Button
                 Button {
@@ -2884,7 +2923,7 @@ struct StudyWorkspaceHeaderView: View {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(model.isMindMapSearchPresented ? Color(red: 0.15, green: 0.45, blue: 0.85).opacity(0.15) : Color.clear)
                         )
-                        .enlargedHitTarget(width: 34, height: 32)
+                        .enlargedHitTarget(width: 30, height: 32)
                 }
                 .buttonStyle(.plain)
                 .marginNoteTooltip("Search MindMap (⌘F)")
@@ -2919,7 +2958,7 @@ struct StudyWorkspaceHeaderView: View {
                 .frame(width: 34, height: 32)
                 .marginNoteTooltip("Notebook Settings")
             }
-            .padding(.horizontal, 14)
+            .padding(.horizontal, 8)
             .frame(height: MarginNoteTheme.topToolbarHeight)
             .background(MarginNoteTheme.headerBarBackground)
             .overlay(
