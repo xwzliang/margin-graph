@@ -18,10 +18,13 @@ A native macOS application providing the full feature set of MarginNote 3:
    PDF with **From PDF…**. PDF lookup checks the text, uses local OCR for scanned
    front matter, and queries Open Library by ISBN. PDF metadata and front matter
    provide a draft when a lookup returns no result or no ISBN is available.
-4. Select an entry and use **Open Literature Note…** for a book or video. In a study
-   notebook, **Export to Emacs Org** does the lookup and writes the linked note in
-   one step. Existing reference keys and matching Org notes are reused. Re-export
-   adds missing card IDs and preserves existing note text and headings.
+4. Select an entry and choose **Open PDF & Mind Map** to open its study workspace.
+   Use **Link Notebook…** or **Locate PDF…** when MarginGraph needs help finding it.
+   **Open Literature Note…** opens the Org-roam note for a book or video.
+5. In a study notebook, **Export to Emacs Org** attaches the source PDF to its
+   BibTeX entry, links the entry to the notebook, and exports the literature note.
+   Re-export reuses the citation key, keeps previous attachments, and adds missing
+   card IDs to the existing Org note while preserving its text and headings.
 
 MarginGraph writes the selected bibliography directly. Save pending edits in Ebib
 before changing an entry in MarginGraph, and reload Ebib after an external edit.

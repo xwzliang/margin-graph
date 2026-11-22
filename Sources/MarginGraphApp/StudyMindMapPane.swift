@@ -62,7 +62,7 @@ struct StudyMindMapPane<Content: View>: View {
 
     private func toolbarButtons(spacing: CGFloat) -> some View {
         HStack(spacing: spacing) {
-            toolbarButton("Back to Notebooks", icon: "chevron.left", color: .primary, weight: .semibold) {
+            toolbarButton(model.selectedMainTab == .reference ? "Back to Reference" : "Back to Notebooks", icon: "chevron.left", color: .primary, weight: .semibold) {
                 model.exitStudyWorkspace()
             }
             toolbarButton(

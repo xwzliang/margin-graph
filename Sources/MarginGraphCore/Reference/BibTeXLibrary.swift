@@ -132,6 +132,42 @@ public struct BibTeXLibrary: Sendable {
         return "@\(type){\(key),\n" + lines.joined(separator: ",\n") + "\n}"
     }
 
+    /// Keep the existing Ebib attachments and edit only the file property of this entry.
+    public static func attachingPDF(_ pdf: URL, to entry: BibTeXEntry, bibliography: URL) throws -> BibTeXEntry {
+        guard pdf.isFileURL, pdf.pathExtension.lowercased() == "pdf" else { return entry }
+        let canonical = pdf.standardizedFileURL.resolvingSymlinksInPath()
+        if ReferenceStudyMatcher.pdfAttachments(for: entry, bibliography: bibliography)
+            .contains(where: { $0.resolvingSymlinksInPath() == canonical }) {
+            return entry
+        }
+        var bytes = Array(entry.source.utf8)
+        guard let open = bytes.firstIndex(where: { $0 == 123 || $0 == 40 }),
+              let close = entryEnd(bytes, open: open) else { throw BibTeXError.invalidEntry }
+        let comma = (open + 1..<close).first { bytes[$0] == 44 }
+        var fileRange: Range<Int>?
+        if let comma {
+            _ = fields(bytes, from: comma + 1, to: close, macros: [:]) { name, range in
+                if name == "file" { fileRange = range }
+            }
+        }
+        let path = pdf.path.contains(";") || pdf.path.contains(where: \.isNewline)
+            ? pdf.absoluteString.replacingOccurrences(of: ";", with: "%3B") : pdf.standardizedFileURL.path
+        let escaped = path.replacingOccurrences(of: #"([{}])"#, with: #"\\$1"#, options: .regularExpression)
+        if let fileRange {
+            let previous = entry.fields["file"]?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let prefix = previous.isEmpty ? "" : previous + "; "
+            bytes.replaceSubrange(fileRange, with: "{\(prefix)\(escaped)}".utf8)
+        } else {
+            let newline = entry.source.contains("\r\n") ? "\r\n" : "\n"
+            let offset = comma.map { $0 + 1 } ?? close
+            let separator = comma == nil ? "," : ""
+            let padding = comma == nil || (bytes[offset] != 10 && bytes[offset] != 13) ? newline : ""
+            let insertion = "\(separator)\(newline)    file = {\(escaped)},\(padding)"
+            bytes.insert(contentsOf: insertion.utf8, at: offset)
+        }
+        return try Self.entry(String(decoding: bytes, as: UTF8.self))
+    }
+
     public static func save(_ entry: BibTeXEntry, replacing original: BibTeXEntry? = nil, in url: URL) throws {
         try coordinate(url) { actualURL in
             let current = try load(actualURL)
@@ -197,7 +233,8 @@ public struct BibTeXLibrary: Sendable {
     }
 
     private static func fields(_ bytes: [UInt8], from start: Int, to end: Int,
-                               macros: [String: String]) -> [String: String] {
+                               macros: [String: String],
+                               recordRange: ((String, Range<Int>) -> Void)? = nil) -> [String: String] {
         var position = start
         var output: [String: String] = [:]
         while position < end {
@@ -214,16 +251,21 @@ public struct BibTeXLibrary: Sendable {
             skipWhitespace(bytes, position: &position, end: end)
             guard !name.isEmpty, position < end, bytes[position] == 61 else { break }
             position += 1
+            skipWhitespace(bytes, position: &position, end: end)
+            let valueStart = position
+            var valueEnd = position
             var pieces: [String] = []
             repeat {
                 skipWhitespace(bytes, position: &position, end: end)
                 guard position < end else { break }
                 pieces.append(fieldValue(bytes, position: &position, end: end, macros: macros))
+                valueEnd = position
                 skipWhitespace(bytes, position: &position, end: end)
                 guard position < end, bytes[position] == 35 else { break }
                 position += 1
             } while true
             output[name] = pieces.joined()
+            recordRange?(name, valueStart..<valueEnd)
         }
         return output
     }

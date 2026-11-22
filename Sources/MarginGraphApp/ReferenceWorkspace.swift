@@ -15,6 +15,7 @@ final class ReferenceWorkspace: ObservableObject {
     @Published private(set) var selectedFile: URL?
     @Published private(set) var literatureDirectory: URL?
     @Published private(set) var entries: [BibTeXEntry] = []
+    @Published var selectedEntryKey: String?
     @Published private(set) var busy = false
     @Published var message: String?
 
@@ -121,9 +122,9 @@ final class ReferenceWorkspace: ObservableObject {
         return true
     }
 
-    func choosePDF() async -> URL? {
+    func choosePDF(title: String = "Identify a PDF Reference") async -> URL? {
         let panel = NSOpenPanel()
-        panel.title = "Identify a PDF Reference"
+        panel.title = title
         panel.allowedContentTypes = [.pdf]
         guard await show(panel) else { return nil }
         return panel.url
@@ -180,12 +181,20 @@ final class ReferenceWorkspace: ObservableObject {
         }.value
     }
 
-    func export(topic: Topic, cards: [NoteCard], documents: [Document]) async throws -> (URL, String)? {
+    struct ExportResult {
+        let note: URL
+        let key: String
+        let bibliography: URL
+        let bookMD5: String?
+    }
+
+    func export(topic: Topic, cards: [NoteCard], documents: [Document]) async throws -> ExportResult? {
         if selectedFile == nil { try await chooseBibliographies() }
         guard let file = selectedFile else { return nil }
         if literatureDirectory == nil, !(await chooseLiteratureDirectory()) { return nil }
         guard let directory = literatureDirectory else { return nil }
-        let catalog = try await snapshot()
+        let catalogFiles = try await catalogByFile()
+        let catalog = catalogFiles.flatMap(\.entries)
         // A notebook describes its primary source. Use a stable order even when a child map
         // or another document tab is active, while keeping source information on every card.
         let document = topic.bookMD5List.compactMap { hash in
@@ -199,13 +208,19 @@ final class ReferenceWorkspace: ObservableObject {
         } else {
             entry = try await identify(url: url, title: document?.title ?? topic.title, catalog: catalog)
         }
-        let alreadyPresent = catalog.contains { $0.key == entry.key }
+        let existingFile = catalogFiles.first { $0.entries.contains(entry) }?.file
         let output = try await Task.detached {
-            if !alreadyPresent { try BibTeXLibrary.save(entry, in: file) }
+            let targetFile = existingFile ?? file
+            let attached = try url.map { try BibTeXLibrary.attachingPDF($0, to: entry, bibliography: targetFile) } ?? entry
+            if existingFile == nil {
+                try BibTeXLibrary.save(attached, in: file)
+            } else if attached.source != entry.source {
+                try BibTeXLibrary.save(attached, replacing: entry, in: targetFile)
+            }
             return try Self.writeNote(topic: topic, cards: cards, documents: documents, entry: entry, directory: directory)
         }.value
         try await reload()
-        return (output, entry.key)
+        return ExportResult(note: output, key: entry.key, bibliography: existingFile ?? file, bookMD5: document?.md5)
     }
 
     private func snapshot() async throws -> [BibTeXEntry] {

@@ -1260,3 +1260,8 @@ Structure each entry concisely with actionable rules:
 - **Reference layout**: Give the bibliography tabs a bounded height and allocate
   the remaining height to the list and detail panes. An unconstrained native split
   view can leave the list at the bottom of a tall shelf window.
+- **Reference study links**: Store notebook links in the active library by
+  bibliography path and citation key. Update topics in place to keep their links.
+  Org export updates the resolved entry in its own bibliography, preserving existing
+  attachments. Use the standard Study workspace for linked references so the PDF
+  and the notebook open together, and keep the selected citation when returning.

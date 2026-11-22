@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 6
+    private static let currentSchemaVersion: Int32 = 7
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -176,6 +176,20 @@ public final class Database: @unchecked Sendable {
             return
         }
 
+        if version < 6 { try initializeLegacySchema(from: version) }
+        try execute("""
+        CREATE TABLE IF NOT EXISTS reference_study_links(
+            bibliography_path TEXT NOT NULL,
+            citation_key TEXT NOT NULL,
+            topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+            book_md5 TEXT,
+            PRIMARY KEY(bibliography_path, citation_key)
+        );
+        """)
+        try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
+    }
+
+    private func initializeLegacySchema(from version: Int32) throws {
         try execute("""
         CREATE TABLE IF NOT EXISTS imported_packages(
             document_md5 TEXT PRIMARY KEY,
@@ -360,7 +374,6 @@ public final class Database: @unchecked Sendable {
         );
         """)
         try repairDocumentIDs()
-        try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
     }
 
     private func hasColumn(_ column: String, in table: String) throws -> Bool {
@@ -776,7 +789,14 @@ public final class Database: @unchecked Sendable {
 
     public func insertTopic(_ topic: Topic) throws {
         let books = try jsonString(topic.bookMD5List)
-        try withStatement("INSERT OR REPLACE INTO topics(id,title,book_md5_list,created_at,updated_at,mind_pan_x,mind_pan_y,mind_zoom_scale,last_document_md5) VALUES(?,?,?,?,?,?,?,?,?)") { statement in
+        try withStatement("""
+            INSERT INTO topics(id,title,book_md5_list,created_at,updated_at,mind_pan_x,mind_pan_y,mind_zoom_scale,last_document_md5)
+            VALUES(?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET title=excluded.title, book_md5_list=excluded.book_md5_list,
+                created_at=excluded.created_at, updated_at=excluded.updated_at, mind_pan_x=excluded.mind_pan_x,
+                mind_pan_y=excluded.mind_pan_y, mind_zoom_scale=excluded.mind_zoom_scale,
+                last_document_md5=excluded.last_document_md5
+            """) { statement in
             bind(topic.id.uuidString, to: 1, in: statement)
             bind(topic.title, to: 2, in: statement)
             bind(books, to: 3, in: statement)

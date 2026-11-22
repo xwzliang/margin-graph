@@ -1274,13 +1274,14 @@ final class AppModel: ObservableObject {
         return libraryDirectory.appendingPathComponent("ImportedDocuments", isDirectory: true)
     }
 
-    func openDocument(url: URL, attachToTopic: Bool = false) {
+    @discardableResult
+    func openDocument(url: URL, attachToTopic: Bool = false) -> Document? {
         let importedURL: URL
         do {
             importedURL = try ManagedDocumentImport.copySource(url, into: importedDocumentsDirectory)
         } catch {
             NSAlert(error: error).runModal()
-            return
+            return nil
         }
         let url = importedURL
         let docType = MediaDocumentHelper.documentType(for: url)
@@ -1319,7 +1320,7 @@ final class AppModel: ObservableObject {
                 documentType: docType
             )
         } else {
-            return
+            return nil
         }
 
         do {
@@ -1327,7 +1328,7 @@ final class AppModel: ObservableObject {
             document = try database.getDocumentByPath(filePath: document.filePath) ?? document
         } catch {
             NSAlert(error: error).runModal()
-            return
+            return nil
         }
 
         if attachToTopic, let topicID = selectedTopicID {
@@ -1346,6 +1347,7 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+        return document
     }
 
     /// Handles detecting and importing PDF highlights as notebook cards, presenting the two sequential alerts requested.
@@ -2589,12 +2591,17 @@ final class AppModel: ObservableObject {
         guard let topic = selectedTopic, !isExportingOrg else { return }
         let cards = mindMapCards
         let documents = studyDocuments
+        let sourceDatabase = database
         isExportingOrg = true
         Task {
             defer { isExportingOrg = false }
             do {
-                if let (url, key) = try await referenceWorkspace.export(topic: topic, cards: cards, documents: documents) {
-                    showOrgExportResult(url: url, key: key)
+                if let result = try await referenceWorkspace.export(topic: topic, cards: cards, documents: documents) {
+                    try sourceDatabase.saveReferenceStudyLink(
+                        ReferenceStudyLink(topicID: topic.id, bookMD5: result.bookMD5),
+                        bibliography: result.bibliography, key: result.key
+                    )
+                    showOrgExportResult(url: result.note, key: result.key)
                 }
             } catch {
                 let alert = NSAlert(error: error)
@@ -3342,7 +3349,7 @@ struct StudyWorkspaceView: View {
                     .enlargedHitTarget(width: 36, height: 32)
             }
             .buttonStyle(.plain)
-            .marginNoteTooltip("Back to Notebooks")
+            .marginNoteTooltip(model.selectedMainTab == .reference ? "Back to Reference" : "Back to Notebooks")
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -3874,7 +3881,7 @@ struct MarginGraphApp: App {
                                 }
                             )
                         case .reference:
-                            ReferencePage(workspace: model.referenceWorkspace, search: $model.shelfSearchQuery)
+                            ReferencePage(workspace: model.referenceWorkspace, model: model, search: $model.shelfSearchQuery)
                         }
                     }
                     }
