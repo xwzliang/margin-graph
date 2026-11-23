@@ -227,6 +227,7 @@ final class AppModel: ObservableObject {
     @Published var activeDatabaseURL: URL? = nil
     @Published var isExternalDatabase: Bool = false
     @Published var isOpeningDatabase: Bool = false
+    @Published private(set) var isImportingMarginNote = false
     @Published var isExportingDocument: Bool = false
     @Published var databaseOpeningStatus: String = ""
     @Published var databaseErrorMessage: String? = nil
@@ -266,7 +267,7 @@ final class AppModel: ObservableObject {
                   importDocIndex + 1 < CommandLine.arguments.count {
             let docPath = CommandLine.arguments[importDocIndex + 1]
             Task { @MainActor in
-                self.openOrImportFile(url: URL(fileURLWithPath: docPath), attachToTopic: false)
+                await self.openOrImportFile(url: URL(fileURLWithPath: docPath), attachToTopic: false)
             }
         } else if let defaultLib = LibraryManager.shared.defaultLibrary, !defaultLib.isBuiltIn {
             let targetPath = FileManager.default.fileExists(atPath: defaultLib.path) ? defaultLib.path : (defaultLib.workingFolderPath ?? "")
@@ -345,19 +346,47 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private struct LibraryCatalog: Sendable {
+        let topics: [Topic]
+        let documents: [Document]
+        let folders: [DocumentFolder]
+        let decks: [CardDeck]
+        let deckCounts: [UUID: Int]
+        let dueDeckCounts: [UUID: Int]
+        let topicCounts: [UUID: Int]
+        let dueTopicCounts: [UUID: Int]
+        let deckReviews: [UUID: Date]
+        let documentCounts: [String: Int]
+
+        init(database: Database) {
+            topics = (try? database.allTopics()) ?? []
+            documents = (try? database.allDocuments()) ?? []
+            folders = (try? database.allFolders()) ?? []
+            decks = (try? database.allDecks()) ?? []
+            deckCounts = (try? database.deckCardCounts()) ?? [:]
+            dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
+            topicCounts = (try? database.cardCountsByTopic()) ?? [:]
+            dueTopicCounts = (try? database.dueCardCountsByTopic()) ?? [:]
+            deckReviews = (try? database.allDeckReviews()) ?? [:]
+            documentCounts = (try? database.cardCountsByDocument()) ?? [:]
+        }
+    }
+
     func reloadLibrary() {
-        topics = (try? database.allTopics()) ?? []
-        documents = (try? database.allDocuments()) ?? []
-        documentFolders = (try? database.allFolders()) ?? []
-        customDecks = (try? database.allDecks()) ?? []
-        deckCardCounts = (try? database.deckCardCounts()) ?? [:]
-        dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
+        updateLibrary(from: LibraryCatalog(database: database))
+    }
 
-        let counts = (try? database.cardCountsByTopic()) ?? [:]
-        let dueCounts = (try? database.dueCardCountsByTopic()) ?? [:]
-        let deckReviews = (try? database.allDeckReviews()) ?? [:]
-
-        let rawDocCounts = (try? database.cardCountsByDocument()) ?? [:]
+    private func updateLibrary(from catalog: LibraryCatalog) {
+        topics = catalog.topics
+        documents = catalog.documents
+        documentFolders = catalog.folders
+        customDecks = catalog.decks
+        deckCardCounts = catalog.deckCounts
+        dueDeckCounts = catalog.dueDeckCounts
+        let counts = catalog.topicCounts
+        let dueCounts = catalog.dueTopicCounts
+        let deckReviews = catalog.deckReviews
+        let rawDocCounts = catalog.documentCounts
         var docCounts: [UUID: Int] = [:]
         for doc in documents {
             if let direct = rawDocCounts[doc.md5] {
@@ -727,6 +756,7 @@ final class AppModel: ObservableObject {
     }
 
     func openDocumentPicker(attachToTopic: Bool = false) {
+        guard !isImportingMarginNote else { return }
         let panel = NSOpenPanel()
         let extensions = [
             "mp4", "mov", "m4v", "mkv", "avi", "webm",
@@ -749,12 +779,19 @@ final class AppModel: ObservableObject {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls {
-            openOrImportFile(url: url, attachToTopic: attachToTopic)
+        openOrImportFiles(urls: panel.urls, attachToTopic: attachToTopic)
+    }
+
+    func openOrImportFiles(urls: [URL], attachToTopic: Bool = false) {
+        Task {
+            for url in urls {
+                await openOrImportFile(url: url, attachToTopic: attachToTopic)
+            }
         }
     }
 
-    func openOrImportFile(url: URL, attachToTopic: Bool = false) {
+    func openOrImportFile(url: URL, attachToTopic: Bool = false) async {
+        guard !isImportingMarginNote else { return }
         var isDir: ObjCBool = false
         let fileManager = FileManager.default
         let exists = fileManager.fileExists(atPath: url.path, isDirectory: &isDir)
@@ -763,25 +800,19 @@ final class AppModel: ObservableObject {
         if exists && isDir.boolValue {
             let sqliteCand = url.appendingPathComponent("MarginNotes.sqlite")
             if fileManager.fileExists(atPath: sqliteCand.path) || ext == "marginbackupall" || ext == "marginbackup" {
-                Task { @MainActor in
-                    await self.openMarginNoteBackup(at: url)
-                }
+                await openMarginNoteBackup(at: url)
                 return
             }
         }
 
         if ext == "marginbackupall" || ext == "marginbackup" {
-            Task { @MainActor in
-                await self.openMarginNoteBackup(at: url)
-            }
+            await openMarginNoteBackup(at: url)
         } else if ext == "marginpkg" || ext == "marginnotes" || ext == "sqlite" {
             let filename = url.lastPathComponent.lowercased()
             if filename == "marginnotes.sqlite" || filename.contains("backup") {
-                Task { @MainActor in
-                    await self.openMarginNoteBackup(at: url)
-                }
+                await openMarginNoteBackup(at: url)
             } else {
-                importMarginNoteOrPackage(url: url)
+                await importMarginNoteOrPackage(url: url)
             }
         } else {
             openDocument(url: url, attachToTopic: attachToTopic)
@@ -837,6 +868,7 @@ final class AppModel: ObservableObject {
     }
 
     func openMarginNoteBackup(at url: URL) async {
+        guard !isImportingMarginNote else { return }
         isOpeningDatabase = true
         databaseOpeningStatus = "Inspecting backup..."
         defer { isOpeningDatabase = false }
@@ -1198,7 +1230,7 @@ final class AppModel: ObservableObject {
     }
 
     func switchToBuiltInDatabase() {
-        guard isExternalDatabase else { return }
+        guard isExternalDatabase, !isImportingMarginNote else { return }
         flushPendingPositions()
         do {
             let defaultDb = try Database()
@@ -1237,26 +1269,33 @@ final class AppModel: ObservableObject {
         self.topicMindZoom.removeAll()
     }
 
-    func importMarginNoteOrPackage(url: URL) {
-        let importer = MarginNoteImporter(url: url)
+    func importMarginNoteOrPackage(url: URL) async {
+        guard !isImportingMarginNote, !isOpeningDatabase else { return }
+        flushPendingPositions()
+        let database = self.database
+        isImportingMarginNote = true
+        defer { isImportingMarginNote = false }
+        let prompt: @MainActor @Sendable (Topic, Topic) -> NotebookConflictResolution = { [weak self] existing, imported in
+            self?.promptNotebookConflict(existing: existing, imported: imported) ?? .cancel
+        }
+
         do {
-            let result = try importer.importInto(database) { [weak self] existing, imported in
-                guard let self else { return .cancel }
-                return self.promptNotebookConflict(existing: existing, imported: imported)
-            }
-            guard let result else {
-                print("Import cancelled by user.")
-                return
-            }
-
-            try? database.syncAvailableDocuments()
-            reloadLibrary()
-            reloadStudySet()
-
+            let imported = try await Task.detached(priority: .userInitiated) {
+                let result = try MarginNoteImporter(url: url).importInto(database) { existing, imported in
+                    // The importer asks before its write transaction holds the database lock.
+                    DispatchQueue.main.sync { prompt(existing, imported) }
+                }
+                return result.map { ($0, LibraryCatalog(database: database)) }
+            }.value
+            guard let (result, catalog) = imported else { return }
+            updateLibrary(from: catalog)
             if let firstDoc = result.documents.first(where: { !$0.filePath.isEmpty }) {
                 openDocumentInReader(document: firstDoc)
             } else if let firstTopic = result.topics.first {
-                enterStudyWorkspace(topic: firstTopic)
+                try? database.updateTopicUpdatedAt(id: firstTopic.id)
+                selectTopic(firstTopic)
+                workspaceMode = .splitView
+                isInStudyWorkspace = true
             }
         } catch {
             let alert = NSAlert(error: error)
@@ -2541,6 +2580,7 @@ final class AppModel: ObservableObject {
     }
 
     func importMarginNote() {
+        guard !isImportingMarginNote else { return }
         let panel = NSOpenPanel()
         let marginpkgType = UTType(filenameExtension: "marginpkg")
         let marginnotesType = UTType(filenameExtension: "marginnotes")
@@ -2566,7 +2606,7 @@ final class AppModel: ObservableObject {
         }
 
         guard let sourceURL else { return }
-        importMarginNoteOrPackage(url: sourceURL)
+        Task { await importMarginNoteOrPackage(url: sourceURL) }
     }
 
     func exportMarkdown() {
@@ -3806,11 +3846,7 @@ struct MarginGraphApp: App {
                                 onImportDocument: {
                                     model.openDocumentPicker(attachToTopic: false)
                                 },
-                                onImportURLs: { urls in
-                                    for u in urls {
-                                        model.openOrImportFile(url: u, attachToTopic: false)
-                                    }
-                                },
+                                onImportURLs: { urls in model.openOrImportFiles(urls: urls) },
                                 onDeleteDocument: { doc in
                                     model.deleteDocument(doc)
                                 },
@@ -3889,7 +3925,7 @@ struct MarginGraphApp: App {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                if model.isOpeningDatabase || model.isExportingDocument || model.isExportingOrg {
+                if model.isOpeningDatabase || model.isImportingMarginNote || model.isExportingDocument || model.isExportingOrg {
                     ZStack {
                         Color.black.opacity(0.35)
                             .ignoresSafeArea()
@@ -3898,6 +3934,7 @@ struct MarginGraphApp: App {
                                 .controlSize(.large)
                             Text(model.isExportingOrg ? "Preparing literature note…" :
                                  model.isExportingDocument ? "Exporting PDF and notes…" :
+                                 model.isImportingMarginNote ? "Importing MarginNote notes…" :
                                  (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus))
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.white)
@@ -4015,7 +4052,7 @@ struct MarginGraphApp: App {
             }
             .onOpenURL { url in
                 if url.isFileURL {
-                    model.openOrImportFile(url: url, attachToTopic: false)
+                    model.openOrImportFiles(urls: [url])
                 } else {
                     model.handleDeepLink(url)
                 }

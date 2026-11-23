@@ -21,14 +21,15 @@ public extension Database {
     }
 
     func dueCardsForTopic(id: UUID, date: Date = Date()) throws -> [NoteCard] {
-        let cards = try cardsForTopic(id: id)
-        let reviews = Dictionary(
-            uniqueKeysWithValues: try dueReviewItems(asOf: .distantFuture).map { ($0.cardId, $0) }
+        try cards(
+            sql: """
+            SELECT c.* FROM cards c WHERE topic_id = ?
+            AND NOT EXISTS (
+                SELECT 1 FROM review_items r WHERE r.card_id = c.id AND r.due_date > CAST(? AS REAL)
+            ) ORDER BY c.created_at
+            """,
+            values: [id.uuidString, String(date.timeIntervalSince1970)]
         )
-        return cards.filter { card in
-            guard let review = reviews[card.id] else { return true }
-            return review.dueDate <= date
-        }
     }
 
     @discardableResult

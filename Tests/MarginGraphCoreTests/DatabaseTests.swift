@@ -235,6 +235,12 @@ final class DatabaseTests: XCTestCase {
         let dueAfterReview = try db.dueCardCountsByTopic()
         XCTAssertEqual(dueAfterReview[topic1.id], 1)
         XCTAssertEqual(dueAfterReview[topic2.id], 1)
+
+        try db.insertReviewItem(ReviewItem(cardId: card2.id, dueDate: futureReview.dueDate))
+        XCTAssertEqual(try db.dueCardCountsByTopic(), [topic2.id: 1])
+        XCTAssertTrue(try db.dueCardsForTopic(id: topic1.id).isEmpty)
+        XCTAssertEqual(try db.dueCardCountsByTopic(asOf: futureReview.dueDate)[topic1.id], 2)
+        XCTAssertEqual(Set(try db.dueCardsForTopic(id: topic1.id, date: futureReview.dueDate).map(\.id)), [card1.id, card2.id])
     }
 
     func testMultipleBookmarksListingAndDeletion() throws {

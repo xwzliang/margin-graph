@@ -696,17 +696,15 @@ public final class MarginNoteImporter {
         _ database: Database,
         conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?
     ) throws -> MarginNoteImportResult? {
-        guard let result = try Self.apply(try read(), to: database, conflictResolver: conflictResolver) else { return nil }
-        try ImportedPackageStore.retain(url: url, result: result, database: database)
-        return result
+        try Self.apply(try read(), to: database, retainingPackageAt: url, conflictResolver: conflictResolver)
     }
 
     /// Resolve every prompt before changing the catalog, then replace notes and their unused
     /// predecessor documents together. A different imported hash is still the replacement PDF.
     static func apply(_ result: MarginNoteImportResult, to database: Database,
+                      retainingPackageAt packageURL: URL? = nil,
                       conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?) throws -> MarginNoteImportResult? {
         let existingTopics = try database.allTopics()
-        let existingDocuments = try database.allDocuments()
         var decisions: [(Topic, Topic?, NotebookConflictResolution)] = []
         for imported in result.topics {
             let existing = existingTopics.first {
@@ -720,7 +718,8 @@ public final class MarginNoteImporter {
         var mapping: [UUID: UUID] = [:]
         var replacementHashes = Set<String>()
         var retiredCandidates = Set<UUID>()
-        try database.transaction {
+        return try database.transaction {
+            let existingDocuments = try database.allDocuments()
             for (imported, existing, resolution) in decisions {
                 if let existing, case .merge = resolution {
                     var merged = existing
@@ -750,22 +749,32 @@ public final class MarginNoteImporter {
             for document in result.documents {
                 try database.insertDocument(document, deduplicateByTitle: !replacementHashes.contains(document.md5))
             }
-            for var card in result.cards {
+            var applied = result
+            applied.documents = try result.documents.map { try database.getDocumentByPath(filePath: $0.filePath) ?? $0 }
+            let remappedHashes = Dictionary(zip(result.documents.map(\.md5), applied.documents.map(\.md5)),
+                                            uniquingKeysWith: { _, latest in latest })
+            applied.cards = try result.cards.map { card in
+                var card = card
                 card.topicId = mapping[card.topicId] ?? card.topicId
+                if let hash = card.bookMD5, let canonical = remappedHashes[hash] {
+                    card.bookMD5 = canonical
+                }
                 try database.insertCard(card)
+                return card
             }
-            for var link in result.links {
+            applied.links = try result.links.map { link in
+                var link = link
                 link.topicId = mapping[link.topicId] ?? link.topicId
                 try database.insertLink(link)
+                return link
             }
             for item in result.reviewItems { try database.upsertReviewItem(item) }
+            applied.topics = try result.topics.map { try database.getTopic(id: mapping[$0.id] ?? $0.id) ?? $0 }
+            if let packageURL {
+                try ImportedPackageStore.retain(url: packageURL, result: applied, database: database)
+            }
+            return applied
         }
-        var applied = result
-        applied.topics = try result.topics.map { try database.getTopic(id: mapping[$0.id] ?? $0.id) ?? $0 }
-        applied.cards = result.cards.map { var card = $0; card.topicId = mapping[card.topicId] ?? card.topicId; return card }
-        applied.links = result.links.map { var link = $0; link.topicId = mapping[link.topicId] ?? link.topicId; return link }
-        applied.documents = try result.documents.map { try database.getDocumentByPath(filePath: $0.filePath) ?? $0 }
-        return applied
     }
 
     @discardableResult

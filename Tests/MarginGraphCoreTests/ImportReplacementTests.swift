@@ -3,6 +3,42 @@ import PDFKit
 @testable import MarginGraphCore
 
 final class ImportReplacementTests: XCTestCase {
+    func testImportLinksCardsToCanonicalDocumentWithoutLibraryRepair() throws {
+        let db = try Database(inMemory: true)
+        let existing = Document(title: "Book", filePath: "/tmp/previous.pdf", md5: "existing", totalPages: 10)
+        let imported = Document(title: "Book", filePath: "/tmp/imported.pdf", md5: "imported", totalPages: 10)
+        let unrelated = Topic(title: "Keep attachment", bookMD5List: ["offline-book"])
+        let topic = Topic(title: "Imported Notebook", bookMD5List: [imported.md5])
+        let card = NoteCard(topicId: topic.id, bookMD5: imported.md5, highlightText: "Package excerpt")
+        try db.insertDocument(existing)
+        try db.insertTopic(unrelated)
+
+        let result = try XCTUnwrap(MarginNoteImporter.apply(
+            .init(topics: [topic], documents: [imported], cards: [card]), to: db, conflictResolver: nil
+        ))
+        XCTAssertEqual(result.documents.map(\.md5), [existing.md5])
+        XCTAssertEqual(result.topics.first?.bookMD5List, [existing.md5])
+        XCTAssertEqual(try db.cardsForDocument(md5: existing.md5).map(\.id), [card.id])
+        XCTAssertEqual(try db.getTopic(id: unrelated.id)?.bookMD5List, unrelated.bookMD5List)
+    }
+
+    func testFailedArchiveRetentionRollsBackReplacement() throws {
+        let db = try Database(inMemory: true)
+        let existing = Topic(title: "Notebook")
+        try db.insertTopic(existing)
+        let card = NoteCard(topicId: existing.id, highlightText: "Keep this excerpt")
+        try db.insertCard(card)
+        let storedCard = try XCTUnwrap(db.getCard(id: card.id))
+        let incoming = Topic(title: existing.title)
+        let missingArchive = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID()).marginpkg")
+
+        XCTAssertThrowsError(try MarginNoteImporter.apply(
+            .init(topics: [incoming], documents: [], cards: []), to: db, retainingPackageAt: missingArchive
+        ) { _, _ in .replace })
+        XCTAssertEqual(try db.allTopics().map(\.id), [existing.id])
+        XCTAssertEqual(try db.getCard(id: card.id), storedCard)
+    }
+
     func testReplaceRetiresOldPDFDespiteSanitizedTitleAndKeepsSourceBytes() throws {
         let db = try Database(inMemory: true)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

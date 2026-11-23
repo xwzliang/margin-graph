@@ -20,7 +20,7 @@ public final class Database: @unchecked Sendable {
     public let path: String
     public var isInMemory: Bool { path == ":memory:" }
     private var db: OpaquePointer?
-    private let queue = DispatchQueue(label: "MarginGraph.Database")
+    private let lock = NSRecursiveLock()
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -393,7 +393,7 @@ public final class Database: @unchecked Sendable {
     }
 
     public func execute(_ sql: String) throws {
-        try queue.sync {
+        try withDatabaseLock {
             var error: UnsafeMutablePointer<CChar>?
             guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {
                 let message = error.map { String(cString: $0) } ?? String(cString: sqlite3_errmsg(db))
@@ -404,19 +404,27 @@ public final class Database: @unchecked Sendable {
     }
 
     public func transaction<T>(_ block: () throws -> T) throws -> T {
-        try execute("BEGIN TRANSACTION;")
-        do {
-            let result = try block()
-            try execute("COMMIT;")
-            return result
-        } catch {
-            try? execute("ROLLBACK;")
-            throw error
+        try withDatabaseLock {
+            try execute("BEGIN TRANSACTION;")
+            do {
+                let result = try block()
+                try execute("COMMIT;")
+                return result
+            } catch {
+                try? execute("ROLLBACK;")
+                throw error
+            }
         }
     }
 
+    private func withDatabaseLock<T>(_ block: () throws -> T) rethrows -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return try block()
+    }
+
     internal func withStatement<T>(_ sql: String, _ body: (OpaquePointer) throws -> T) throws -> T {
-        try queue.sync {
+        try withDatabaseLock {
             var statement: OpaquePointer?
             guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let statement else {
                 throw DatabaseError.sqlite(String(cString: sqlite3_errmsg(db)))
@@ -989,12 +997,18 @@ public final class Database: @unchecked Sendable {
     }
 
     public func dueCardCountsByTopic(asOf date: Date = Date()) throws -> [UUID: Int] {
+        // Count cards through the covering topic index, then visit card rows only
+        // for reviews scheduled in the future. Unreviewed cards are already due.
         let sql = """
-        SELECT c.topic_id, count(*)
-        FROM cards c
-        LEFT JOIN review_items r ON c.id = r.card_id
-        WHERE c.topic_id IS NOT NULL AND (r.due_date IS NULL OR r.due_date <= ?)
-        GROUP BY c.topic_id
+        SELECT topic_id, sum(delta)
+        FROM (
+            SELECT topic_id, count(*) AS delta FROM cards GROUP BY topic_id
+            UNION ALL
+            SELECT c.topic_id, -count(*) FROM review_items r
+            CROSS JOIN cards c ON c.id = r.card_id
+            WHERE r.due_date > ? GROUP BY c.topic_id
+        )
+        GROUP BY topic_id HAVING sum(delta) > 0
         """
         return try withStatement(sql) { statement in
             bind(date.timeIntervalSince1970, to: 1, in: statement)

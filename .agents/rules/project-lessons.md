@@ -33,7 +33,7 @@ Structure each entry concisely with actionable rules:
 ## Architecture & Conventions
 - SQLite Linkage: Targets link system `sqlite3` directly using `.linkedLibrary("sqlite3")` without third-party package dependencies.
 - Test Isolation: Database unit tests should always initialize in-memory SQLite instances (`try Database(inMemory: true)`) to prevent filesystem pollution and test interference.
-- Swift Concurrency: `Database` uses serial queue synchronization and `@unchecked Sendable` for thread-safe concurrent access across SwiftUI views.
+- Swift Concurrency: `Database` uses a recursive lock and `@unchecked Sendable` for serialized access. Hold the lock across the entire transaction so operations on another thread cannot join it. Get user input before acquiring the transaction lock.
 
 ## SwiftUI Layout & Hit-Testing Traps
 - **Never use `.position(x:y:)` for floating overlays or draggable controls in a `ZStack`**:
@@ -1229,6 +1229,12 @@ Structure each entry concisely with actionable rules:
 - **Trap**: Constructing arrays and calling generic `contains` for every PDF byte/token dominated debug export CPU time. Parsing every text operand as a number and materializing nested array members also wasted work.
 - **Rule**: Use allocation-free byte switches for lexical classification, parse numeric operands only for relevant operators, and scan nested operands without creating unused strings. Preserve all-page extracted-text validation; faster exports must still remove footer text while retaining body text, vectors, navigation, and notes.
 - **Verification**: On the same 360-page Homo Deus file in a debug build, PDF processing fell from 116.38 s to 13.03 s; the complete package with 231 notes took 14.92 s. A fresh live app export succeeded, with PDF/mind map rendering and the reader More menu checked. The full 233-test suite passed, including the background 4,000-outline regression and mandatory performance/layout checks.
+
+## Single-Package Imports Must Stay Scoped to the Imported Notebook
+
+- **Trap**: A 132-note package had committed, but the importer still ran full-library discovery and repair on the UI thread. A stack sample showed SQLite reading unrelated card pages over SMB while collecting topic-to-book hashes. The shelf's old due-count query also read every card row.
+- **Rule**: Apply a package directly through the importer transaction, including canonical document hashes and original-archive retention. Keep discovery and repair out of the explicit package path. Perform package reads, writes, and catalog loading off the main actor. Present conflict prompts on the main actor before the write transaction. Calculate due totals using the covering topic index and subtract future reviews, and check document paths only among candidate matches for the selected topic.
+- **Verified**: The exact package completed on an isolated copy of the SMB library with about 18,700 existing cards. The app was idle by 25 seconds after confirmation and the PDF and mind map rendered. It preserved all 132 user note IDs and the original archive bytes. A second import showed the conflict prompt, and Cancel preserved the saved notebook. The reader More menu stayed within the window. The due-count query fell from about 50 seconds on the original library to under a second on the copy. All 255 tests passed, including the required benchmark and layout checks.
 
 ## Org Export Uses the Notebook Snapshot
 

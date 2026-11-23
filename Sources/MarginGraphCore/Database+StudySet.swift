@@ -36,12 +36,16 @@ public extension Database {
         let allDocs = try allDocuments()
             .filter { doc in !excluded.contains { Self.bookHashesMatch($0, doc.md5) } }
             .filter { !$0.filePath.isEmpty }
-            .sorted { (FileManager.default.fileExists(atPath: $0.filePath) ? 1 : 0) > (FileManager.default.fileExists(atPath: $1.filePath) ? 1 : 0) }
+        func preferredDocument(matching predicate: (Document) -> Bool) -> Document? {
+            let matches = allDocs.filter(predicate)
+            guard matches.count > 1 else { return matches.first }
+            return matches.first { FileManager.default.fileExists(atPath: $0.filePath) } ?? matches.first
+        }
         var results: [Document] = []
 
         // 1. Direct or prefix match with topic.bookMD5List
         for bookMD5 in topic.bookMD5List {
-            if let found = allDocs.first(where: {
+            if let found = preferredDocument(matching: {
                 $0.md5 == bookMD5 ||
                 $0.md5.hasPrefix(bookMD5) ||
                 bookMD5.hasPrefix($0.md5)
@@ -57,7 +61,7 @@ public extension Database {
             let cards = try cardsForTopic(id: id)
             let cardBookMD5s = Set(cards.compactMap { $0.bookMD5 })
             for bookMD5 in cardBookMD5s {
-                if let found = allDocs.first(where: {
+                if let found = preferredDocument(matching: {
                     $0.md5 == bookMD5 ||
                     $0.md5.hasPrefix(bookMD5) ||
                     bookMD5.hasPrefix($0.md5)
@@ -72,7 +76,7 @@ public extension Database {
         // 3. Fallback to matching document by title or file name
         if results.isEmpty {
             let cleanTopicTitle = topic.title.trimmingCharacters(in: .whitespacesAndNewlines)
-            if let found = allDocs.first(where: {
+            if let found = preferredDocument(matching: {
                 let cleanDocTitle = $0.title.trimmingCharacters(in: .whitespacesAndNewlines)
                 let dFileName = URL(fileURLWithPath: $0.filePath).deletingPathExtension().lastPathComponent
                 return cleanDocTitle.localizedCaseInsensitiveCompare(cleanTopicTitle) == .orderedSame ||
