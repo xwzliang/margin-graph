@@ -1,8 +1,66 @@
 import XCTest
 import SQLite3
+import AppKit
 @testable import MarginGraphCore
 
 final class MarginNoteImporterTests: XCTestCase {
+    func testRecoverRichCommentFromRetainedPackage() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let noteURL = folder.appendingPathComponent("source.marginnotes")
+        let archiveURL = folder.appendingPathComponent("source.marginpkg")
+        let topic = Topic(title: "Checklist", bookMD5List: ["book"])
+        let text = "Checklist\nQuestion\nYes"
+        let card = NoteCard(topicId: topic.id, bookMD5: "book", title: "Checklist", notesText: text)
+        let rtf = Data(#"{\rtf1\ansi\fs36\b Checklist\b0\par\trowd\cellx2500\cellx3500\intbl Question\cell Yes\cell\row}"#.utf8)
+        let archive = try NSKeyedArchiver.archivedData(withRootObject: [
+            ["type": "HtmlNote", "text": text, "rtf": rtf]
+        ], requiringSecureCoding: false)
+        let hex = archive.map { String(format: "%02x", $0) }.joined()
+        var source: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(noteURL.path, &source), SQLITE_OK)
+        try exec(source, """
+        CREATE TABLE ZTOPIC(ZTOPICID TEXT, ZTITLE TEXT);
+        INSERT INTO ZTOPIC VALUES ('\(topic.id)', 'Checklist');
+        CREATE TABLE ZBOOKNOTE (ZNOTEID TEXT, ZTOPICID TEXT, ZBOOKMD5 TEXT, ZNOTES_TEXT TEXT, ZNOTES BLOB);
+        INSERT INTO ZBOOKNOTE VALUES ('\(card.id)', '\(topic.id)', 'book', '\(text)', X'\(hex)');
+        """)
+        sqlite3_close(source)
+
+        let expected = [RichNoteComment(text: text, rtf: rtf)]
+        XCTAssertEqual(try MarginNoteImporter(url: noteURL).read().cards.first?.richComments, expected)
+
+        let zip = Process()
+        zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        zip.currentDirectoryURL = folder
+        zip.arguments = ["-q", archiveURL.path, noteURL.lastPathComponent]
+        try zip.run()
+        zip.waitUntilExit()
+        XCTAssertEqual(zip.terminationStatus, 0)
+        let bytes = try Data(contentsOf: archiveURL)
+        let db = try Database(inMemory: true)
+        try db.insertTopic(topic)
+        try db.insertCard(card)
+        try db.withStatement("INSERT INTO imported_packages VALUES('book', '[]', X'', ?)") { statement in
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            _ = bytes.withUnsafeBytes { sqlite3_bind_blob(statement, 1, $0.baseAddress, Int32(bytes.count), transient) }
+            try db.requireDone(statement)
+        }
+        XCTAssertEqual(try db.notebookGraph(id: topic.id).cards.first?.richComments, expected)
+        XCTAssertEqual(try db.getCard(id: card.id)?.notesText, text)
+
+        let preview = RichNoteCommentText.attributed(text: text + "\nAdditional comment", comments: expected)
+        XCTAssertTrue(preview.string.hasSuffix("Additional comment"))
+        var foundTableCell = false
+        preview.enumerateAttribute(.paragraphStyle, in: NSRange(location: 0, length: preview.length)) { style, _, _ in
+            if (style as? NSParagraphStyle)?.textBlocks.contains(where: { $0 is NSTextTableBlock }) == true {
+                foundTableCell = true
+            }
+        }
+        XCTAssertTrue(foundTableCell)
+    }
+
     func testImportsTopicsBooksCardsAndParentRelationship() throws {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("mn-\(UUID().uuidString).sqlite")

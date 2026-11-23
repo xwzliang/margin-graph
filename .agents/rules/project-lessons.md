@@ -1065,6 +1065,10 @@ Structure each entry concisely with actionable rules:
   - **Trap**: A `ZGROUPNOTEID` fragment referenced by an owning note's archived `ZNOTES` `LinkNote` entry is part of that note. Loading the fragment as a branch duplicates text and makes the second PDF selection behave like a separate note.
   - **Rule**: Confirm both native fields, retain the owner's ID, and store each selection with its own ID and rectangles. Avoid duplicating excerpt text already present in the owner's note body. Keep fragment links resolvable to the owner. For imports made before `ZNOTES` was decoded, repair only matching unpositioned fragments whose full excerpt is mirrored in the owner. Repair the open notebook transactionally and record completion. Move deck and review state before removing a duplicate row, and update the surviving SQLite row in place to preserve its deck membership.
 
+- **Preserve Imported Rich Comment Tables**:
+  - **Trap**: `ZNOTES_TEXT` flattens a MarginNote checklist into loose lines. The `HtmlNote` entry in `ZNOTES` provides the original RTF, including its table cells and headings.
+  - **Rule**: Retain the RTF alongside the searchable plain text. Recover it from the scoped native notes database in a retained package once per document, matching present-day comment text before applying it. Use TextKit table layout for both card measurement and rendering.
+
 - **Keep Empty Canvas Notes as Drafts**:
   - **Trap**: Inserting a free canvas note before editing creates an empty local card when the user cancels.
   - **Rule**: Open a free note as an unsaved draft and insert it only after the user saves nonblank content.

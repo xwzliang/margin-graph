@@ -162,6 +162,28 @@ public struct ExcerptSegment: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
+public struct RichNoteComment: Codable, Hashable, Sendable {
+    public var text: String
+    public var rtf: Data
+
+    public init(text: String, rtf: Data) {
+        self.text = text
+        self.rtf = rtf
+    }
+
+    static func matching(_ comments: [Self], in text: String) -> [Self]? {
+        var start = text.startIndex
+        let matches = comments.filter { comment in
+            guard !comment.text.isEmpty, let range = text.range(of: comment.text, range: start..<text.endIndex) else {
+                return false
+            }
+            start = range.upperBound
+            return true
+        }
+        return matches.isEmpty ? nil : matches
+    }
+}
+
 public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
     public var topicId: UUID
@@ -169,6 +191,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
     public var title: String
     public var highlightText: String
     public var notesText: String
+    public var richComments: [RichNoteComment]?
     public var groupNoteId: UUID?
     public var mindPos: CGPoint?
     public var mindLinks: [UUID]
@@ -216,7 +239,8 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         videoStartTime: Double? = nil,
         videoEndTime: Double? = nil,
         createdAt: Date = Date(),
-        updatedAt: Date = Date()
+        updatedAt: Date = Date(),
+        richComments: [RichNoteComment]? = nil
     ) {
         self.id = id
         self.topicId = topicId
@@ -224,6 +248,7 @@ public struct NoteCard: Codable, Hashable, Sendable, Identifiable {
         self.title = title
         self.highlightText = highlightText
         self.notesText = notesText
+        self.richComments = richComments
         self.groupNoteId = groupNoteId
         self.mindPos = mindPos
         self.mindLinks = mindLinks

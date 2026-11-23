@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 8
+    private static let currentSchemaVersion: Int32 = 9
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -194,7 +194,13 @@ public final class Database: @unchecked Sendable {
         CREATE TABLE IF NOT EXISTS imported_note_merge_state(
             topic_id TEXT PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS imported_comment_recovery(
+            document_md5 TEXT PRIMARY KEY REFERENCES imported_packages(document_md5) ON DELETE CASCADE
+        );
         """)
+        if try !hasColumn("rich_comments", in: "cards") {
+            try execute("ALTER TABLE cards ADD COLUMN rich_comments TEXT;")
+        }
         try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
     }
 
@@ -923,7 +929,7 @@ public final class Database: @unchecked Sendable {
             "start_page", "end_page", "start_x", "start_y", "end_x", "end_y",
             "color_index", "tags", "highlight_pic_hash", "created_at", "updated_at",
             "highlight_rects", "emphasis_list", "excerpt_segments", "emphasis_rects",
-            "media_type", "video_start_time", "video_end_time"
+            "media_type", "video_start_time", "video_end_time", "rich_comments"
         ]
         let values = Array(repeating: "?", count: columns.count).joined(separator: ",")
         let updates = columns.dropFirst().map { "\($0) = excluded.\($0)" }.joined(separator: ",")
@@ -938,6 +944,7 @@ public final class Database: @unchecked Sendable {
         let emphasisList = try jsonString(card.emphasisList)
         let excerptSegments = try jsonString(card.excerptSegments)
         let emphasisRects = try jsonString(card.emphasisRects)
+        let richComments = try card.richComments.map { try jsonString($0) }
         try withStatement(Self.writeCardSQL) { statement in
             bind(card.id.uuidString, to: 1, in: statement)
             bind(card.topicId.uuidString, to: 2, in: statement)
@@ -968,6 +975,7 @@ public final class Database: @unchecked Sendable {
             bind(card.mediaType, to: 27, in: statement)
             bind(card.videoStartTime, to: 28, in: statement)
             bind(card.videoEndTime, to: 29, in: statement)
+            bind(richComments, to: 30, in: statement)
             try requireDone(statement)
         }
     }
@@ -1077,6 +1085,7 @@ public final class Database: @unchecked Sendable {
         let storedLinks = try linksForTopic(id: topicID)
         var cards = storedCards
         var links = storedLinks
+        try ImportedPackageStore.recoverRichComments(in: &cards, database: self)
         let groups = try legacyMergedNoteGroups(in: cards)
         let owners = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: groups)
         MarginNoteHierarchy.restore(cards: &cards, links: &links)
@@ -1275,7 +1284,8 @@ public final class Database: @unchecked Sendable {
             videoStartTime: double(statement, 27),
             videoEndTime: double(statement, 28),
             createdAt: Date(timeIntervalSince1970: double(statement, 20) ?? 0),
-            updatedAt: Date(timeIntervalSince1970: double(statement, 21) ?? 0)
+            updatedAt: Date(timeIntervalSince1970: double(statement, 21) ?? 0),
+            richComments: try? decodeJSON([RichNoteComment].self, text(statement, 29))
         )
     }
 

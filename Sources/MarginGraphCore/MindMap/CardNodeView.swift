@@ -178,11 +178,17 @@ public struct CardNodeView: View {
 
                         // User comments / notes
                         if hasNotes {
-                            Text(NoteTextLinks.attributed(card.notesText))
-                                .font(.system(size: 11.5, weight: .bold))
-                                .foregroundStyle(Color(white: 0.32))
-                                .lineSpacing(2)
-                                .fixedSize(horizontal: false, vertical: true)
+                            if let comments = RichNoteComment.matching(card.richComments ?? [], in: card.notesText) {
+                                RichNoteCommentView(text: card.notesText, comments: comments)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .allowsHitTesting(false)
+                            } else {
+                                Text(NoteTextLinks.attributed(card.notesText))
+                                    .font(.system(size: 11.5, weight: .bold))
+                                    .foregroundStyle(Color(white: 0.32))
+                                    .lineSpacing(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
 
                         // Image thumbnail / Video poster frame

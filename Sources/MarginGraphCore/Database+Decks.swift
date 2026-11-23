@@ -94,11 +94,7 @@ public extension Database {
 
     func cardsForDeck(deckId: UUID) throws -> [NoteCard] {
         let sql = """
-        SELECT c.id, c.topic_id, c.book_md5, c.title, c.highlight_text, c.notes_text, c.group_note_id,
-               c.mind_x, c.mind_y, c.mind_links, c.is_folded, c.start_page, c.end_page,
-               c.start_x, c.start_y, c.end_x, c.end_y, c.color_index, c.tags, c.highlight_pic_hash,
-               c.created_at, c.updated_at, c.highlight_rects, c.emphasis_list, c.emphasis_rects,
-               c.excerpt_segments
+        SELECT c.*
         FROM cards c
         INNER JOIN deck_cards dc ON c.id = dc.card_id
         WHERE dc.deck_id = ?

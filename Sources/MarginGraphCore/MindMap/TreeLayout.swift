@@ -143,8 +143,13 @@ public enum TreeLayout {
 
         if hasNotes {
             #if canImport(AppKit)
-            let notesFont = NSFont.systemFont(ofSize: 11.5, weight: .bold)
-            let notesTextH = measureTextHeight(text: NoteTextLinks.displayText(card.notesText), font: notesFont, width: availableTextWidth, lineSpacing: 2)
+            let notesTextH: CGFloat
+            if let comments = RichNoteComment.matching(card.richComments ?? [], in: card.notesText) {
+                notesTextH = RichNoteCommentText.cardHeight(text: card.notesText, comments: comments, width: availableTextWidth)
+            } else {
+                let notesFont = NSFont.systemFont(ofSize: 11.5, weight: .bold)
+                notesTextH = measureTextHeight(text: NoteTextLinks.displayText(card.notesText), font: notesFont, width: availableTextWidth, lineSpacing: 2)
+            }
             #else
             let notesTextH = fallbackMeasureTextHeight(text: NoteTextLinks.displayText(card.notesText), width: availableTextWidth, fontPointSize: 11.5, lineSpacing: 2)
             #endif

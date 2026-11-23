@@ -14,9 +14,11 @@ enum ImportedPackageStore {
         var cards: [NoteCard]
         var links: [CardLink]
         var mergesResolved: Bool?
+        var richCommentsCaptured: Bool?
     }
 
-    private static func snapshot(document: Document, topicIDs: [UUID], database: Database) throws -> Data {
+    private static func snapshot(document: Document, topicIDs: [UUID], database: Database,
+                                 originalComments: [UUID: [RichNoteComment]] = [:]) throws -> Data {
         let topics = try database.allTopics().filter {
             topicIDs.contains($0.id) || $0.bookMD5List.contains(document.md5)
         }.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -24,6 +26,7 @@ enum ImportedPackageStore {
             .sorted { $0.id.uuidString < $1.id.uuidString }
         var links = try topics.flatMap { try database.linksForTopic(id: $0.id) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
+        installRichComments(originalComments, in: &cards)
         let groups = try database.legacyMergedNoteGroups(in: cards)
         _ = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: groups)
         MarginNoteHierarchy.restore(cards: &cards, links: &links)
@@ -46,15 +49,19 @@ enum ImportedPackageStore {
             var card = $0
             card.updatedAt = card.createdAt
             return card
-        }, links: links, mergesResolved: true)
+        }, links: links, mergesResolved: true, richCommentsCaptured: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(state)
     }
 
-    private static func canonicalSnapshot(_ data: Data) throws -> Data {
-        var state = try JSONDecoder().decode(Snapshot.self, from: data)
+    private static func canonicalSnapshot(_ snapshot: Snapshot, originalComments: [UUID: [RichNoteComment]]) throws -> Data {
+        var state = snapshot
         for index in state.topics.indices { state.topics[index].bookMD5List.sort() }
+        if state.richCommentsCaptured != true {
+            installRichComments(originalComments, in: &state.cards)
+            state.richCommentsCaptured = true
+        }
         if state.mergesResolved != true {
             let groups = MarginNoteMergedNotes.legacyGroups(in: state.cards)
             _ = MarginNoteMergedNotes.combine(cards: &state.cards, links: &state.links, groups: groups)
@@ -87,6 +94,43 @@ enum ImportedPackageStore {
                 _ = archive.withUnsafeBytes { sqlite3_bind_blob(stmt, 4, $0.baseAddress, Int32(archive.count), transient) }
                 guard sqlite3_step(stmt) == SQLITE_DONE else { throw DatabaseError.sqlite("Cannot retain native package") }
             }
+            try markRichCommentsRecovered(md5: document.md5, database: database)
+        }
+    }
+
+    static func recoverRichComments(in cards: inout [NoteCard], database: Database) throws {
+        let hashes = Set(cards.compactMap { card in
+            card.richComments == nil && !card.notesText.isEmpty ? card.bookMD5 : nil
+        })
+        for md5 in hashes {
+            let archive: Data? = try database.withStatement("""
+                SELECT archive FROM imported_packages p
+                WHERE p.document_md5 = ? AND NOT EXISTS (
+                    SELECT 1 FROM imported_comment_recovery r WHERE r.document_md5 = p.document_md5
+                )
+                """) { statement in
+                database.bind(md5, to: 1, in: statement)
+                guard sqlite3_step(statement) == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { return nil }
+                return Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0)))
+            }
+            guard let archive, let comments = try? MarginNoteImporter.archivedRichComments(in: archive) else { continue }
+            installRichComments(comments, in: &cards)
+            try markRichCommentsRecovered(md5: md5, database: database)
+        }
+    }
+
+    private static func installRichComments(_ comments: [UUID: [RichNoteComment]], in cards: inout [NoteCard]) {
+        for index in cards.indices where cards[index].richComments == nil {
+            if let blocks = comments[cards[index].id] {
+                cards[index].richComments = RichNoteComment.matching(blocks, in: cards[index].notesText)
+            }
+        }
+    }
+
+    private static func markRichCommentsRecovered(md5: String, database: Database) throws {
+        try database.withStatement("INSERT OR IGNORE INTO imported_comment_recovery VALUES (?)") { statement in
+            database.bind(md5, to: 1, in: statement)
+            try database.requireDone(statement)
         }
     }
 
@@ -103,9 +147,13 @@ enum ImportedPackageStore {
         }
         guard let (ids, state, archive) = stored else { return nil }
         let topicIDs = try JSONDecoder().decode([UUID].self, from: Data(ids.utf8))
+        let baseline = try JSONDecoder().decode(Snapshot.self, from: state)
+        let originalComments = baseline.richCommentsCaptured == true ? [:]
+            : ((try? MarginNoteImporter.archivedRichComments(in: archive)) ?? [:])
         guard let storedDocument = try database.getDocumentByMD5(md5: document.md5),
-              let current = try? snapshot(document: storedDocument, topicIDs: topicIDs, database: database),
-              current == (try canonicalSnapshot(state)) else { return nil }
+              let current = try? snapshot(document: storedDocument, topicIDs: topicIDs, database: database,
+                                          originalComments: originalComments),
+              current == (try canonicalSnapshot(baseline, originalComments: originalComments)) else { return nil }
         return archive
     }
 }

@@ -5,6 +5,7 @@ public struct CardEditorSheet: View {
 
     @State private var title: String
     @State private var notesText: String
+    @State private var richComments: [RichNoteComment]?
     @State private var colorIndex: Int
     @State private var tags: [String]
     @State private var newTagText: String = ""
@@ -26,11 +27,13 @@ public struct CardEditorSheet: View {
         self.onDelete = onDelete
         _title = State(initialValue: card.title)
         _notesText = State(initialValue: card.notesText)
+        _richComments = State(initialValue: RichNoteComment.matching(card.richComments ?? [], in: card.notesText))
         _colorIndex = State(initialValue: card.colorIndex)
         _tags = State(initialValue: card.tags)
     }
 
     public var body: some View {
+        let hasRichEditor = RichNoteComment.matching(card.richComments ?? [], in: card.notesText) != nil
         VStack(spacing: 0) {
             // Header
             HStack {
@@ -126,12 +129,21 @@ public struct CardEditorSheet: View {
                             .font(.system(size: 11, weight: .medium))
                             .foregroundStyle(.secondary)
 
-                        TextEditor(text: $notesText)
-                            .font(.system(size: 12))
-                            .frame(minHeight: 110)
-                            .padding(4)
-                            .background(Color.white)
+                        if hasRichEditor {
+                            RichNoteCommentView(text: notesText, comments: richComments ?? []) { text, comments in
+                                notesText = text
+                                richComments = comments
+                            }
+                            .frame(height: 330)
                             .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(white: 0.82), lineWidth: 1))
+                        } else {
+                            TextEditor(text: $notesText)
+                                .font(.system(size: 12))
+                                .frame(minHeight: 110)
+                                .padding(4)
+                                .background(Color.white)
+                                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color(white: 0.82), lineWidth: 1))
+                        }
                     }
 
                     // Tags
@@ -197,7 +209,7 @@ public struct CardEditorSheet: View {
                 .padding(20)
             }
         }
-        .frame(width: 440, height: 520)
+        .frame(width: hasRichEditor ? 640 : 440, height: hasRichEditor ? 610 : 520)
         .background(MarginNoteTheme.shelfBackground)
     }
 
@@ -213,6 +225,7 @@ public struct CardEditorSheet: View {
         var updated = card
         updated.title = title
         updated.notesText = notesText
+        updated.richComments = richComments
         updated.colorIndex = colorIndex
         updated.tags = tags
         updated.updatedAt = Date()

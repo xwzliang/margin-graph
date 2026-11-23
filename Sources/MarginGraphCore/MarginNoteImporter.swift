@@ -477,8 +477,11 @@ public final class MarginNoteImporter {
         for row in noteRows {
             let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let cardId = noteKeyMap[key] ?? stableUUID(key)
+            let entries = Self.noteEntries(first(row, ["ZNOTES"]))
             if groupIDs.contains(cardId) {
-                let fragments = linkedNoteIDs(first(row, ["ZNOTES"]))
+                let fragments = entries.compactMap { entry in
+                    entry["type"] as? String == "LinkNote" ? entry["noteid"] as? String : nil
+                }
                     .compactMap { noteKeyMap[$0] ?? UUID(uuidString: $0) }
                 if !fragments.isEmpty { mergeGroups[cardId] = fragments }
             }
@@ -562,13 +565,14 @@ public final class MarginNoteImporter {
                 }
             }
 
+            let notesText = first(row, ["ZNOTES_TEXT", "ZNOTESTEXT", "ZCOMMENTS"]) ?? ""
             cards.append(NoteCard(
                 id: cardId,
                 topicId: topicId,
                 bookMD5: first(row, ["ZBOOKMD5", "ZMD5"]),
                 title: first(row, ["ZNOTETITLE", "ZTITLE"]) ?? "",
                 highlightText: first(row, ["ZHIGHLIGHT_TEXT", "ZHIGHLIGHTTEXT"]) ?? "",
-                notesText: first(row, ["ZNOTES_TEXT", "ZNOTESTEXT", "ZCOMMENTS"]) ?? "",
+                notesText: notesText,
                 groupNoteId: parentId,
                 mindPos: parsePoint(first(row, ["ZMINDPOS"])),
                 mindLinks: mindLinks,
@@ -585,7 +589,8 @@ public final class MarginNoteImporter {
                 videoStartTime: videoStartTime,
                 videoEndTime: videoEndTime,
                 createdAt: created,
-                updatedAt: updated
+                updatedAt: updated,
+                richComments: RichNoteComment.matching(Self.richComments(in: entries), in: notesText)
             ))
         }
 
@@ -817,9 +822,9 @@ public final class MarginNoteImporter {
         return result
     }
 
-    private func rows(in db: OpaquePointer, table: String) throws -> [[String: String?]] {
+    private static func rows(in db: OpaquePointer, table: String, columns: String = "*") throws -> [[String: String?]] {
         var statement: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT * FROM \(table)", -1, &statement, nil) == SQLITE_OK,
+        guard sqlite3_prepare_v2(db, "SELECT \(columns) FROM \(table)", -1, &statement, nil) == SQLITE_OK,
               let statement else {
             throw DatabaseError.sqlite(String(cString: sqlite3_errmsg(db)))
         }
@@ -849,6 +854,10 @@ public final class MarginNoteImporter {
         return result
     }
 
+    private func rows(in db: OpaquePointer, table: String) throws -> [[String: String?]] {
+        try Self.rows(in: db, table: table)
+    }
+
     private func first(_ row: [String: String?], _ keys: [String]) -> String? {
         for key in keys {
             if let wrapped = row[key.uppercased()],
@@ -872,14 +881,54 @@ public final class MarginNoteImporter {
             .filter { !$0.isEmpty }
     }
 
-    private func linkedNoteIDs(_ raw: String?) -> [String] {
+    private static func noteEntries(_ raw: String?) -> [[String: Any]] {
         guard let raw, raw.hasPrefix("base64:"),
               let data = Data(base64Encoded: String(raw.dropFirst("base64:".count))) else { return [] }
-        let classes: [AnyClass] = [NSArray.self, NSDictionary.self, NSString.self, NSNumber.self, NSData.self]
-        let entries = (try? NSKeyedUnarchiver.unarchivedObject(ofClasses: classes, from: data)) as? [[String: Any]]
-        return entries?.compactMap { entry in
-            entry["type"] as? String == "LinkNote" ? entry["noteid"] as? String : nil
-        } ?? []
+        let classes: [AnyClass] = [NSArray.self, NSDictionary.self, NSString.self, NSNumber.self, NSData.self, NSValue.self]
+        return (try? NSKeyedUnarchiver.unarchivedObject(ofClasses: classes, from: data)) as? [[String: Any]] ?? []
+    }
+
+    private static func richComments(in entries: [[String: Any]]) -> [RichNoteComment] {
+        entries.compactMap { entry in
+            guard entry["type"] as? String == "HtmlNote", let text = entry["text"] as? String,
+                  let rtf = entry["rtf"] as? Data, rtf.starts(with: Data("{\\rtf".utf8)) else { return nil }
+            return RichNoteComment(text: text, rtf: rtf)
+        }
+    }
+
+    static func archivedRichComments(in archive: Data) throws -> [UUID: [RichNoteComment]] {
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: directory) }
+        let package = directory.appendingPathComponent("source.marginpkg")
+        try archive.write(to: package)
+
+        // The PDF and media in a retained package are unnecessary for comment recovery.
+        let unzip = Process()
+        unzip.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
+        unzip.arguments = ["-qq", "-o", package.path, "*.marginnotes", "*.sqlite", "-d", directory.path]
+        unzip.standardError = FileHandle.nullDevice
+        try unzip.run()
+        unzip.waitUntilExit()
+        let files = fm.enumerator(at: directory, includingPropertiesForKeys: nil)
+        guard let notes = files?.first(where: { item in
+            guard let url = item as? URL else { return false }
+            return ["marginnotes", "sqlite"].contains(url.pathExtension.lowercased())
+        }) as? URL else { throw DatabaseError.open("No notes database in retained MarginNote archive") }
+
+        var source: OpaquePointer?
+        let status = sqlite3_open_v2(notes.path, &source, SQLITE_OPEN_READONLY, nil)
+        defer { sqlite3_close(source) }
+        guard status == SQLITE_OK, let source else { throw DatabaseError.open("Unable to read retained MarginNote notes") }
+        let records = (try? rows(in: source, table: "ZBOOKNOTE", columns: "ZNOTEID, ZNOTES")) ?? []
+        var comments: [UUID: [RichNoteComment]] = [:]
+        for record in records {
+            guard let id = (record["ZNOTEID"] ?? nil).flatMap(UUID.init(uuidString:)) else { continue }
+            let rich = richComments(in: noteEntries(record["ZNOTES"] ?? nil))
+            if !rich.isEmpty { comments[id] = rich }
+        }
+        return comments
     }
 
     private func parsePoint(_ raw: String?) -> CGPoint? {

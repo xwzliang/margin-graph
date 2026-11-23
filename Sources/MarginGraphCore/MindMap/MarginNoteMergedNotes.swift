@@ -111,6 +111,9 @@ enum MarginNoteMergedNotes {
                 owner.notesText += (owner.notesText.isEmpty ? "" : "\n\n") + text
             }
         }
+        if let comments = fragment.richComments {
+            owner.richComments = orderedUnion(owner.richComments ?? [], comments)
+        }
     }
 
     private static func orderedUnion<T: Hashable>(_ first: [T], _ second: [T]) -> [T] {
