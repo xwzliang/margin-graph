@@ -89,6 +89,7 @@ public struct MarginNotePDFContainerView: View {
     public var onPositionChanged: ((Int, CGFloat) -> Void)?
     public var onUpdateTypography: ((TypographyOptions) -> Void)?
     public var onImportHighlights: (() -> Void)?
+    public var onOpenBibliography: (() -> Void)?
 
     @State private var hidesPageNumbers = false
     @State private var activeTool: MarginNotePDFTool = .hand
@@ -151,7 +152,8 @@ public struct MarginNotePDFContainerView: View {
         onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onUpdateTypography: ((TypographyOptions) -> Void)? = nil,
         onImportHighlights: (() -> Void)? = nil,
-        onCleanPageNumbers: (() -> Void)? = nil
+        onCleanPageNumbers: (() -> Void)? = nil,
+        onOpenBibliography: (() -> Void)? = nil
     ) {
         self.onCleanPageNumbers = onCleanPageNumbers
         self.manager = manager
@@ -187,6 +189,7 @@ public struct MarginNotePDFContainerView: View {
         self.onDeleteEmphasis = onDeleteEmphasis
         self.onUpdateTypography = onUpdateTypography
         self.onImportHighlights = onImportHighlights
+        self.onOpenBibliography = onOpenBibliography
         self.initialPageIndex = initialPageIndex
         self.onPageChanged = onPageChanged
         self._currentPageIndex = State(initialValue: initialPageIndex)
@@ -303,6 +306,10 @@ public struct MarginNotePDFContainerView: View {
                             )
                         }
                     )
+
+                    if let onOpenBibliography {
+                        DocumentBibliographyButton(action: onOpenBibliography)
+                    }
 
                     // Bookmarks: Direct toggle + Dropdown for listing and deleting
                     HStack(spacing: 2) {

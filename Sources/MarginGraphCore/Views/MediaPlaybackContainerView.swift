@@ -26,6 +26,7 @@ public struct MediaPlaybackContainerView: View {
     public var onManageDocuments: (() -> Void)?
     public var onCreateVideoCard: ((_ startTime: Double, _ endTime: Double, _ title: String) -> Void)?
     public var onSelectCard: ((UUID) -> Void)?
+    public var onOpenBibliography: (() -> Void)?
     public var showsHeader: Bool
 
     @StateObject private var coordinator = MediaPlaybackCoordinator()
@@ -59,7 +60,8 @@ public struct MediaPlaybackContainerView: View {
         onAddDocument: (() -> Void)? = nil,
         onManageDocuments: (() -> Void)? = nil,
         onCreateVideoCard: ((_ startTime: Double, _ endTime: Double, _ title: String) -> Void)? = nil,
-        onSelectCard: ((UUID) -> Void)? = nil
+        onSelectCard: ((UUID) -> Void)? = nil,
+        onOpenBibliography: (() -> Void)? = nil
     ) {
         self.document = document
         self.cards = cards
@@ -73,6 +75,7 @@ public struct MediaPlaybackContainerView: View {
         self.onManageDocuments = onManageDocuments
         self.onCreateVideoCard = onCreateVideoCard
         self.onSelectCard = onSelectCard
+        self.onOpenBibliography = onOpenBibliography
     }
 
     private var isVideo: Bool {
@@ -210,6 +213,10 @@ public struct MediaPlaybackContainerView: View {
             .frame(maxWidth: 320, alignment: .leading)
 
             Spacer()
+
+            if let onOpenBibliography {
+                DocumentBibliographyButton(action: onOpenBibliography)
+            }
 
             // Quick 30s Excerpt Button
             Button {

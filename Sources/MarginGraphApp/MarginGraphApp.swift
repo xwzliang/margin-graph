@@ -3069,6 +3069,7 @@ struct StudyWorkspaceView: View {
     @State private var commitDebounceTask: Task<Void, Never>? = nil
     @State private var outlineWidth: CGFloat = 240
     @State private var dragStartOutlineWidth: CGFloat? = nil
+    @State private var bibliographyDocument: Document?
 
     var body: some View {
         GeometryReader { workspaceGeo in
@@ -3294,6 +3295,15 @@ struct StudyWorkspaceView: View {
                     model.isManagingDocuments = false
                 }
             )
+        }
+        .sheet(item: $bibliographyDocument) { document in
+            let database = model.database
+            let topicID = model.selectedTopicID
+            let includesNotebookLink = model.studyDocuments.count == 1 && model.studyDocuments.first?.id == document.id
+            DocumentBibliographySheet {
+                try await model.referenceWorkspace.bibliography(for: document, database: database, topicID: topicID,
+                                                                includesNotebookLink: includesNotebookLink)
+            }
         }
         .onDisappear {
             commitDebounceTask?.cancel()
@@ -3727,7 +3737,8 @@ struct StudyWorkspaceView: View {
                         model?.importPDFHighlightsManually(for: doc)
                     }
                 },
-                onCleanPageNumbers: { [weak model] in model?.cleanExistingNotePageNumbers() }
+                onCleanPageNumbers: { [weak model] in model?.cleanExistingNotePageNumbers() },
+                onOpenBibliography: { bibliographyDocument = model.activeDocument }
             )
         } else if let doc = model.activeDocument, doc.documentType == "video" || doc.documentType == "audio" {
             MediaPlaybackContainerView(
@@ -3756,9 +3767,8 @@ struct StudyWorkspaceView: View {
                 onCreateVideoCard: { startTime, endTime, title in
                     model.createVideoExcerptCard(startTime: startTime, endTime: endTime, title: title)
                 },
-                onSelectCard: { cardID in
-                    model.select(cardID: cardID)
-                }
+                onSelectCard: { cardID in model.select(cardID: cardID) },
+                onOpenBibliography: { bibliographyDocument = doc }
             )
         } else {
             VStack(spacing: 12) {

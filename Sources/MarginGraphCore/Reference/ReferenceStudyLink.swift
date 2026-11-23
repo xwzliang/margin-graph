@@ -11,6 +11,11 @@ public struct ReferenceStudyLink: Equatable, Sendable {
     }
 }
 
+public struct ReferenceStudyCitation: Hashable, Sendable {
+    public let bibliography: URL
+    public let key: String
+}
+
 public extension Database {
     func referenceStudyLink(bibliography: URL, key: String) throws -> ReferenceStudyLink? {
         try withStatement("""
@@ -24,6 +29,31 @@ public extension Database {
             guard result == SQLITE_ROW else { throw DatabaseError.sqlite("Could not read reference link.") }
             guard let raw = text(statement, 0), let topicID = UUID(uuidString: raw) else { return nil }
             return ReferenceStudyLink(topicID: topicID, bookMD5: text(statement, 1))
+        }
+    }
+
+    func referenceStudyCitations(bookMD5: String, topicID: UUID?, includesNotebookLink: Bool) throws -> [ReferenceStudyCitation] {
+        guard !bookMD5.isEmpty else { return [] }
+        return try withStatement("""
+            SELECT bibliography_path, citation_key FROM reference_study_links
+            WHERE (book_md5 <> '' AND (instr(book_md5, ?1) = 1 OR instr(?1, book_md5) = 1))
+               OR (?3 AND topic_id = ?2 AND book_md5 IS NULL)
+            ORDER BY CASE WHEN book_md5 IS NULL THEN 2 WHEN topic_id = ?2 THEN 0 ELSE 1 END,
+                     bibliography_path, citation_key
+            """) { statement in
+            bind(bookMD5, to: 1, in: statement)
+            bind(topicID?.uuidString, to: 2, in: statement)
+            bind(includesNotebookLink ? 1 : 0, to: 3, in: statement)
+            var citations: [ReferenceStudyCitation] = []
+            while true {
+                switch sqlite3_step(statement) {
+                case SQLITE_ROW:
+                    guard let path = text(statement, 0), let key = text(statement, 1) else { continue }
+                    citations.append(ReferenceStudyCitation(bibliography: URL(fileURLWithPath: path), key: key))
+                case SQLITE_DONE: return citations
+                default: throw DatabaseError.sqlite("Could not read document reference links.")
+                }
+            }
         }
     }
 

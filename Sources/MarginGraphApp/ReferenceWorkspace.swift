@@ -4,6 +4,20 @@ import MarginGraphCore
 import SwiftUI
 import UniformTypeIdentifiers
 
+struct DocumentBibliographyEntry: Identifiable, Sendable {
+    let bibliography: URL
+    let entry: BibTeXEntry
+    var id: String { bibliography.absoluteString + "#" + entry.key }
+}
+
+private struct UnavailableBibliographyEntry: LocalizedError {
+    let citation: ReferenceStudyCitation
+
+    var errorDescription: String? {
+        "“\(citation.key)” could not be read from \(citation.bibliography.lastPathComponent)."
+    }
+}
+
 @MainActor
 final class ReferenceWorkspace: ObservableObject {
     private static let filesKey = "Reference.bibliographies"
@@ -41,6 +55,48 @@ final class ReferenceWorkspace: ObservableObject {
         }
         let loaded = try await Task.detached { try BibTeXLibrary.load(selectedFile).entries }.value
         if selectedFile == self.selectedFile { entries = loaded }
+    }
+
+    func bibliography(for document: Document, database: Database, topicID: UUID?,
+                      includesNotebookLink: Bool) async throws -> [DocumentBibliographyEntry] {
+        let files = files
+        return try await Task.detached {
+            let citations = try database.referenceStudyCitations(bookMD5: document.md5, topicID: topicID,
+                                                                includesNotebookLink: includesNotebookLink)
+            var catalog: [URL: [BibTeXEntry]] = [:]
+            var firstReadError: Error?
+            func entries(in bibliography: URL) -> [BibTeXEntry] {
+                if let entries = catalog[bibliography] { return entries }
+                do {
+                    let entries = try BibTeXLibrary.load(bibliography).entries
+                    catalog[bibliography] = entries
+                    return entries
+                } catch {
+                    if firstReadError == nil { firstReadError = error }
+                    catalog[bibliography] = []
+                    return []
+                }
+            }
+            let saved = citations.compactMap { citation -> DocumentBibliographyEntry? in
+                entries(in: citation.bibliography).first { $0.key == citation.key }
+                    .map { DocumentBibliographyEntry(bibliography: citation.bibliography, entry: $0) }
+            }
+            if !saved.isEmpty { return saved }
+
+            let path = URL(fileURLWithPath: document.filePath).standardizedFileURL.path
+            if !document.filePath.isEmpty, path.lowercased().hasSuffix(".pdf") {
+                let attached = files.flatMap { bibliography in
+                    entries(in: bibliography).filter { entry in
+                        ReferenceStudyMatcher.pdfAttachments(for: entry, bibliography: bibliography)
+                            .contains { $0.path == path }
+                    }.map { DocumentBibliographyEntry(bibliography: bibliography, entry: $0) }
+                }
+                if !attached.isEmpty { return attached }
+            }
+            if let citation = citations.first { throw UnavailableBibliographyEntry(citation: citation) }
+            if let firstReadError { throw firstReadError }
+            return []
+        }.value
     }
 
     func select(_ file: URL) {

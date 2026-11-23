@@ -71,4 +71,34 @@ final class ReferenceStudyLinkTests: XCTestCase {
         try database.deleteTopic(id: topic.id)
         XCTAssertNil(try database.referenceStudyLink(bibliography: other, key: key))
     }
+
+    func testDocumentCitationsExcludeOtherBooksAndAmbiguousNotebookLinks() throws {
+        let database = try Database(inMemory: true)
+        let activeTopic = Topic(title: "Active Notebook")
+        let otherTopic = Topic(title: "Other Notebook")
+        try database.insertTopic(activeTopic)
+        try database.insertTopic(otherTopic)
+
+        let otherBibliography = URL(fileURLWithPath: "/sample/abibliography.bib")
+        let shortHash = String(repeating: "a", count: 32)
+        let bookHash = shortHash + String(repeating: "b", count: 32)
+        try database.saveReferenceStudyLink(ReferenceStudyLink(topicID: activeTopic.id, bookMD5: shortHash),
+                                            bibliography: bibliography, key: "SameKey")
+        try database.saveReferenceStudyLink(ReferenceStudyLink(topicID: otherTopic.id, bookMD5: bookHash),
+                                            bibliography: otherBibliography, key: "SameKey")
+        try database.saveReferenceStudyLink(ReferenceStudyLink(topicID: activeTopic.id, bookMD5: "other-book"),
+                                            bibliography: bibliography, key: "WrongDocument")
+        try database.saveReferenceStudyLink(ReferenceStudyLink(topicID: activeTopic.id),
+                                            bibliography: bibliography, key: "NotebookOnly")
+        try database.saveReferenceStudyLink(ReferenceStudyLink(topicID: otherTopic.id),
+                                            bibliography: otherBibliography, key: "OtherNotebookOnly")
+
+        let direct = try database.referenceStudyCitations(bookMD5: bookHash, topicID: activeTopic.id, includesNotebookLink: false)
+        XCTAssertEqual(direct.map(\.key), ["SameKey", "SameKey"])
+        XCTAssertEqual(direct.map(\.bibliography), [bibliography, otherBibliography])
+        let singleDocument = try database.referenceStudyCitations(bookMD5: bookHash, topicID: activeTopic.id, includesNotebookLink: true)
+        XCTAssertEqual(singleDocument.map(\.key), ["SameKey", "SameKey", "NotebookOnly"])
+        XCTAssertTrue(try database.referenceStudyCitations(bookMD5: "unlinked", topicID: activeTopic.id,
+                                                           includesNotebookLink: false).isEmpty)
+    }
 }

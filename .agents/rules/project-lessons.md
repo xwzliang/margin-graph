@@ -1303,6 +1303,11 @@ Structure each entry concisely with actionable rules:
   Org export updates the resolved entry in its own bibliography, preserving existing
   attachments. Use the standard Study workspace for linked references so the PDF
   and the notebook open together, and keep the selected citation when returning.
+- **Reader bibliography lookup**: Resolve saved citations using the active
+  document’s book hash, and use notebook-only links for single-document notebooks.
+  An exact PDF attachment path can identify an entry in an open bibliography.
+  Load bibliography files when the reader opens the attached sheet to keep
+  lookup off the document-opening path and preserve the reader position.
 - **BibTeX field editor**: Keep field identities and original UTF-8 source ranges
   while editing. Reuse the BibTeX lexer and patch only changed names, values, and
   separators. Unchanged macros and LaTeX groups must survive, even when their
