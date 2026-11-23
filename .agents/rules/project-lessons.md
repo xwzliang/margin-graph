@@ -40,6 +40,9 @@ Structure each entry concisely with actionable rules:
   In SwiftUI, `.position(x:y:)` silently expands the view's layout container to the **entire proposed parent frame** (full window width and height). If that view has gestures (`DragGesture`, `.simultaneousGesture`), hover handlers (`.onHover`), or a high `zIndex`, it forms an invisible full-window hit-test shield that intercepts all mouse clicks, scroll events, card selections, and tooltips across the app. Always use explicitly sized `.frame(width: w, height: h)` and `.offset(x: ..., y: ...)` instead.
 - **Anchor overlay `ZStack` containers to `.topLeading`**:
   In SwiftUI, `ZStack(alignment: .leading)` defaults vertical alignment to `.center` (`totalHeight / 2`), and `ZStack(alignment: .trailing)` defaults horizontal alignment to `totalWidth`. Adding offsets like `y: totalHeight * 0.74` inside `.leading` pushes the element to `1.24 * totalHeight`, moving it completely off-screen below the window. Standardize multi-layer coordinate overlays on `ZStack(alignment: .topLeading)` so that `(0, 0)` is top-left and all offsets are strictly deterministic.
+- **Bound canvas interaction to the visible viewport**:
+  - **Trap**: `.clipped()` hides panned cards visually while leaving them eligible for pointer hits outside the canvas. An invisible card above the mind map intercepted the search bar's Close button and moved both panes to that card.
+  - **Rule**: Add `.contentShape(.interaction, Rectangle())` to the viewport-sized canvas stack alongside clipping. Verify adjacent controls with actual pointer clicks. Accessibility activation alone bypasses the overlap.
 
 ## Performance & View Thrashing
 - **Decouple high-frequency gestures from heavy AppKit / PDFKit views**:

@@ -210,6 +210,8 @@ public struct MindMapCanvasView: View {
                     }
                 }
                 .clipped()
+                // Offset cards can extend past the viewport. Clipping alone still lets them receive clicks there.
+                .contentShape(.interaction, Rectangle())
                 .focusable()
                 .focusEffectDisabled()
                 .modifier(MindMapKeyboardHandler(
