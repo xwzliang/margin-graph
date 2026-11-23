@@ -132,6 +132,7 @@ final class AppModel: ObservableObject {
     @Published var isReviewPresented = false
     @Published var linkedMindMapCard: NoteCard? = nil
     @Published var editingCard: NoteCard? = nil
+    @Published var freeNoteDraft: NoteCard? = nil
     @Published var editingCardTitleID: UUID? = nil
     @Published var documentBookmarks: Set<Int> = []
     @Published var isManagingDocuments = false
@@ -2610,25 +2611,28 @@ final class AppModel: ObservableObject {
     }
 
     func createFreeNote(at canvasPos: CGPoint) {
-        let topic = ensureTopic()
-        var newCard = NoteCard(
-            topicId: topic.id,
-            title: "",
-            groupNoteId: nil,
-            colorIndex: 0
-        )
-        newCard.mindPos = canvasPos
-        newCard.createdAt = Date()
+        freeNoteDraft = NoteCard(topicId: selectedTopicID ?? UUID(), mindPos: canvasPos)
+    }
 
-        try? database.insertCard(newCard)
+    func saveFreeNote(_ draft: NoteCard) {
+        guard !draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !draft.notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        var newCard = draft
+        newCard.topicId = ensureTopic().id
+        do {
+            try database.insertCard(newCard)
+        } catch {
+            NSAlert(error: error).runModal()
+            return
+        }
+        let newID = newCard.id
         undoManager.registerUndo(withTarget: self) { target in
             MainActor.assumeIsolated {
-                target.delete(cardID: newCard.id)
+                target.delete(cardID: newID)
             }
         }
         undoManager.setActionName("Create Note")
-        selectedCardID = newCard.id
-        editingCardTitleID = newCard.id
+        selectedCardID = newID
         activeToolbarOwner = .mindMap
         reloadStudySet()
         objectWillChange.send()
@@ -3200,6 +3204,9 @@ struct StudyWorkspaceView: View {
                     model.delete(cardID: id)
                 }
             )
+        }
+        .sheet(item: $model.freeNoteDraft) { draft in
+            CardEditorSheet(card: draft, isNewNote: true, onSave: model.saveFreeNote)
         }
         .sheet(item: $model.cardForAddToDeck) { card in
             AddToDeckSheet(

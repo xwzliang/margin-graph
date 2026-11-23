@@ -10,15 +10,18 @@ public struct CardEditorSheet: View {
     @State private var newTagText: String = ""
 
     public var card: NoteCard
+    public var isNewNote: Bool
     public var onSave: (NoteCard) -> Void
     public var onDelete: ((UUID) -> Void)?
 
     public init(
         card: NoteCard,
+        isNewNote: Bool = false,
         onSave: @escaping (NoteCard) -> Void,
         onDelete: ((UUID) -> Void)? = nil
     ) {
         self.card = card
+        self.isNewNote = isNewNote
         self.onSave = onSave
         self.onDelete = onDelete
         _title = State(initialValue: card.title)
@@ -38,7 +41,7 @@ public struct CardEditorSheet: View {
 
                 Spacer()
 
-                Text("Edit Card")
+                Text(isNewNote ? "New Note" : "Edit Card")
                     .font(.system(size: 14, weight: .semibold))
 
                 Spacer()
@@ -48,6 +51,8 @@ public struct CardEditorSheet: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
+                .disabled(isNewNote && title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && notesText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
