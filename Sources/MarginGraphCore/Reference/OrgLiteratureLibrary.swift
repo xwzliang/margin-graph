@@ -153,25 +153,26 @@ public enum OrgLiteratureLibrary {
         output[old.index] = "\(indent):NOTER_DOCUMENT: \(new.value)"
     }
 
-    private static func duplicateTagComment(in output: inout [String], current: Heading,
-                                            incoming: Heading, newLines: [String], tags: [String]) -> Int? {
+    private static func missingTagComments(in output: inout [String], current: Heading,
+                                           incoming: Heading, newLines: [String], tags: [String]) -> [String] {
         guard let oldLink = property("MARGINGRAPH_LINK", in: output, heading: current),
               let newLink = property("MARGINGRAPH_LINK", in: newLines, heading: incoming),
-              oldLink.value == newLink.value,
-              let oldMerged = property("IS_MERGED", in: output, heading: current), oldMerged.value == "true",
-              let newMerged = property("IS_MERGED", in: newLines, heading: incoming), newMerged.value == "false",
-              let oldEnd = (oldMerged.index..<current.bodyEnd).first(where: { output[$0] == ":END:" }),
-              let newEnd = (newMerged.index..<incoming.bodyEnd).first(where: { newLines[$0] == ":END:" }),
-              let comment = ((oldEnd + 1)..<current.bodyEnd).last(where: { !output[$0].isEmpty }),
-              tags.contains(where: { output[comment] == "#" + $0 }) else { return nil }
-        // Only strip the legacy trailing comment when the rest of the generated
-        // body matches. An edited capture may legitimately contain the same text.
-        let precedingEnd = (oldEnd + 1..<comment).last(where: { !output[$0].isEmpty }) ?? oldEnd
-        let generatedEnd = (newEnd + 1..<incoming.bodyEnd).last(where: { !newLines[$0].isEmpty }) ?? newEnd
-        guard output[(oldEnd + 1)..<(precedingEnd + 1)].elementsEqual(newLines[(newEnd + 1)..<(generatedEnd + 1)]) else { return nil }
-        let indent = output[oldMerged.index].prefix(while: \.isWhitespace)
-        output[oldMerged.index] = "\(indent):IS_MERGED: false"
-        return comment
+              oldLink.value == newLink.value else { return [] }
+        let hashtags = Set(tags.map { "#" + $0.lowercased() })
+        let trailing = newLines[(newLink.index + 1)..<incoming.bodyEnd].reversed()
+            .drop(while: \.isEmpty).prefix { hashtags.contains($0.lowercased()) }
+        guard !trailing.isEmpty else { return [] }
+        var existing = Set(output[(oldLink.index + 1)..<current.bodyEnd].map {
+            $0.trimmingCharacters(in: .whitespaces).lowercased()
+        })
+        let missing = trailing.reversed().filter { existing.insert($0.lowercased()).inserted }
+        if !missing.isEmpty,
+           let oldMerged = property("IS_MERGED", in: output, heading: current), oldMerged.value == "false",
+           property("IS_MERGED", in: newLines, heading: incoming)?.value == "true" {
+            let indent = output[oldMerged.index].prefix(while: \.isWhitespace)
+            output[oldMerged.index] = "\(indent):IS_MERGED: true"
+        }
+        return missing
     }
 
     /// Keep existing prose and titles. Add generated tags and new nodes by card ID.
@@ -197,7 +198,6 @@ public enum OrgLiteratureLibrary {
         }
         var additions: [Anchor: [String]] = [:]
         var output = currentLines
-        var removals = Set<Int>()
         var parents: [(original: Int, output: Int, anchor: Anchor)] = []
         let end = Anchor(insertion: currentLines.count, level: 0)
         if let existingRoot {
@@ -215,9 +215,11 @@ public enum OrgLiteratureLibrary {
                 replaceDocumentPath(in: &output, current: current, incoming: heading, newLines: newLines,
                                     paths: replacementDocumentPaths)
                 if let incomingTags = headlineTags(heading.title) {
-                    if let comment = duplicateTagComment(in: &output, current: current, incoming: heading,
-                                                         newLines: newLines, tags: incomingTags.names) {
-                        removals.insert(comment)
+                    let comments = missingTagComments(in: &output, current: current, incoming: heading,
+                                                      newLines: newLines, tags: incomingTags.names)
+                    if !comments.isEmpty {
+                        // Place the body before any new children at the same position.
+                        additions[Anchor(insertion: current.bodyEnd, level: Int.max)] = comments
                     }
                     let headline = output[current.start]
                     let existing = headlineTags(headline)
@@ -243,7 +245,6 @@ public enum OrgLiteratureLibrary {
             parents.append((heading.level, level, parent.anchor))
         }
         guard !additions.isEmpty || output != currentLines else { return existing }
-        for index in removals.sorted(by: >) { output.remove(at: index) }
         // Insert earlier in the array last. When two ancestors end on the same line,
         // insert the deeper parent's children before the shallower parent's siblings.
         let anchors = additions.keys.sorted {
@@ -254,7 +255,7 @@ public enum OrgLiteratureLibrary {
             var lines = additions[anchor] ?? []
             if index > 0 && !currentLines[index - 1].isEmpty { lines.insert("", at: 0) }
             if lines.last != "" { lines.append("") }
-            output.insert(contentsOf: lines, at: index - removals.filter { $0 < index }.count)
+            output.insert(contentsOf: lines, at: index)
         }
         return output.joined(separator: newline)
     }

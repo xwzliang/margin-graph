@@ -16,11 +16,21 @@ enum ImportedPackageStore {
         var mergesResolved: Bool?
         var richCommentsCaptured: Bool?
         var noteTagsCaptured: Bool?
+        var tagCommentsCaptured: Bool?
+    }
+
+    private enum TagRecovery {
+        case assignmentsAndComments, comments, complete
+
+        init(assignments: Bool, comments: Bool) {
+            self = !assignments ? .assignmentsAndComments : (comments ? .complete : .comments)
+        }
     }
 
     private static func snapshot(document: Document, topicIDs: [UUID], database: Database,
                                  originalComments: [UUID: [RichNoteComment]] = [:],
-                                 originalTags: [UUID: MarginNoteTags.Assignment] = [:]) throws -> Data {
+                                 originalTags: [UUID: MarginNoteTags.Assignment] = [:],
+                                 tagRecovery: TagRecovery = .complete) throws -> Data {
         let topics = try database.allTopics().filter {
             topicIDs.contains($0.id) || $0.bookMD5List.contains(document.md5)
         }.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -29,7 +39,7 @@ enum ImportedPackageStore {
         var links = try topics.flatMap { try database.linksForTopic(id: $0.id) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
         installRichComments(originalComments, in: &cards)
-        installTags(originalTags, in: &cards)
+        installTags(originalTags, in: &cards, recovery: tagRecovery)
         let groups = try database.legacyMergedNoteGroups(in: cards)
         _ = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: groups)
         MarginNoteHierarchy.restore(cards: &cards, links: &links)
@@ -52,7 +62,8 @@ enum ImportedPackageStore {
             var card = $0
             card.updatedAt = card.createdAt
             return card
-        }, links: links, mergesResolved: true, richCommentsCaptured: true, noteTagsCaptured: true)
+        }, links: links, mergesResolved: true, richCommentsCaptured: true, noteTagsCaptured: true,
+           tagCommentsCaptured: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(state)
@@ -66,10 +77,10 @@ enum ImportedPackageStore {
             installRichComments(originalComments, in: &state.cards)
             state.richCommentsCaptured = true
         }
-        if state.noteTagsCaptured != true {
-            installTags(originalTags, in: &state.cards)
-            state.noteTagsCaptured = true
-        }
+        let tagRecovery = TagRecovery(assignments: state.noteTagsCaptured == true, comments: state.tagCommentsCaptured == true)
+        installTags(originalTags, in: &state.cards, recovery: tagRecovery)
+        state.noteTagsCaptured = true
+        state.tagCommentsCaptured = true
         if state.mergesResolved != true {
             let groups = MarginNoteMergedNotes.legacyGroups(in: state.cards)
             _ = MarginNoteMergedNotes.combine(cards: &state.cards, links: &state.links, groups: groups)
@@ -107,25 +118,26 @@ enum ImportedPackageStore {
     }
 
     static func recoverNoteMetadata(in cards: inout [NoteCard], database: Database) throws {
-        let hashes = Set(cards.compactMap { card in
-            card.notesText.isEmpty ? nil : card.bookMD5
-        })
+        let hashes = Set(cards.compactMap(\.bookMD5))
         for md5 in hashes {
-            let pending: (archive: Data, comments: Bool, tags: Bool)? = try database.withStatement("""
-                SELECT p.archive, c.document_md5 IS NULL, t.document_md5 IS NULL
+            let pending: (archive: Data, richComments: Bool, tags: TagRecovery)? = try database.withStatement("""
+                SELECT p.archive, c.document_md5 IS NULL, t.document_md5 IS NOT NULL, tc.document_md5 IS NOT NULL
                 FROM imported_packages p
                 LEFT JOIN imported_comment_recovery c ON c.document_md5 = p.document_md5
                 LEFT JOIN imported_tag_assignment_recovery t ON t.document_md5 = p.document_md5
-                WHERE p.document_md5 = ? AND (c.document_md5 IS NULL OR t.document_md5 IS NULL)
+                LEFT JOIN imported_tag_comment_recovery tc ON tc.document_md5 = p.document_md5
+                WHERE p.document_md5 = ? AND (c.document_md5 IS NULL OR t.document_md5 IS NULL OR tc.document_md5 IS NULL)
                 """) { statement in
                 database.bind(md5, to: 1, in: statement)
                 guard sqlite3_step(statement) == SQLITE_ROW, let bytes = sqlite3_column_blob(statement, 0) else { return nil }
                 return (Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 0))),
-                        sqlite3_column_int(statement, 1) != 0, sqlite3_column_int(statement, 2) != 0)
+                        sqlite3_column_int(statement, 1) != 0,
+                        TagRecovery(assignments: sqlite3_column_int(statement, 2) != 0,
+                                    comments: sqlite3_column_int(statement, 3) != 0))
             }
             guard let pending, let metadata = try? MarginNoteImporter.archivedNoteMetadata(in: pending.archive) else { continue }
-            if pending.comments { installRichComments(metadata.richComments, in: &cards) }
-            if pending.tags { installTags(metadata.tags, in: &cards) }
+            if pending.richComments { installRichComments(metadata.richComments, in: &cards) }
+            installTags(metadata.tags, in: &cards, recovery: pending.tags)
             try markMetadataRecovered(md5: md5, database: database)
         }
     }
@@ -138,17 +150,24 @@ enum ImportedPackageStore {
         }
     }
 
-    private static func installTags(_ tags: [UUID: MarginNoteTags.Assignment], in cards: inout [NoteCard]) {
+    private static func installTags(_ tags: [UUID: MarginNoteTags.Assignment], in cards: inout [NoteCard],
+                                    recovery: TagRecovery) {
+        guard recovery != .complete, !tags.isEmpty else { return }
         for index in cards.indices {
             if let imported = tags[cards[index].id] {
-                cards[index].tags = MarginNoteTags.adding(imported.tags, to: cards[index].tags)
-                cards[index].notesText = imported.comments(in: cards[index].notesText)
+                let needsAssignments = recovery == .assignmentsAndComments
+                if needsAssignments {
+                    cards[index].tags = MarginNoteTags.adding(imported.tags, to: cards[index].tags)
+                }
+                cards[index].notesText = imported.appendingComments(
+                    to: cards[index].notesText, activeTags: cards[index].tags, moveArchivedEntries: needsAssignments
+                )
             }
         }
     }
 
     private static func markMetadataRecovered(md5: String, database: Database) throws {
-        for table in ["imported_comment_recovery", "imported_tag_assignment_recovery"] {
+        for table in ["imported_comment_recovery", "imported_tag_assignment_recovery", "imported_tag_comment_recovery"] {
             try database.withStatement("INSERT OR IGNORE INTO \(table) VALUES (?)") { statement in
                 database.bind(md5, to: 1, in: statement)
                 try database.requireDone(statement)
@@ -156,10 +175,15 @@ enum ImportedPackageStore {
         }
     }
 
-    private static func tagsWereRecovered(md5: String, database: Database) throws -> Bool {
-        try database.withStatement("SELECT 1 FROM imported_tag_assignment_recovery WHERE document_md5 = ?") { statement in
+    private static func remainingTagRecovery(md5: String, database: Database) throws -> TagRecovery {
+        try database.withStatement("""
+            SELECT EXISTS (SELECT 1 FROM imported_tag_assignment_recovery WHERE document_md5 = ?1),
+                   EXISTS (SELECT 1 FROM imported_tag_comment_recovery WHERE document_md5 = ?1)
+            """) { statement in
             database.bind(md5, to: 1, in: statement)
-            return sqlite3_step(statement) == SQLITE_ROW
+            guard sqlite3_step(statement) == SQLITE_ROW else { throw DatabaseError.sqlite("Cannot read tag recovery state") }
+            return TagRecovery(assignments: sqlite3_column_int(statement, 0) != 0,
+                               comments: sqlite3_column_int(statement, 1) != 0)
         }
     }
 
@@ -177,20 +201,16 @@ enum ImportedPackageStore {
         guard let (ids, state, archive) = stored else { return nil }
         let topicIDs = try JSONDecoder().decode([UUID].self, from: Data(ids.utf8))
         let baseline = try JSONDecoder().decode(Snapshot.self, from: state)
-        let metadata = baseline.richCommentsCaptured == true && baseline.noteTagsCaptured == true
+        let metadata = baseline.richCommentsCaptured == true && baseline.tagCommentsCaptured == true
             ? MarginNoteImporter.ArchivedNoteMetadata()
             : ((try? MarginNoteImporter.archivedNoteMetadata(in: archive)) ?? MarginNoteImporter.ArchivedNoteMetadata())
         let originalComments = baseline.richCommentsCaptured == true ? [:] : metadata.richComments
-        let originalTags = baseline.noteTagsCaptured == true ? [:] : metadata.tags
-        var currentTags = originalTags
-        if !currentTags.isEmpty, try tagsWereRecovered(md5: document.md5, database: database) {
-            currentTags = [:]
-        }
+        let tagRecovery: TagRecovery = metadata.tags.isEmpty ? .complete : try remainingTagRecovery(md5: document.md5, database: database)
         guard let storedDocument = try database.getDocumentByMD5(md5: document.md5),
               let current = try? snapshot(document: storedDocument, topicIDs: topicIDs, database: database,
-                                          originalComments: originalComments, originalTags: currentTags),
+                                          originalComments: originalComments, originalTags: metadata.tags, tagRecovery: tagRecovery),
               current == (try canonicalSnapshot(baseline, originalComments: originalComments,
-                                                originalTags: originalTags)) else { return nil }
+                                                originalTags: metadata.tags)) else { return nil }
         return archive
     }
 }

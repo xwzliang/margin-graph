@@ -1071,7 +1071,7 @@ Structure each entry concisely with actionable rules:
 
 - **Read Native MarginNote Tag Assignments**:
   - **Trap**: A package can leave `ZBOOKTAG` empty and include its hashtag catalog in `ZTOPIC.ZHASHTAGS`. The selected tag can be a standalone archived `TextNote` in `ZNOTES`, while the flattened comment appears to contain ordinary text.
-  - **Rule**: Match complete archived tag entries against their notebook's declared catalog. Import the tag into the field used by the outline and Org headlines. Remove that entry from flattened comments only where the source identifies it as a standalone tag and the match is unambiguous. Recover older retained imports once per document so intentional tag removal prevails.
+  - **Rule**: Match complete archived tag entries against their notebook's declared catalog. Store the assignment as a tag and append its searchable hashtag to the comment. Move original standalone entries to the end when the match is unambiguous. Restore missing comments once for older retained imports, honoring tags the reader has removed.
 
 - **Keep Empty Canvas Notes as Drafts**:
   - **Trap**: Inserting a free canvas note before editing creates an empty local card when the user cancels.
@@ -1292,9 +1292,9 @@ Structure each entry concisely with actionable rules:
   content, and insert only card IDs that are missing. Keep PDF scanning and parsing
   off the main actor.
 - **Re-exported card tags**: Match existing Org headings by card ID and add incoming
-  tags while retaining the heading title and its Emacs tags. Strip a legacy trailing
-  hashtag comment only when its MarginGraph link, generated body, and prior merged
-  marker identify an unchanged export.
+  tags while retaining the heading title and its Emacs tags. Append missing trailing
+  hashtag comments to the matching MarginGraph heading and preserve the existing
+  body. Repeated exports keep each restored hashtag once.
 - **Reference layout**: Give the bibliography tabs a bounded height and allocate
   the remaining height to the list and detail panes. An unconstrained native split
   view can leave the list at the bottom of a tall shelf window.

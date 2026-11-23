@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 11
+    private static let currentSchemaVersion: Int32 = 12
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -198,6 +198,9 @@ public final class Database: @unchecked Sendable {
             document_md5 TEXT PRIMARY KEY REFERENCES imported_packages(document_md5) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS imported_tag_assignment_recovery(
+            document_md5 TEXT PRIMARY KEY REFERENCES imported_packages(document_md5) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS imported_tag_comment_recovery(
             document_md5 TEXT PRIMARY KEY REFERENCES imported_packages(document_md5) ON DELETE CASCADE
         );
         """)

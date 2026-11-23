@@ -559,7 +559,10 @@ public final class MarginNoteImporter {
             }
 
             let assignment = MarginNoteTags.assigned(in: entries, catalog: topicTagCatalogs[topicId] ?? [:])
-            let notesText = assignment.comments(in: first(row, ["ZNOTES_TEXT", "ZNOTESTEXT", "ZCOMMENTS"]) ?? "")
+            let notesText = assignment.appendingComments(
+                to: first(row, ["ZNOTES_TEXT", "ZNOTESTEXT", "ZCOMMENTS"]) ?? "",
+                activeTags: assignment.tags, moveArchivedEntries: true
+            )
             cards.append(NoteCard(
                 id: cardId,
                 topicId: topicId,

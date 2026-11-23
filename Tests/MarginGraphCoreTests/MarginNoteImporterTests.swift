@@ -15,7 +15,8 @@ final class MarginNoteImporterTests: XCTestCase {
         let prose = NoteCard(topicId: topic.id, bookMD5: "book", title: "Prose", notesText: "Mention #Important here.")
         let unregistered = NoteCard(topicId: topic.id, bookMD5: "book", title: "Unregistered", notesText: "#Other")
         let mixed = NoteCard(topicId: topic.id, bookMD5: "book", title: "Mixed", notesText: "#Important\nKeep this comment.")
-        let cards = [marked, prose, unregistered, mixed]
+        let cleared = NoteCard(topicId: topic.id, bookMD5: "book", title: "Cleared", notesText: "#Important")
+        let cards = [marked, prose, unregistered, mixed, cleared]
 
         var source: OpaquePointer?
         XCTAssertEqual(sqlite3_open(noteURL.path, &source), SQLITE_OK)
@@ -37,9 +38,11 @@ final class MarginNoteImporterTests: XCTestCase {
 
         let imported = try MarginNoteImporter(url: noteURL).read()
         let importedTags = Dictionary(uniqueKeysWithValues: imported.cards.map { ($0.id, $0.tags) })
-        XCTAssertEqual(importedTags, [marked.id: ["Important"], prose.id: [], unregistered.id: [], mixed.id: ["Important"]])
-        let expectedComments = [marked.id: "", prose.id: prose.notesText,
-                                unregistered.id: unregistered.notesText, mixed.id: "Keep this comment."]
+        XCTAssertEqual(importedTags, [marked.id: ["Important"], prose.id: [], unregistered.id: [],
+                                      mixed.id: ["Important"], cleared.id: ["Important"]])
+        let expectedComments = [marked.id: "#Important", prose.id: prose.notesText,
+                                unregistered.id: unregistered.notesText, mixed.id: "Keep this comment.\n#Important",
+                                cleared.id: "#Important"]
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: imported.cards.map { ($0.id, $0.notesText) }), expectedComments)
 
         let zip = Process()
@@ -65,12 +68,36 @@ final class MarginNoteImporterTests: XCTestCase {
         XCTAssertTrue(org.contains("\n** Marked :Important:\n"))
         XCTAssertTrue(org.contains("\n** Prose\n"))
         XCTAssertTrue(org.contains("\n** Unregistered\n"))
-        XCTAssertFalse(org.contains("\n#Important\n"))
+        XCTAssertTrue(org.contains("\nKeep this comment.\n#Important\n"))
+
+        // Earlier builds left the assigned tag on a card but removed its text
+        // from the comment. Restore it once without resurrecting removed tags.
+        var markedWithoutComment = try XCTUnwrap(db.getCard(id: marked.id))
+        markedWithoutComment.notesText = ""
+        try db.updateCard(markedWithoutComment)
+        var mixedWithEdits = try XCTUnwrap(db.getCard(id: mixed.id))
+        mixedWithEdits.notesText = "Edited comment."
+        try db.updateCard(mixedWithEdits)
+        var clearedByUser = try XCTUnwrap(db.getCard(id: cleared.id))
+        clearedByUser.tags = []
+        clearedByUser.notesText = ""
+        try db.updateCard(clearedByUser)
+        try db.withStatement("DELETE FROM imported_tag_comment_recovery WHERE document_md5 = 'book'") {
+            try db.requireDone($0)
+        }
+        let migrated = try db.notebookGraph(id: topic.id).cards
+        let migratedByID = Dictionary(uniqueKeysWithValues: migrated.map { ($0.id, $0) })
+        XCTAssertEqual(migratedByID[marked.id]?.notesText, "#Important")
+        XCTAssertEqual(migratedByID[mixed.id]?.notesText, "Edited comment.\n#Important")
+        XCTAssertEqual(migratedByID[cleared.id]?.notesText, "")
+        XCTAssertEqual(migratedByID[cleared.id]?.tags, [])
+        XCTAssertTrue(MindMapSearchMatcher.matches(card: try XCTUnwrap(migratedByID[marked.id]),
+                                                   query: "#Important", scope: .content))
 
         var edited = try XCTUnwrap(db.getCard(id: marked.id))
-        edited.tags = []
+        edited.notesText = ""
         try db.updateCard(edited)
-        XCTAssertEqual(try db.notebookGraph(id: topic.id).cards.first(where: { $0.id == marked.id })?.tags, [])
+        XCTAssertEqual(try db.notebookGraph(id: topic.id).cards.first(where: { $0.id == marked.id })?.notesText, "")
     }
 
     func testRecoverRichCommentFromRetainedPackage() throws {

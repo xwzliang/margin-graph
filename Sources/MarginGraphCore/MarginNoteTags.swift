@@ -7,7 +7,24 @@ enum MarginNoteTags {
         var tags: [String] = []
         var tagComments: [String: Int] = [:]
 
-        func comments(in text: String) -> String {
+        func appendingComments(to text: String, activeTags: [String], moveArchivedEntries: Bool) -> String {
+            let active = Set(activeTags.map { $0.lowercased() })
+            let hashtags = tags.filter { active.contains($0.lowercased()) }.map { "#" + $0 }
+            guard !hashtags.isEmpty else { return text }
+
+            let body = moveArchivedEntries ? removingArchivedEntries(from: text) : text
+            let existingLines = Set(body.split(whereSeparator: \.isNewline).map {
+                $0.trimmingCharacters(in: .whitespaces).lowercased()
+            })
+            let missing = hashtags.filter { !existingLines.contains($0.lowercased()) }
+            guard !missing.isEmpty else { return body }
+
+            let newline = text.contains("\r\n") ? "\r\n" : "\n"
+            let separator = body.isEmpty || body.last?.isNewline == true ? "" : newline
+            return body + separator + missing.joined(separator: newline)
+        }
+
+        private func removingArchivedEntries(from text: String) -> String {
             guard !tagComments.isEmpty, !text.isEmpty else { return text }
             if tagComments[text.trimmingCharacters(in: .whitespacesAndNewlines)] != nil { return "" }
 
