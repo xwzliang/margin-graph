@@ -1035,6 +1035,38 @@ public final class Database: @unchecked Sendable {
         try cards(sql: "SELECT * FROM cards WHERE topic_id=? ORDER BY created_at", values: [id.uuidString])
     }
 
+    public func notebookGraph(id: UUID) throws -> (cards: [NoteCard], links: [CardLink]) {
+        try transaction { try restoreMarginNoteHierarchy(in: id) }
+    }
+
+    // Also called inside the import transaction before merging into an older notebook.
+    func restoreMarginNoteHierarchy(in topicID: UUID) throws -> (cards: [NoteCard], links: [CardLink]) {
+        let storedCards = try cardsForTopic(id: topicID)
+        let storedLinks = try linksForTopic(id: topicID)
+        var cards = storedCards
+        var links = storedLinks
+        MarginNoteHierarchy.restore(cards: &cards, links: &links)
+        let changedCards = zip(storedCards, cards).compactMap { old, new in
+            old.groupNoteId != new.groupNoteId || old.mindLinks != new.mindLinks ? new : nil
+        }
+        if !changedCards.isEmpty {
+            try withStatement("UPDATE cards SET group_note_id = ?, mind_links = ? WHERE id = ?") { statement in
+                for card in changedCards {
+                    sqlite3_reset(statement)
+                    bind(card.groupNoteId?.uuidString, to: 1, in: statement)
+                    bind(try jsonString(card.mindLinks.map(\.uuidString)), to: 2, in: statement)
+                    bind(card.id.uuidString, to: 3, in: statement)
+                    try requireDone(statement)
+                }
+            }
+        }
+        let remainingIDs = Set(links.map(\.id))
+        for link in storedLinks where !remainingIDs.contains(link.id) {
+            try deleteLink(id: link.id)
+        }
+        return (cards, links)
+    }
+
     public func topicIDsForCardBookMD5(_ md5: String) throws -> [UUID] {
         // Keep prefix matching in the covering hash index, then fetch only
         // matching cards instead of scanning the full cards table over SMB.

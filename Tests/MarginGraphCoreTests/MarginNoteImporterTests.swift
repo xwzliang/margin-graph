@@ -47,7 +47,8 @@ final class MarginNoteImporterTests: XCTestCase {
         let child = try XCTUnwrap(result.cards.first(where: { $0.id == childID }))
 
         XCTAssertEqual(parent.mindPos?.x, 10)
-        XCTAssertEqual(parent.mindLinks, [childID])
+        XCTAssertTrue(parent.mindLinks.isEmpty)
+        XCTAssertTrue(result.links.isEmpty)
         XCTAssertEqual(parent.colorIndex, 10)
         XCTAssertEqual(child.colorIndex, 12)
         XCTAssertEqual(child.groupNoteId, parentID)
@@ -437,11 +438,10 @@ final class MarginNoteImporterTests: XCTestCase {
         XCTAssertEqual(picCard.highlightRects[0].y, 20)
         XCTAssertEqual(picCard.highlightRects[1].page, 1)
 
-        // Verify card-to-card graph links imported
-        let links = try destination.linksForTopic(id: topicID)
-        XCTAssertEqual(links.count, 1)
-        XCTAssertEqual(links[0].sourceCardId, videoCardID)
-        XCTAssertEqual(links[0].targetCardId, picCardID)
+        // ZMINDLINKS supplies the parent even when ZGROUPNOTEID is absent.
+        XCTAssertEqual(picCard.groupNoteId, videoCardID)
+        XCTAssertEqual(try destination.childCards(parentId: videoCardID, topicId: topicID).map(\.id), [picCardID])
+        XCTAssertTrue(try destination.linksForTopic(id: topicID).isEmpty)
 
         // Verify Spaced Repetition (SRS) review items imported
         let dueItems = try destination.dueReviewItems(asOf: Date(timeIntervalSince1970: 1800000000))

@@ -1057,6 +1057,10 @@ Structure each entry concisely with actionable rules:
   - **Rule**:
     Detect synthetic root cards using robust structural signatures: empty highlight & notes text, nil `startPage`, nil `groupNoteId`, no incoming parent/links, and either coordinate `(10000, 10000)` or high outbound links ($\ge 10$ links, or $\ge 5$ links reaching $\ge 5\%$ of same-book cards).
 
+- **MarginNote Imports Use Structural Branches**:
+  - **Trap**: MarginNote stores children in `ZMINDLINKS` even when the child has no `ZGROUPNOTEID`. Storing those pairs as reference links produces dashed lines and leaves the children outside the parent's foldable branch.
+  - **Rule**: After pruning synthetic roots, write unambiguous, acyclic same-notebook relationships into `groupNoteId`. Preserve explicit parents, child-map membership, and independent references. Upgrade legacy copies only for the notebook being opened or merged, using the matching source ID and old unlabeled one-way link to identify each duplicated encoding. Normalize retained package snapshots before comparing them so the repair alone preserves exact round-trip export.
+
 - **Defensive Canvas Viewport Validation Against Empty Canvas Coordinates**:
   - **Trap**:
     The SQLite `documents` table may store stale or out-of-bounds pan/zoom coordinates (e.g. `mind_pan_x: -1126.42, mind_pan_y: -873.58`) pointing to empty canvas space. Restoring these coordinates on document open displays an entirely blank canvas, requiring the user to manually zoom to fit.

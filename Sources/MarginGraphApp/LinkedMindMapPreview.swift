@@ -68,10 +68,15 @@ struct LinkedMindMapPreview: View {
 
     private func load(topic: Topic) {
         self.topic = topic
-        cards = NoteCard.filterMarginNoteDocumentRootCard(from: (try? model.database.cardsForTopic(id: topic.id)) ?? [])
-        links = (try? model.database.linksForTopic(id: topic.id)) ?? []
+        loadGraph(topicID: topic.id)
         selectedID = nil
         centerID = nil
+    }
+
+    private func loadGraph(topicID: UUID) {
+        let graph = try? model.database.notebookGraph(id: topicID)
+        cards = NoteCard.filterMarginNoteDocumentRootCard(from: graph?.cards ?? [])
+        links = graph?.links ?? []
         canvasIdentity = UUID()
     }
 
@@ -79,12 +84,10 @@ struct LinkedMindMapPreview: View {
         if let owner = model.topics.first(where: { $0.id == card.topicId }) {
             load(topic: owner)
         } else {
-            cards = NoteCard.filterMarginNoteDocumentRootCard(from: (try? model.database.cardsForTopic(id: card.topicId)) ?? [])
-            links = (try? model.database.linksForTopic(id: card.topicId)) ?? []
-            canvasIdentity = UUID()
+            loadGraph(topicID: card.topicId)
         }
         // Expand the destination's ancestors in the preview only.
-        var ancestor = card.groupNoteId
+        var ancestor = cards.first(where: { $0.id == card.id })?.groupNoteId
         var visited = Set<UUID>()
         while let id = ancestor, visited.insert(id).inserted,
               let index = cards.firstIndex(where: { $0.id == id }) {

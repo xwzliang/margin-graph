@@ -638,6 +638,7 @@ public final class MarginNoteImporter {
             links.removeAll { ignoredCardIDs.contains($0.sourceCardId) || ignoredCardIDs.contains($0.targetCardId) }
             reviewItems.removeAll { ignoredCardIDs.contains($0.cardId) }
         }
+        MarginNoteHierarchy.restore(cards: &cards, links: &links)
 
         // Backfill empty highlight texts from available documents
         if !documents.isEmpty {
@@ -725,6 +726,7 @@ public final class MarginNoteImporter {
             let existingDocuments = try database.allDocuments()
             for (imported, existing, resolution) in decisions {
                 if let existing, case .merge = resolution {
+                    _ = try database.restoreMarginNoteHierarchy(in: existing.id)
                     var merged = existing
                     for hash in imported.bookMD5List where !merged.bookMD5List.contains(hash) { merged.bookMD5List.append(hash) }
                     merged.updatedAt = Date()

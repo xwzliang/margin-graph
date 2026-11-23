@@ -320,8 +320,9 @@ final class MarginPackageExporterTests: XCTestCase {
         let bookRoots = result.cards.filter { $0.title == "Lecture1" || $0.title == "Lecture2" }
         XCTAssertEqual(bookRoots.count, 2)
         for root in bookRoots {
-            XCTAssertEqual(root.mindLinks.count, 1)
-            let child = try XCTUnwrap(result.cards.first { $0.id == root.mindLinks.first })
+            let children = result.cards.filter { $0.groupNoteId == root.id }
+            XCTAssertEqual(children.count, 1)
+            let child = try XCTUnwrap(children.first)
             XCTAssertEqual(child.bookMD5, root.bookMD5)
         }
     }

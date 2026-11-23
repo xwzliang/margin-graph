@@ -19,10 +19,11 @@ enum ImportedPackageStore {
         let topics = try database.allTopics().filter {
             topicIDs.contains($0.id) || $0.bookMD5List.contains(document.md5)
         }.sorted { $0.id.uuidString < $1.id.uuidString }
-        let cards = try topics.flatMap { try database.cardsForTopic(id: $0.id) }
+        var cards = try topics.flatMap { try database.cardsForTopic(id: $0.id) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
-        let links = try topics.flatMap { try database.linksForTopic(id: $0.id) }
+        var links = try topics.flatMap { try database.linksForTopic(id: $0.id) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
+        MarginNoteHierarchy.restore(cards: &cards, links: &links)
         let source = MediaDocumentHelper.resolveSourceURL(for: URL(fileURLWithPath: document.filePath))
             ?? URL(fileURLWithPath: document.filePath)
         let fileData = try Data(contentsOf: source, options: .mappedIfSafe)
@@ -51,6 +52,7 @@ enum ImportedPackageStore {
     private static func canonicalSnapshot(_ data: Data) throws -> Data {
         var state = try JSONDecoder().decode(Snapshot.self, from: data)
         for index in state.topics.indices { state.topics[index].bookMD5List.sort() }
+        MarginNoteHierarchy.restore(cards: &state.cards, links: &state.links)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(state)

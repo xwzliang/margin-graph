@@ -643,10 +643,10 @@ final class AppModel: ObservableObject {
         let links: [CardLink]
         let dueCardIDs: Set<UUID>
 
-        init(database: Database, topicID: UUID) {
+        init(database: Database, topicID: UUID, graph: (cards: [NoteCard], links: [CardLink])? = nil) {
             documents = (try? database.documentsForTopic(id: topicID)) ?? []
-            cards = (try? database.cardsForTopic(id: topicID)) ?? []
-            links = (try? database.linksForTopic(id: topicID)) ?? []
+            cards = graph?.cards ?? (try? database.cardsForTopic(id: topicID)) ?? []
+            links = graph?.links ?? (try? database.linksForTopic(id: topicID)) ?? []
             dueCardIDs = (try? database.dueCardIDsForTopic(id: topicID)) ?? []
         }
     }
@@ -675,7 +675,8 @@ final class AppModel: ObservableObject {
             dueFlashcards = []
             return
         }
-        updateStudySet(from: StudySetData(database: database, topicID: topicID))
+        let graph = try? database.notebookGraph(id: topicID)
+        updateStudySet(from: StudySetData(database: database, topicID: topicID, graph: graph))
 
         if let activeDocument, studyDocuments.contains(where: { $0.md5 == activeDocument.md5 }) {
             reloadDocumentCards()
