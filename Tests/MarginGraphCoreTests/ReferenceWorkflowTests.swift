@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import XCTest
 @testable import MarginGraphCore
 
@@ -114,6 +115,44 @@ final class ReferenceWorkflowTests: XCTestCase {
         XCTAssertEqual(headlines, ["* Save the Cat!", "** Existing parent (renamed in Emacs) :my_tag:Important:", "*** New child", "** New sibling"])
         _ = try OrgLiteratureLibrary.write(generated, reference: entry, filename: "new.org", directory: folder)
         XCTAssertEqual(try String(contentsOf: result, encoding: .utf8), saved)
+    }
+
+    func testExternalPackagePDFRelocationRepairsExistingOrgPathWithSpaces() throws {
+        let folder = try tempDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let legacy = folder.appendingPathComponent("Application Support/MarginGraph/Documents", isDirectory: true)
+        let managed = folder.appendingPathComponent("External Library/ImportedDocuments", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)
+        let source = legacy.appendingPathComponent("Example Book.pdf")
+        let data = Data("pdf bytes".utf8)
+        try data.write(to: source)
+        let db = try Database(inMemory: true)
+        let document = Document(title: "Example Book", filePath: source.path, md5: "book", totalPages: 2)
+        try db.insertDocument(document)
+        XCTAssertEqual(try db.relocateLegacyPackageDocument(document, from: legacy, into: managed).filePath, source.path)
+        try db.withStatement("INSERT INTO imported_packages VALUES('book', '[]', X'', X'')") { statement in
+            try db.requireDone(statement)
+        }
+
+        let relocated = try db.relocateLegacyPackageDocument(document, from: legacy, into: managed)
+        XCTAssertEqual(relocated.id, document.id)
+        XCTAssertEqual(try db.getDocument(id: document.id)?.filePath, relocated.filePath)
+        XCTAssertTrue(relocated.filePath.hasPrefix(managed.resolvingSymlinksInPath().path + "/"))
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: relocated.filePath)), data)
+        XCTAssertEqual(try Data(contentsOf: source), data)
+        XCTAssertEqual(try db.relocateLegacyPackageDocument(document, from: legacy, into: managed).filePath, relocated.filePath)
+
+        let topic = Topic(title: "Notebook", bookMD5List: [document.md5])
+        let card = NoteCard(topicId: topic.id, bookMD5: document.md5, title: "Card", notesText: "Original comment")
+        let original = OrgExporter.export(topic: topic, cards: [card], documents: [document])
+        let existing = original.replacingOccurrences(of: "Original comment", with: "Edited in Emacs")
+        let incoming = OrgExporter.export(topic: topic, cards: [card], documents: [relocated])
+        let repaired = OrgLiteratureLibrary.merge(existing: existing, generated: incoming,
+                                                   replacementDocumentPaths: [source.standardizedFileURL.path: relocated.filePath])
+        XCTAssertEqual(repaired, existing.replacingOccurrences(of: source.path, with: relocated.filePath))
+        let manual = existing.replacingOccurrences(of: source.path, with: "/Other Library/Other Book.pdf")
+        XCTAssertEqual(OrgLiteratureLibrary.merge(existing: manual, generated: incoming,
+                                                  replacementDocumentPaths: [source.standardizedFileURL.path: relocated.filePath]), manual)
     }
 
     func testNewBookAndVideoUseTheEbibCaptureHeaders() throws {

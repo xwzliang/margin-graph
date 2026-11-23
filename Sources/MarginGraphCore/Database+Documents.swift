@@ -6,6 +6,52 @@ import SQLite3
 #endif
 
 public extension Database {
+    /// Older package imports in external libraries used the built-in Documents folder.
+    func relocateLegacyPackageDocument(
+        _ document: Document, from legacyDirectory: URL, into managedDirectory: URL
+    ) throws -> Document {
+        let legacyPath = legacyDirectory.standardizedFileURL.path + "/"
+        guard !document.filePath.isEmpty, URL(fileURLWithPath: document.filePath).standardizedFileURL.path.hasPrefix(legacyPath)
+        else { return document }
+        guard let current = try getDocument(id: document.id) else {
+            throw DatabaseError.open("The imported document was removed during export.")
+        }
+        guard URL(fileURLWithPath: current.filePath).standardizedFileURL.path.hasPrefix(legacyPath),
+              try hasRetainedPackage(for: current.md5) else { return current }
+
+        let source = URL(fileURLWithPath: current.filePath).resolvingSymlinksInPath().standardizedFileURL
+        let copy = try ManagedDocumentImport.copySource(source, into: managedDirectory)
+        guard source != copy else { return current }
+        var linked = false
+        defer {
+            if !linked { try? FileManager.default.removeItem(at: copy.deletingLastPathComponent()) }
+        }
+        // Copy outside the SQLite write transaction. A competing export may
+        // have already recorded a copy or changed the source in the meantime.
+        let result = try transaction {
+            guard var latest = try getDocument(id: current.id) else {
+                throw DatabaseError.open("The imported document was removed during export.")
+            }
+            guard latest.filePath == current.filePath else { return latest }
+            try withStatement("UPDATE documents SET file_path = ? WHERE id = ?") { statement in
+                bind(copy.path, to: 1, in: statement)
+                bind(latest.id.uuidString, to: 2, in: statement)
+                try requireDone(statement)
+            }
+            latest.filePath = copy.path
+            return latest
+        }
+        linked = result.filePath == copy.path
+        return result
+    }
+
+    private func hasRetainedPackage(for hash: String) throws -> Bool {
+        try withStatement("SELECT 1 FROM imported_packages WHERE document_md5 = ?") { statement in
+            bind(hash, to: 1, in: statement)
+            return sqlite3_step(statement) == SQLITE_ROW
+        }
+    }
+
     /// Catalog-only retirement after an explicit Replace. Source bytes and bookmarks remain intact.
     @discardableResult
     func retireUnreferencedImportDocument(id: UUID) throws -> Bool {
@@ -85,17 +131,14 @@ public extension Database {
             }
         }
 
-        // When syncing an external library, purge any documents originating from the default Application Support directory
+        // Remove built-in catalog discoveries, but keep owned packages that older
+        // versions extracted into that directory so export can relocate them.
         if libraryRoot != nil {
-            let defaultDocsDir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("MarginGraph/Documents", isDirectory: true).standardizedFileURL.path
-            if let defaultDocsDir {
-                let currentDocs = try allDocuments()
-                for doc in currentDocs {
-                    let standardPath = URL(fileURLWithPath: doc.filePath).standardizedFileURL.path
-                    if standardPath.hasPrefix(defaultDocsDir) {
-                        try deleteDocument(id: doc.id)
-                    }
+            let defaultDocsDir = MarginNoteImporter.defaultDocumentsDirectory.standardizedFileURL.path + "/"
+            for doc in try allDocuments() {
+                let standardPath = URL(fileURLWithPath: doc.filePath).standardizedFileURL.path
+                if standardPath.hasPrefix(defaultDocsDir), try !hasRetainedPackage(for: doc.md5) {
+                    try deleteDocument(id: doc.id)
                 }
             }
         }

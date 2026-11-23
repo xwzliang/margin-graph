@@ -187,7 +187,8 @@ final class ReferenceWorkspace: ObservableObject {
         let bookMD5: String?
     }
 
-    func export(topic: Topic, cards: [NoteCard], documents: [Document]) async throws -> ExportResult? {
+    func export(topic: Topic, cards: [NoteCard], documents: [Document],
+                replacementDocumentPaths: [String: String]) async throws -> ExportResult? {
         if selectedFile == nil { try await chooseBibliographies() }
         guard let file = selectedFile else { return nil }
         if literatureDirectory == nil, !(await chooseLiteratureDirectory()) { return nil }
@@ -216,7 +217,8 @@ final class ReferenceWorkspace: ObservableObject {
             } else if attached.source != entry.source {
                 try BibTeXLibrary.save(attached, replacing: entry, in: targetFile)
             }
-            return try Self.writeNote(topic: topic, cards: cards, documents: documents, entry: entry, directory: directory)
+            return try Self.writeNote(topic: topic, cards: cards, documents: documents, entry: entry, directory: directory,
+                                      replacementDocumentPaths: replacementDocumentPaths)
         }.value
         try await reload()
         return ExportResult(note: output, key: entry.key, bibliography: existingFile ?? file, bookMD5: document?.md5)
@@ -251,13 +253,15 @@ final class ReferenceWorkspace: ObservableObject {
     }
 
     nonisolated private static func writeNote(topic: Topic, cards: [NoteCard], documents: [Document],
-                                              entry: BibTeXEntry, directory: URL, kind: OrgExporter.ReferenceKind? = nil) throws -> URL {
+                                              entry: BibTeXEntry, directory: URL, kind: OrgExporter.ReferenceKind? = nil,
+                                              replacementDocumentPaths: [String: String] = [:]) throws -> URL {
         var namedTopic = topic
         if !entry.title.isEmpty { namedTopic.title = entry.title }
         let content = OrgExporter.export(topic: namedTopic, cards: cards, documents: documents,
                                          reference: entry, referenceKind: kind)
         return try OrgLiteratureLibrary.write(content, reference: entry,
-            filename: OrgExporter.suggestedFilename(for: namedTopic), directory: directory)
+            filename: OrgExporter.suggestedFilename(for: namedTopic), directory: directory,
+            replacementDocumentPaths: replacementDocumentPaths)
     }
 
     private func show(_ panel: NSSavePanel) async -> Bool {

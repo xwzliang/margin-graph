@@ -226,6 +226,7 @@ final class AppModel: ObservableObject {
 
     @Published var activeDatabaseName: String = "Default Library"
     @Published var activeDatabaseURL: URL? = nil
+    private var externalLibraryDirectory: URL?
     @Published var isExternalDatabase: Bool = false
     @Published var isOpeningDatabase: Bool = false
     @Published private(set) var isImportingMarginNote = false
@@ -981,6 +982,7 @@ final class AppModel: ObservableObject {
                             .appendingPathComponent("MarginNotes.sqlite")
                         self.activeDatabaseName = url.lastPathComponent
                         self.activeDatabaseURL = url
+                        self.externalLibraryDirectory = url.deletingLastPathComponent()
                         self.isExternalDatabase = true
                         saveRecentDatabase(path: url.path)
                         resetWorkspaceForNewDatabase()
@@ -1073,6 +1075,7 @@ final class AppModel: ObservableObject {
                 self.database = newDb
                 self.activeDatabaseName = entry.displayName
                 self.activeDatabaseURL = backupDir
+                self.externalLibraryDirectory = sidecarFolderURL
                 self.isExternalDatabase = true
                 libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: actualDbURL.deletingLastPathComponent().path)
                 libManager.touchLastOpened(path: backupDir.path)
@@ -1141,6 +1144,7 @@ final class AppModel: ObservableObject {
             self.database = newDb
             self.activeDatabaseName = entry.displayName
             self.activeDatabaseURL = backupDir
+            self.externalLibraryDirectory = sidecarFolderURL
             self.isExternalDatabase = true
             libManager.updateWorkingFolderPath(id: entry.id, workingFolderPath: actualDbURL.deletingLastPathComponent().path)
             libManager.touchLastOpened(path: backupDir.path)
@@ -1251,6 +1255,7 @@ final class AppModel: ObservableObject {
             self.mediaStorage.clearFallbackDatabase()
             self.activeDatabaseName = "Default Library"
             self.activeDatabaseURL = nil
+            self.externalLibraryDirectory = nil
             self.isExternalDatabase = false
             resetWorkspaceForNewDatabase()
             reloadLibrary()
@@ -1325,6 +1330,7 @@ final class AppModel: ObservableObject {
         guard !isImportingMarginNote, !isOpeningDatabase else { return }
         flushPendingPositions()
         let database = self.database
+        let destination = externalLibraryDirectory.map { _ in importedDocumentsDirectory }
         isImportingMarginNote = true
         defer { isImportingMarginNote = false }
         let prompt: @MainActor @Sendable (Topic, Topic) -> NotebookConflictResolution = { [weak self] existing, imported in
@@ -1334,7 +1340,8 @@ final class AppModel: ObservableObject {
         do {
             let imported = try await Task.detached(priority: .userInitiated) {
                 var workspace: ImportedWorkspace?
-                _ = try MarginNoteImporter(url: url).importInto(database, beforeCommit: { result in
+                _ = try MarginNoteImporter(url: url, documentsDestinationDirectory: destination)
+                    .importInto(database, beforeCommit: { result in
                     workspace = try ImportedWorkspace(result: result, database: database)
                 }) { existing, imported in
                     // The importer asks before its write transaction holds the database lock.
@@ -1369,7 +1376,7 @@ final class AppModel: ObservableObject {
     }
 
     private var importedDocumentsDirectory: URL {
-        let libraryDirectory = activeDatabaseURL?.deletingLastPathComponent()
+        let libraryDirectory = externalLibraryDirectory
             ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("MarginGraph", isDirectory: true)
         return libraryDirectory.appendingPathComponent("ImportedDocuments", isDirectory: true)
     }
@@ -2707,11 +2714,38 @@ final class AppModel: ObservableObject {
         let cards = mindMapCards
         let documents = studyDocuments
         let sourceDatabase = database
+        let destination = externalLibraryDirectory.map { _ in importedDocumentsDirectory }
         isExportingOrg = true
         Task {
             defer { isExportingOrg = false }
             do {
-                if let result = try await referenceWorkspace.export(topic: topic, cards: cards, documents: documents) {
+                let legacyDirectory = MarginNoteImporter.defaultDocumentsDirectory
+                let exportDocuments: [Document]
+                var replacementPaths: [String: String] = [:]
+                if let destination {
+                    exportDocuments = try await Task.detached(priority: .userInitiated) {
+                        try documents.map {
+                            try sourceDatabase.relocateLegacyPackageDocument($0, from: legacyDirectory, into: destination)
+                        }
+                    }.value
+                    let managedPath = destination.resolvingSymlinksInPath().standardizedFileURL.path + "/"
+                    for document in exportDocuments where document.filePath.hasPrefix(managedPath) {
+                        let name = (document.filePath as NSString).lastPathComponent
+                        replacementPaths[legacyDirectory.appendingPathComponent(name).path] = document.filePath
+                        if let previous = documents.first(where: { $0.id == document.id }),
+                           previous.filePath != document.filePath {
+                            replacementPaths[previous.filePath] = document.filePath
+                        }
+                        if exportDocuments.count == 1 { replacementPaths[legacyDirectory.path] = document.filePath }
+                    }
+                    if database === sourceDatabase {
+                        updateRelocatedStudyDocuments(exportDocuments)
+                    }
+                } else {
+                    exportDocuments = documents
+                }
+                if let result = try await referenceWorkspace.export(topic: topic, cards: cards, documents: exportDocuments,
+                                                                     replacementDocumentPaths: replacementPaths) {
                     try sourceDatabase.saveReferenceStudyLink(
                         ReferenceStudyLink(topicID: topic.id, bookMD5: result.bookMD5),
                         bibliography: result.bibliography, key: result.key
@@ -2723,6 +2757,20 @@ final class AppModel: ObservableObject {
                 if let window = NSApp.keyWindow ?? NSApp.mainWindow {
                     alert.beginSheetModal(for: window, completionHandler: nil)
                 } else { alert.runModal() }
+            }
+        }
+    }
+
+    private func updateRelocatedStudyDocuments(_ relocated: [Document]) {
+        for document in relocated {
+            if let index = documents.firstIndex(where: { $0.id == document.id }), documents[index].filePath != document.filePath {
+                documents[index].filePath = document.filePath
+            }
+            if let index = studyDocuments.firstIndex(where: { $0.id == document.id }), studyDocuments[index].filePath != document.filePath {
+                studyDocuments[index].filePath = document.filePath
+            }
+            if let activeDocument, activeDocument.id == document.id, activeDocument.filePath != document.filePath {
+                switchToDocument(document, clearSelection: false)
             }
         }
     }

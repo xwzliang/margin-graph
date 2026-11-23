@@ -45,6 +45,11 @@ public final class MarginNoteImporter {
     public let copyDocuments: Bool
     public let copyMedia: Bool
 
+    public static var defaultDocumentsDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("MarginGraph/Documents", isDirectory: true)
+    }
+
     public init(
         url: URL,
         documentsDestinationDirectory: URL? = nil,
@@ -56,14 +61,7 @@ public final class MarginNoteImporter {
         self.mediaStorage = mediaStorage
         self.copyDocuments = copyDocuments
         self.copyMedia = copyMedia
-        if let dir = documentsDestinationDirectory {
-            self.documentsDestinationDirectory = dir
-        } else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            self.documentsDestinationDirectory = base
-                .appendingPathComponent("MarginGraph", isDirectory: true)
-                .appendingPathComponent("Documents", isDirectory: true)
-        }
+        self.documentsDestinationDirectory = documentsDestinationDirectory ?? Self.defaultDocumentsDirectory
     }
 
     public func read() throws -> MarginNoteImportResult {
@@ -134,15 +132,11 @@ public final class MarginNoteImporter {
                 let fileName = itemURL.lastPathComponent
                 var destinationURL = documentsDestinationDirectory.appendingPathComponent(fileName)
                 if fileManager.fileExists(atPath: destinationURL.path) {
-                    let itemData = try? Data(contentsOf: itemURL)
-                    let existingData = try? Data(contentsOf: destinationURL)
-                    if itemData != existingData {
-                        let uniqueName = "\(destinationURL.deletingPathExtension().lastPathComponent)_\(UUID().uuidString.prefix(6)).\(ext)"
-                        destinationURL = documentsDestinationDirectory.appendingPathComponent(uniqueName)
-                        try? fileManager.copyItem(at: itemURL, to: destinationURL)
+                    if !fileManager.contentsEqual(atPath: itemURL.path, andPath: destinationURL.path) {
+                        destinationURL = try ManagedDocumentImport.copySource(itemURL, into: documentsDestinationDirectory)
                     }
                 } else {
-                    try? fileManager.copyItem(at: itemURL, to: destinationURL)
+                    try fileManager.copyItem(at: itemURL, to: destinationURL)
                 }
                 extractedDocuments.append(destinationURL)
             }
@@ -237,22 +231,19 @@ public final class MarginNoteImporter {
             var filePath = first(row, ["ZFILEPATH", "ZPATH", "ZLOCALPATH"]) ?? ""
             let rawOriginalPath = filePath
             let subPath = first(row, ["ZPATH", "ZLOCALPATH"]) ?? ""
+            let fileName = first(row, ["ZFILE", "ZPATH"]) ?? ""
+            let originalFilename = (rawOriginalPath as NSString).lastPathComponent
+            let packagedDocument = extractedDocuments.first { document in
+                let name = document.lastPathComponent
+                return name == fileName || name == originalFilename || name == rawTitle || name == (cleanTitle + ".pdf")
+                    || document.deletingPathExtension().lastPathComponent.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame
+            } ?? (extractedDocuments.count == 1 && rawBookRows.count == 1 ? extractedDocuments[0] : nil)
 
-            if filePath.isEmpty || !FileManager.default.fileExists(atPath: filePath) {
+            if let packagedDocument {
+                filePath = packagedDocument.path
+            } else if filePath.isEmpty || !FileManager.default.fileExists(atPath: filePath) {
                 var resolvedPath = ""
-                let fileName = first(row, ["ZFILE", "ZPATH"]) ?? ""
-                if let match = extractedDocuments.first(where: {
-                    let name = $0.lastPathComponent
-                    let titleWithoutExt = $0.deletingPathExtension().lastPathComponent
-                    return (!fileName.isEmpty && name == fileName) ||
-                           name == rawTitle ||
-                           name == (cleanTitle + ".pdf") ||
-                           titleWithoutExt.localizedCaseInsensitiveCompare(cleanTitle) == .orderedSame
-                }) {
-                    resolvedPath = match.path
-                } else if extractedDocuments.count == 1 && rawBookRows.count == 1 {
-                    resolvedPath = extractedDocuments[0].path
-                } else if !fileName.isEmpty {
+                if !fileName.isEmpty {
                     for dir in documentSearchPaths {
                         let candidate1 = dir.appendingPathComponent(fileName).path
                         if FileManager.default.fileExists(atPath: candidate1) {

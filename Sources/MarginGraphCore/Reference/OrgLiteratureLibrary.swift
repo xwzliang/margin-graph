@@ -18,7 +18,7 @@ public enum OrgLiteratureLibrary {
     /// Find the existing Org-roam literature node by citation key before creating a new file.
     @discardableResult
     public static func write(_ generated: String, reference: BibTeXEntry, filename: String,
-                             directory: URL) throws -> URL {
+                             directory: URL, replacementDocumentPaths: [String: String] = [:]) throws -> URL {
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey],
                                                                options: [.skipsHiddenFiles])
         let matches = try files.filter {
@@ -40,7 +40,8 @@ public enum OrgLiteratureLibrary {
                     guard citationKeys(in: existing).contains(reference.key) else {
                         throw WriteError.filenameOccupied(url.lastPathComponent)
                     }
-                    let result = merge(existing: existing, generated: generated)
+                    let result = merge(existing: existing, generated: generated,
+                                       replacementDocumentPaths: replacementDocumentPaths)
                     guard result != existing else { return }
                     guard try String(contentsOf: url, encoding: .utf8) == existing else { throw WriteError.changed }
                     try result.write(to: url, atomically: true, encoding: .utf8)
@@ -127,8 +128,33 @@ public enum OrgLiteratureLibrary {
         return (suffix.startIndex..<suffix.endIndex, names.map(String.init))
     }
 
+    private static func property(_ name: String, in lines: [String], heading: Heading) -> (index: Int, value: String)? {
+        let label = ":\(name):"
+        var inDrawer = false
+        for index in (heading.start + 1)..<heading.bodyEnd {
+            let line = lines[index].trimmingCharacters(in: .whitespaces)
+            if line.uppercased() == ":PROPERTIES:" {
+                inDrawer = true
+            } else if line.uppercased() == ":END:" || (!inDrawer && !line.isEmpty && !line.hasPrefix("SCHEDULED:")) {
+                break
+            } else if inDrawer && line.uppercased().hasPrefix(label) {
+                return (index, String(line.dropFirst(label.count)).trimmingCharacters(in: .whitespaces))
+            }
+        }
+        return nil
+    }
+
+    private static func replaceDocumentPath(in output: inout [String], current: Heading,
+                                            incoming: Heading, newLines: [String], paths: [String: String]) {
+        guard !paths.isEmpty, let old = property("NOTER_DOCUMENT", in: output, heading: current), old.value.hasPrefix("/"),
+              let new = property("NOTER_DOCUMENT", in: newLines, heading: incoming),
+              paths[URL(fileURLWithPath: old.value).standardizedFileURL.path] == new.value else { return }
+        let indent = output[old.index].prefix(while: \.isWhitespace)
+        output[old.index] = "\(indent):NOTER_DOCUMENT: \(new.value)"
+    }
+
     /// Keep existing prose and titles. Add generated tags and new nodes by card ID.
-    static func merge(existing: String, generated: String) -> String {
+    static func merge(existing: String, generated: String, replacementDocumentPaths: [String: String] = [:]) -> String {
         let newline = existing.contains("\r\n") ? "\r\n" : "\n"
         let currentLines = existing.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
         let newLines = generated.components(separatedBy: "\n")
@@ -153,6 +179,8 @@ public enum OrgLiteratureLibrary {
         var parents: [(original: Int, output: Int, anchor: Anchor)] = []
         let end = Anchor(insertion: currentLines.count, level: 0)
         if let existingRoot {
+            replaceDocumentPath(in: &output, current: existingRoot, incoming: root, newLines: newLines,
+                                paths: replacementDocumentPaths)
             parents.append((1, existingRoot.level, Anchor(insertion: existingRoot.subtreeEnd, level: existingRoot.level)))
         } else {
             additions[end, default: []].append(contentsOf: newLines[root.start..<root.bodyEnd])
@@ -162,11 +190,13 @@ public enum OrgLiteratureLibrary {
             while let parent = parents.last, parent.original >= heading.level { parents.removeLast() }
             let parent = parents.last ?? (1, 1, end)
             if let id = heading.id, let current = indexed[id] {
-                if let incoming = headlineTags(heading.title) {
+                replaceDocumentPath(in: &output, current: current, incoming: heading, newLines: newLines,
+                                    paths: replacementDocumentPaths)
+                if let incomingTags = headlineTags(heading.title) {
                     let headline = output[current.start]
                     let existing = headlineTags(headline)
                     var tags = existing?.names ?? []
-                    let missing = incoming.names.filter { !tags.contains($0) }
+                    let missing = incomingTags.names.filter { !tags.contains($0) }
                     if !missing.isEmpty {
                         tags += missing
                         let suffix = ":\(tags.joined(separator: ":")):"

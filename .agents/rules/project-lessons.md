@@ -1271,6 +1271,8 @@ Structure each entry concisely with actionable rules:
 
 - **Org-roam format**: Put the stable notebook ID at file scope and place all exported cards under one notebook heading. Use the notebook creation stamp and a lowercase, underscore-separated title slug limited to 60 columns. Keep PDF paths in the inherited Org Noter drawer only when there is one source document. For multiple sources, attach the matching path to the card. Bibliography references require a real citation key.
 
+- **Package PDFs in external libraries**: Extract PDFs into the active library's managed documents beside its working SQLite database. Prefer the embedded copies over paths recorded by the source Mac. On Org export, copy legacy package PDFs out of the built-in Documents folder before relinking the catalog. When reusing an Org file, replace a known stale `NOTER_DOCUMENT` property only if the generated heading points to its matching replacement. Org Noter reads the entire property value, including literal spaces.
+
 ## Mind Map Toolbar Buttons Share One Layout
 
 - **Trap**: A borderless SwiftUI menu applies native label insets and tint. Mixing it with plain icon buttons and giving actions different hit-target widths shifted the Share icon and broke the horizontal rhythm.
