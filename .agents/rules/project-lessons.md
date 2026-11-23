@@ -1061,6 +1061,10 @@ Structure each entry concisely with actionable rules:
   - **Trap**: MarginNote stores children in `ZMINDLINKS` even when the child has no `ZGROUPNOTEID`. Storing those pairs as reference links produces dashed lines and leaves the children outside the parent's foldable branch.
   - **Rule**: After pruning synthetic roots, write unambiguous, acyclic same-notebook relationships into `groupNoteId`. Preserve explicit parents, child-map membership, and independent references. Upgrade legacy copies only for the notebook being opened or merged, using the matching source ID and old unlabeled one-way link to identify each duplicated encoding. Normalize retained package snapshots before comparing them so the repair alone preserves exact round-trip export.
 
+- **MarginNote Merged Selections Share One Card**:
+  - **Trap**: A `ZGROUPNOTEID` fragment referenced by an owning note's archived `ZNOTES` `LinkNote` entry is part of that note. Loading the fragment as a branch duplicates text and makes the second PDF selection behave like a separate note.
+  - **Rule**: Confirm both native fields, retain the owner's ID, and store each selection with its own ID and rectangles. Avoid duplicating excerpt text already present in the owner's note body. Keep fragment links resolvable to the owner. For imports made before `ZNOTES` was decoded, repair only matching unpositioned fragments whose full excerpt is mirrored in the owner. Repair the open notebook transactionally and record completion. Move deck and review state before removing a duplicate row, and update the surviving SQLite row in place to preserve its deck membership.
+
 - **Defensive Canvas Viewport Validation Against Empty Canvas Coordinates**:
   - **Trap**:
     The SQLite `documents` table may store stale or out-of-bounds pan/zoom coordinates (e.g. `mind_pan_x: -1126.42, mind_pan_y: -873.58`) pointing to empty canvas space. Restoring these coordinates on document open displays an entirely blank canvas, requiring the user to manually zoom to fit.

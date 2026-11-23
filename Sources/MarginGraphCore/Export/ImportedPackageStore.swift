@@ -13,6 +13,7 @@ enum ImportedPackageStore {
         var topics: [Topic]
         var cards: [NoteCard]
         var links: [CardLink]
+        var mergesResolved: Bool?
     }
 
     private static func snapshot(document: Document, topicIDs: [UUID], database: Database) throws -> Data {
@@ -23,6 +24,8 @@ enum ImportedPackageStore {
             .sorted { $0.id.uuidString < $1.id.uuidString }
         var links = try topics.flatMap { try database.linksForTopic(id: $0.id) }
             .sorted { $0.id.uuidString < $1.id.uuidString }
+        let groups = try database.legacyMergedNoteGroups(in: cards)
+        _ = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: groups)
         MarginNoteHierarchy.restore(cards: &cards, links: &links)
         let source = MediaDocumentHelper.resolveSourceURL(for: URL(fileURLWithPath: document.filePath))
             ?? URL(fileURLWithPath: document.filePath)
@@ -43,7 +46,7 @@ enum ImportedPackageStore {
             var card = $0
             card.updatedAt = card.createdAt
             return card
-        }, links: links)
+        }, links: links, mergesResolved: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(state)
@@ -52,6 +55,11 @@ enum ImportedPackageStore {
     private static func canonicalSnapshot(_ data: Data) throws -> Data {
         var state = try JSONDecoder().decode(Snapshot.self, from: data)
         for index in state.topics.indices { state.topics[index].bookMD5List.sort() }
+        if state.mergesResolved != true {
+            let groups = MarginNoteMergedNotes.legacyGroups(in: state.cards)
+            _ = MarginNoteMergedNotes.combine(cards: &state.cards, links: &state.links, groups: groups)
+            state.mergesResolved = true
+        }
         MarginNoteHierarchy.restore(cards: &state.cards, links: &state.links)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

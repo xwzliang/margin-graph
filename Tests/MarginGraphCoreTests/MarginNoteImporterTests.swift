@@ -58,6 +58,50 @@ final class MarginNoteImporterTests: XCTestCase {
         )
     }
 
+    func testLinkNoteGroupImportsAsOneCardWithBothPDFSelections() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".marginnotes")
+        defer { try? FileManager.default.removeItem(at: url) }
+        var source: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &source), SQLITE_OK)
+        defer { sqlite3_close(source) }
+
+        let topic = UUID(), owner = UUID(), fragment = UUID(), branch = UUID()
+        func archive(_ root: Any) throws -> String {
+            try NSKeyedArchiver.archivedData(withRootObject: root, requiringSecureCoding: false)
+                .map { String(format: "%02x", $0) }.joined()
+        }
+        let notes = try archive([["type": "LinkNote", "noteid": fragment.uuidString]])
+        let firstSelection = try archive([["pageNo": 2, "rect": ["x": 1, "y": 2, "w": 50, "h": 12]]])
+        let secondSelection = try archive([["pageNo": 4, "rect": ["x": 1, "y": 2, "w": 50, "h": 12]]])
+        try exec(source, """
+        CREATE TABLE ZTOPIC (ZTOPICID TEXT, ZTITLE TEXT);
+        INSERT INTO ZTOPIC VALUES ('\(topic)', 'Notebook');
+        CREATE TABLE ZBOOKNOTE (
+            ZNOTEID TEXT, ZTOPICID TEXT, ZBOOKMD5 TEXT, ZNOTETITLE TEXT,
+            ZHIGHLIGHT_TEXT TEXT, ZNOTES_TEXT TEXT, ZGROUPNOTEID TEXT, ZNOTES BLOB,
+            ZHIGHLIGHTS BLOB, ZMINDLINKS TEXT, ZSTARTPAGE INTEGER, ZENDPAGE INTEGER
+        );
+        INSERT INTO ZBOOKNOTE VALUES
+            ('\(owner)','\(topic)','book','Owner','First excerpt','Next excerpt',NULL,
+             X'\(notes)',X'\(firstSelection)','\(branch)',2,2),
+            ('\(fragment)','\(topic)','book',NULL,'Next excerpt','', '\(owner)',
+             NULL,X'\(secondSelection)',NULL,4,4),
+            ('\(branch)','\(topic)','book',NULL,'Next excerpt','', '\(owner)',
+             NULL,X'\(secondSelection)',NULL,4,4);
+        """)
+        let db = try Database(inMemory: true)
+        let result = try MarginNoteImporter(url: url).importInto(db)
+        XCTAssertEqual(Set(result.cards.map(\.id)), [owner, branch])
+        let card = try XCTUnwrap(db.getCard(id: owner))
+        XCTAssertEqual(card.notesText, "Next excerpt")
+        XCTAssertEqual(card.excerptSegments.map(\.id), [owner, fragment])
+        XCTAssertEqual(card.excerptSegments.flatMap(\.rects).map(\.page), [1, 3])
+        XCTAssertEqual(card.highlightRects.map(\.page), [1, 3])
+        XCTAssertEqual(card.endPage, 3)
+        XCTAssertEqual(try db.cardForNoteLink(id: fragment)?.id, owner)
+        XCTAssertEqual(try db.notebookGraph(id: topic).cards.first { $0.id == branch }?.groupNoteId, owner)
+    }
+
     private func exec(_ db: OpaquePointer?, _ sql: String) throws {
         var error: UnsafeMutablePointer<CChar>?
         let code = sqlite3_exec(db, sql, nil, nil, &error)

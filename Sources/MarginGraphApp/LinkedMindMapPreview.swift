@@ -57,7 +57,7 @@ struct LinkedMindMapPreview: View {
                 },
                 onOpenNoteLink: { url in
                     guard case .openCard(let id) = DeepLinkHandler.parse(url),
-                          let card = try? model.database.getCard(id: id) else { return }
+                          let card = try? model.database.cardForNoteLink(id: id) else { return }
                     load(card: card)
                 }
             ).id(canvasIdentity)
@@ -87,14 +87,15 @@ struct LinkedMindMapPreview: View {
             loadGraph(topicID: card.topicId)
         }
         // Expand the destination's ancestors in the preview only.
-        var ancestor = cards.first(where: { $0.id == card.id })?.groupNoteId
+        let target = (try? model.database.cardForNoteLink(id: card.id)) ?? card
+        var ancestor = cards.first(where: { $0.id == target.id })?.groupNoteId
         var visited = Set<UUID>()
         while let id = ancestor, visited.insert(id).inserted,
               let index = cards.firstIndex(where: { $0.id == id }) {
             cards[index].isFolded = false
             ancestor = cards[index].groupNoteId
         }
-        selectedID = card.id
-        centerID = card.id
+        selectedID = target.id
+        centerID = target.id
     }
 }

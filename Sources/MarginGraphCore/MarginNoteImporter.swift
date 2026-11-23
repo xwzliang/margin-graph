@@ -13,6 +13,7 @@ public struct MarginNoteImportResult: Sendable {
     public var links: [CardLink]
     public var reviewItems: [ReviewItem]
     public var folders: [DocumentFolder]
+    var mergedNoteOwners: [UUID: UUID] = [:]
 
     public init(
         topics: [Topic],
@@ -468,10 +469,19 @@ public final class MarginNoteImporter {
 
         var cards: [NoteCard] = []
         var links: [CardLink] = []
+        var mergeGroups: [UUID: [UUID]] = [:]
+        let groupIDs = Set(noteRows.compactMap { row in
+            first(row, ["ZGROUPNOTEID"]).flatMap { noteKeyMap[$0] ?? UUID(uuidString: $0) }
+        })
 
         for row in noteRows {
             let key = first(row, ["ZNOTEID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let cardId = noteKeyMap[key] ?? stableUUID(key)
+            if groupIDs.contains(cardId) {
+                let fragments = linkedNoteIDs(first(row, ["ZNOTES"]))
+                    .compactMap { noteKeyMap[$0] ?? UUID(uuidString: $0) }
+                if !fragments.isEmpty { mergeGroups[cardId] = fragments }
+            }
             let topicKey = first(row, ["ZTOPICID", "ZTOPIC", "ZTOPIC_PK"])
             let topicId = topicKey.flatMap { topicKeyMap[$0] } ?? fallbackTopic
             let parentKey = first(row, ["ZGROUPNOTEID", "ZGROUPNOTE", "ZPARENTNOTEID"])
@@ -638,8 +648,6 @@ public final class MarginNoteImporter {
             links.removeAll { ignoredCardIDs.contains($0.sourceCardId) || ignoredCardIDs.contains($0.targetCardId) }
             reviewItems.removeAll { ignoredCardIDs.contains($0.cardId) }
         }
-        MarginNoteHierarchy.restore(cards: &cards, links: &links)
-
         // Backfill empty highlight texts from available documents
         if !documents.isEmpty {
             var docCache: [String: PDFDocument] = [:]
@@ -682,7 +690,17 @@ public final class MarginNoteImporter {
             }
         }
 
-        return MarginNoteImportResult(
+        let mergedNoteOwners = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: mergeGroups)
+        MarginNoteHierarchy.restore(cards: &cards, links: &links)
+        let primaryReviews = Set(reviewItems.map(\.cardId)).subtracting(mergedNoteOwners.keys)
+        reviewItems = reviewItems.compactMap { item in
+            guard let owner = mergedNoteOwners[item.cardId] else { return item }
+            guard !primaryReviews.contains(owner) else { return nil }
+            var transferred = item
+            transferred.cardId = owner
+            return transferred
+        }
+        var result = MarginNoteImportResult(
             topics: topics,
             documents: documents,
             cards: cards,
@@ -690,6 +708,8 @@ public final class MarginNoteImporter {
             reviewItems: reviewItems,
             folders: folders
         )
+        result.mergedNoteOwners = mergedNoteOwners
+        return result
     }
 
     @discardableResult
@@ -774,7 +794,13 @@ public final class MarginNoteImporter {
                 return link
             }
             for item in result.reviewItems { try database.upsertReviewItem(item) }
+            for (fragment, owner) in result.mergedNoteOwners {
+                try database.recordImportedNoteAlias(fragment: fragment, owner: owner)
+            }
             applied.topics = try result.topics.map { try database.getTopic(id: mapping[$0.id] ?? $0.id) ?? $0 }
+            for topic in applied.topics {
+                try database.markImportedNoteMergesResolved(in: topic.id)
+            }
             if let packageURL {
                 try ImportedPackageStore.retain(url: packageURL, result: applied, database: database)
             }
@@ -844,6 +870,16 @@ public final class MarginNoteImporter {
             .split(whereSeparator: { $0 == "," || $0 == ";" || $0 == "|" })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
+
+    private func linkedNoteIDs(_ raw: String?) -> [String] {
+        guard let raw, raw.hasPrefix("base64:"),
+              let data = Data(base64Encoded: String(raw.dropFirst("base64:".count))) else { return [] }
+        let classes: [AnyClass] = [NSArray.self, NSDictionary.self, NSString.self, NSNumber.self, NSData.self]
+        let entries = (try? NSKeyedUnarchiver.unarchivedObject(ofClasses: classes, from: data)) as? [[String: Any]]
+        return entries?.compactMap { entry in
+            entry["type"] as? String == "LinkNote" ? entry["noteid"] as? String : nil
+        } ?? []
     }
 
     private func parsePoint(_ raw: String?) -> CGPoint? {

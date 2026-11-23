@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 7
+    private static let currentSchemaVersion: Int32 = 8
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -184,6 +184,15 @@ public final class Database: @unchecked Sendable {
             topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
             book_md5 TEXT,
             PRIMARY KEY(bibliography_path, citation_key)
+        );
+        CREATE TABLE IF NOT EXISTS imported_note_aliases(
+            fragment_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            topic_id TEXT NOT NULL REFERENCES topics(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_imported_note_aliases_owner ON imported_note_aliases(owner_id);
+        CREATE TABLE IF NOT EXISTS imported_note_merge_state(
+            topic_id TEXT PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE
         );
         """)
         try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
@@ -904,22 +913,32 @@ public final class Database: @unchecked Sendable {
         )
     }
 
-    public func insertCard(_ card: NoteCard) throws { try writeCard(card, replace: true) }
-    public func updateCard(_ card: NoteCard) throws { try writeCard(card, replace: true) }
+    public func insertCard(_ card: NoteCard) throws { try writeCard(card) }
+    public func updateCard(_ card: NoteCard) throws { try writeCard(card) }
 
-    private func writeCard(_ card: NoteCard, replace: Bool) throws {
+    private static let writeCardSQL: String = {
+        let columns = [
+            "id", "topic_id", "book_md5", "title", "highlight_text", "notes_text",
+            "group_note_id", "mind_x", "mind_y", "mind_links", "is_folded",
+            "start_page", "end_page", "start_x", "start_y", "end_x", "end_y",
+            "color_index", "tags", "highlight_pic_hash", "created_at", "updated_at",
+            "highlight_rects", "emphasis_list", "excerpt_segments", "emphasis_rects",
+            "media_type", "video_start_time", "video_end_time"
+        ]
+        let values = Array(repeating: "?", count: columns.count).joined(separator: ",")
+        let updates = columns.dropFirst().map { "\($0) = excluded.\($0)" }.joined(separator: ",")
+        // Keep the existing row identity and its deck memberships when editing it.
+        return "INSERT INTO cards(\(columns.joined(separator: ","))) VALUES(\(values)) ON CONFLICT(id) DO UPDATE SET \(updates)"
+    }()
+
+    private func writeCard(_ card: NoteCard) throws {
         let links = try jsonString(card.mindLinks.map(\.uuidString))
         let tags = try jsonString(card.tags)
         let highlightRects = try jsonString(card.highlightRects)
         let emphasisList = try jsonString(card.emphasisList)
         let excerptSegments = try jsonString(card.excerptSegments)
         let emphasisRects = try jsonString(card.emphasisRects)
-        let verb = replace ? "INSERT OR REPLACE" : "INSERT"
-        let sql = """
-        \(verb) INTO cards(id,topic_id,book_md5,title,highlight_text,notes_text,group_note_id,mind_x,mind_y,mind_links,is_folded,start_page,end_page,start_x,start_y,end_x,end_y,color_index,tags,highlight_pic_hash,created_at,updated_at,highlight_rects,emphasis_list,excerpt_segments,emphasis_rects,media_type,video_start_time,video_end_time)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """
-        try withStatement(sql) { statement in
+        try withStatement(Self.writeCardSQL) { statement in
             bind(card.id.uuidString, to: 1, in: statement)
             bind(card.topicId.uuidString, to: 2, in: statement)
             bind(card.bookMD5, to: 3, in: statement)
@@ -959,6 +978,19 @@ public final class Database: @unchecked Sendable {
 
     public func getCard(id: UUID) throws -> NoteCard? {
         try withStatement("SELECT * FROM cards WHERE id=?") { statement in
+            bind(id.uuidString, to: 1, in: statement)
+            guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+            return try decodeCard(statement)
+        }
+    }
+
+    public func cardForNoteLink(id: UUID) throws -> NoteCard? {
+        if let card = try getCard(id: id) { return card }
+        return try withStatement("""
+            SELECT c.* FROM imported_note_aliases a
+            JOIN cards c ON c.id = a.owner_id AND c.topic_id = a.topic_id
+            WHERE a.fragment_id = ?
+            """) { statement in
             bind(id.uuidString, to: 1, in: statement)
             guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
             return try decodeCard(statement)
@@ -1045,26 +1077,84 @@ public final class Database: @unchecked Sendable {
         let storedLinks = try linksForTopic(id: topicID)
         var cards = storedCards
         var links = storedLinks
+        let groups = try legacyMergedNoteGroups(in: cards)
+        let owners = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: groups)
         MarginNoteHierarchy.restore(cards: &cards, links: &links)
-        let changedCards = zip(storedCards, cards).compactMap { old, new in
-            old.groupNoteId != new.groupNoteId || old.mindLinks != new.mindLinks ? new : nil
+        if cards != storedCards {
+            let previous = Dictionary(uniqueKeysWithValues: storedCards.map { ($0.id, $0) })
+            for card in cards where previous[card.id] != card {
+                try updateCard(card)
+            }
         }
-        if !changedCards.isEmpty {
-            try withStatement("UPDATE cards SET group_note_id = ?, mind_links = ? WHERE id = ?") { statement in
-                for card in changedCards {
-                    sqlite3_reset(statement)
-                    bind(card.groupNoteId?.uuidString, to: 1, in: statement)
-                    bind(try jsonString(card.mindLinks.map(\.uuidString)), to: 2, in: statement)
-                    bind(card.id.uuidString, to: 3, in: statement)
-                    try requireDone(statement)
+        if links != storedLinks {
+            let remaining = Dictionary(uniqueKeysWithValues: links.map { ($0.id, $0) })
+            for link in storedLinks {
+                if let updated = remaining[link.id] {
+                    if updated != link { try insertLink(updated) }
+                } else {
+                    try deleteLink(id: link.id)
                 }
             }
         }
-        let remainingIDs = Set(links.map(\.id))
-        for link in storedLinks where !remainingIDs.contains(link.id) {
-            try deleteLink(id: link.id)
+        for (fragment, owner) in owners {
+            try transferMergedNoteState(fragment: fragment, owner: owner)
+            try recordImportedNoteAlias(fragment: fragment, owner: owner)
+            try deleteCard(id: fragment)
         }
+        if !owners.isEmpty { try markImportedNoteMergesResolved(in: topicID) }
         return (cards, links)
+    }
+
+    func legacyMergedNoteGroups(in cards: [NoteCard]) throws -> [UUID: [UUID]] {
+        let groups = MarginNoteMergedNotes.legacyGroups(in: cards)
+        guard !groups.isEmpty else { return [:] }
+        let topicIDs = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.topicId) })
+        var checked = [UUID: Bool]()
+        var unresolved = [UUID: [UUID]]()
+        for (owner, fragments) in groups {
+            guard let topicID = topicIDs[owner] else { continue }
+            if checked[topicID] == nil {
+                checked[topicID] = try withStatement("SELECT 1 FROM imported_note_merge_state WHERE topic_id = ?") { statement in
+                    bind(topicID.uuidString, to: 1, in: statement)
+                    return sqlite3_step(statement) == SQLITE_ROW
+                }
+            }
+            if checked[topicID] == false { unresolved[owner] = fragments }
+        }
+        return unresolved
+    }
+
+    func markImportedNoteMergesResolved(in topicID: UUID) throws {
+        try withStatement("INSERT OR IGNORE INTO imported_note_merge_state(topic_id) VALUES (?)") { statement in
+            bind(topicID.uuidString, to: 1, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    func recordImportedNoteAlias(fragment: UUID, owner: UUID) throws {
+        try withStatement("""
+            INSERT OR REPLACE INTO imported_note_aliases(fragment_id, owner_id, topic_id)
+            SELECT ?, id, topic_id FROM cards WHERE id = ?
+            """) { statement in
+            bind(fragment.uuidString, to: 1, in: statement)
+            bind(owner.uuidString, to: 2, in: statement)
+            try requireDone(statement)
+        }
+    }
+
+    private func transferMergedNoteState(fragment: UUID, owner: UUID) throws {
+        for sql in [
+            "INSERT OR IGNORE INTO deck_cards(deck_id, card_id, created_at) SELECT deck_id, ?, created_at FROM deck_cards WHERE card_id = ?",
+            "UPDATE OR IGNORE review_items SET card_id = ? WHERE card_id = ?",
+            "UPDATE imported_note_aliases SET owner_id = ? WHERE owner_id = ?"
+        ] {
+            try withStatement(sql) { statement in
+                bind(owner.uuidString, to: 1, in: statement)
+                bind(fragment.uuidString, to: 2, in: statement)
+                try requireDone(statement)
+            }
+        }
+        try delete("DELETE FROM review_items WHERE card_id = ?", fragment.uuidString)
     }
 
     public func topicIDsForCardBookMD5(_ md5: String) throws -> [UUID] {

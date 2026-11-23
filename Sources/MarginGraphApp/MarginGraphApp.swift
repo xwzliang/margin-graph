@@ -2835,7 +2835,7 @@ final class AppModel: ObservableObject {
 
     func previewNoteLink(_ url: URL) {
         guard case .openCard(let id) = DeepLinkHandler.parse(url) else { return }
-        guard let card = try? database.getCard(id: id) else {
+        guard let card = try? database.cardForNoteLink(id: id) else {
             let alert = NSAlert()
             alert.messageText = "Linked Note Unavailable"
             alert.informativeText = "This note is not in the current library. Import its notebook or switch libraries."
@@ -2854,7 +2854,7 @@ final class AppModel: ObservableObject {
             enterStudyWorkspace(topic: topic)
 
         case .openCard(let cardId):
-            guard let card = try? database.getCard(id: cardId) else {
+            guard let card = try? database.cardForNoteLink(id: cardId) else {
                 let alert = NSAlert()
                 alert.messageText = "Linked Note Unavailable"
                 alert.informativeText = "This note is not in the current library. Import its notebook or switch to the library containing it."
@@ -2867,8 +2867,9 @@ final class AppModel: ObservableObject {
             }
             reloadStudySet()
             isInStudyWorkspace = true
-            select(card: card)
-            cardIDToCenter = card.id
+            let visibleCard = (try? database.cardForNoteLink(id: cardId)) ?? card
+            select(card: visibleCard)
+            cardIDToCenter = visibleCard.id
         }
     }
 
