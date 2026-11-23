@@ -155,6 +155,26 @@ final class ReferenceWorkflowTests: XCTestCase {
                                                   replacementDocumentPaths: [source.standardizedFileURL.path: relocated.filePath]), manual)
     }
 
+    func testReexportRemovesOnlyUneditedLegacyTagComment() throws {
+        let topic = Topic(title: "Notebook")
+        let old = NoteCard(topicId: topic.id, title: "Card", highlightText: "Excerpt", notesText: "#Important")
+        let existing = OrgExporter.export(topic: topic, cards: [old])
+        var updated = old
+        updated.tags = ["Important"]
+        updated.notesText = ""
+        let generated = OrgExporter.export(topic: topic, cards: [updated])
+
+        let saved = OrgLiteratureLibrary.merge(existing: existing, generated: generated)
+        XCTAssertTrue(saved.contains("** Card :Important:"))
+        XCTAssertFalse(saved.components(separatedBy: "\n").contains("#Important"))
+        XCTAssertEqual(OrgLiteratureLibrary.merge(existing: saved, generated: generated), saved)
+
+        let edited = existing.replacingOccurrences(of: "Excerpt", with: "Edited in Emacs")
+        let preserved = OrgLiteratureLibrary.merge(existing: edited, generated: generated)
+        XCTAssertTrue(preserved.contains("** Card :Important:"))
+        XCTAssertTrue(preserved.components(separatedBy: "\n").contains("#Important"))
+    }
+
     func testNewBookAndVideoUseTheEbibCaptureHeaders() throws {
         let folder = try tempDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }

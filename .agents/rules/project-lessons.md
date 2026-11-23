@@ -1291,6 +1291,10 @@ Structure each entry concisely with actionable rules:
   files by their file-level citation key, preserve their Org IDs and hand-written
   content, and insert only card IDs that are missing. Keep PDF scanning and parsing
   off the main actor.
+- **Re-exported card tags**: Match existing Org headings by card ID and add incoming
+  tags while retaining the heading title and its Emacs tags. Strip a legacy trailing
+  hashtag comment only when its MarginGraph link, generated body, and prior merged
+  marker identify an unchanged export.
 - **Reference layout**: Give the bibliography tabs a bounded height and allocate
   the remaining height to the list and detail panes. An unconstrained native split
   view can leave the list at the bottom of a tall shelf window.
