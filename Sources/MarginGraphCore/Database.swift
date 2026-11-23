@@ -997,28 +997,37 @@ public final class Database: @unchecked Sendable {
     }
 
     public func dueCardCountsByTopic(asOf date: Date = Date()) throws -> [UUID: Int] {
+        try cardCountsAndDueCountsByTopic(asOf: date).due
+    }
+
+    public func cardCountsAndDueCountsByTopic(
+        asOf date: Date = Date()
+    ) throws -> (total: [UUID: Int], due: [UUID: Int]) {
         // Count cards through the covering topic index, then visit card rows only
         // for reviews scheduled in the future. Unreviewed cards are already due.
         let sql = """
-        SELECT topic_id, sum(delta)
+        SELECT topic_id, sum(total), sum(total) - sum(deferred)
         FROM (
-            SELECT topic_id, count(*) AS delta FROM cards GROUP BY topic_id
+            SELECT topic_id, count(*) AS total, 0 AS deferred FROM cards GROUP BY topic_id
             UNION ALL
-            SELECT c.topic_id, -count(*) FROM review_items r
+            SELECT c.topic_id, 0, count(*) FROM review_items r
             CROSS JOIN cards c ON c.id = r.card_id
             WHERE r.due_date > ? GROUP BY c.topic_id
         )
-        GROUP BY topic_id HAVING sum(delta) > 0
+        GROUP BY topic_id
         """
         return try withStatement(sql) { statement in
             bind(date.timeIntervalSince1970, to: 1, in: statement)
-            var results: [UUID: Int] = [:]
+            var totals: [UUID: Int] = [:]
+            var dueCounts: [UUID: Int] = [:]
             while sqlite3_step(statement) == SQLITE_ROW {
                 if let topicIDStr = text(statement, 0), let topicID = UUID(uuidString: topicIDStr) {
-                    results[topicID] = Int(sqlite3_column_int(statement, 1))
+                    totals[topicID] = Int(sqlite3_column_int64(statement, 1))
+                    let due = Int(sqlite3_column_int64(statement, 2))
+                    if due > 0 { dueCounts[topicID] = due }
                 }
             }
-            return results
+            return (totals, dueCounts)
         }
     }
 

@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 public extension SRSEngine {
     static func calculate(
@@ -12,6 +13,13 @@ public extension SRSEngine {
 }
 
 public extension Database {
+    private static let dueCardsInTopic = """
+        FROM cards c WHERE c.topic_id = ?
+        AND NOT EXISTS (
+            SELECT 1 FROM review_items r WHERE r.card_id = c.id AND r.due_date > CAST(? AS REAL)
+        )
+        """
+
     func insertReviewItem(_ item: ReviewItem) throws {
         try upsertReviewItem(item)
     }
@@ -22,14 +30,23 @@ public extension Database {
 
     func dueCardsForTopic(id: UUID, date: Date = Date()) throws -> [NoteCard] {
         try cards(
-            sql: """
-            SELECT c.* FROM cards c WHERE topic_id = ?
-            AND NOT EXISTS (
-                SELECT 1 FROM review_items r WHERE r.card_id = c.id AND r.due_date > CAST(? AS REAL)
-            ) ORDER BY c.created_at
-            """,
+            sql: "SELECT c.* \(Self.dueCardsInTopic) ORDER BY c.created_at",
             values: [id.uuidString, String(date.timeIntervalSince1970)]
         )
+    }
+
+    func dueCardIDsForTopic(id: UUID, date: Date = Date()) throws -> Set<UUID> {
+        try withStatement("SELECT c.id \(Self.dueCardsInTopic)") { statement in
+            bind(id.uuidString, to: 1, in: statement)
+            bind(date.timeIntervalSince1970, to: 2, in: statement)
+            var ids = Set<UUID>()
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let id = text(statement, 0).flatMap(UUID.init(uuidString:)) {
+                    ids.insert(id)
+                }
+            }
+            return ids
+        }
     }
 
     @discardableResult

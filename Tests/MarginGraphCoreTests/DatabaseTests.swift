@@ -238,8 +238,13 @@ final class DatabaseTests: XCTestCase {
 
         try db.insertReviewItem(ReviewItem(cardId: card2.id, dueDate: futureReview.dueDate))
         XCTAssertEqual(try db.dueCardCountsByTopic(), [topic2.id: 1])
+        let combinedCounts = try db.cardCountsAndDueCountsByTopic()
+        XCTAssertEqual(combinedCounts.total, counts)
+        XCTAssertEqual(combinedCounts.due, [topic2.id: 1])
+        XCTAssertTrue(try db.dueCardIDsForTopic(id: topic1.id).isEmpty)
         XCTAssertTrue(try db.dueCardsForTopic(id: topic1.id).isEmpty)
         XCTAssertEqual(try db.dueCardCountsByTopic(asOf: futureReview.dueDate)[topic1.id], 2)
+        XCTAssertEqual(try db.dueCardIDsForTopic(id: topic1.id, date: futureReview.dueDate), [card1.id, card2.id])
         XCTAssertEqual(Set(try db.dueCardsForTopic(id: topic1.id, date: futureReview.dueDate).map(\.id)), [card1.id, card2.id])
     }
 

@@ -694,15 +694,18 @@ public final class MarginNoteImporter {
     @discardableResult
     public func importInto(
         _ database: Database,
+        beforeCommit: ((MarginNoteImportResult) throws -> Void)? = nil,
         conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?
     ) throws -> MarginNoteImportResult? {
-        try Self.apply(try read(), to: database, retainingPackageAt: url, conflictResolver: conflictResolver)
+        try Self.apply(try read(), to: database, retainingPackageAt: url,
+                       beforeCommit: beforeCommit, conflictResolver: conflictResolver)
     }
 
     /// Resolve every prompt before changing the catalog, then replace notes and their unused
     /// predecessor documents together. A different imported hash is still the replacement PDF.
     static func apply(_ result: MarginNoteImportResult, to database: Database,
                       retainingPackageAt packageURL: URL? = nil,
+                      beforeCommit: ((MarginNoteImportResult) throws -> Void)? = nil,
                       conflictResolver: ((_ existingTopic: Topic, _ importedTopic: Topic) -> NotebookConflictResolution)?) throws -> MarginNoteImportResult? {
         let existingTopics = try database.allTopics()
         var decisions: [(Topic, Topic?, NotebookConflictResolution)] = []
@@ -773,6 +776,7 @@ public final class MarginNoteImporter {
             if let packageURL {
                 try ImportedPackageStore.retain(url: packageURL, result: applied, database: database)
             }
+            try beforeCommit?(applied)
             return applied
         }
     }

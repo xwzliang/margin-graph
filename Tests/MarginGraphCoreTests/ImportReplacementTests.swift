@@ -3,6 +3,25 @@ import PDFKit
 @testable import MarginGraphCore
 
 final class ImportReplacementTests: XCTestCase {
+    func testBeforeCommitReadsMergedNotebookAndRollsBackOnFailure() throws {
+        let db = try Database(inMemory: true)
+        let existing = Topic(title: "Notebook")
+        let original = NoteCard(topicId: existing.id, highlightText: "Existing")
+        try db.insertTopic(existing)
+        try db.insertCard(original)
+        let incoming = Topic(title: existing.title)
+        let added = NoteCard(topicId: incoming.id, highlightText: "Imported")
+
+        XCTAssertThrowsError(try MarginNoteImporter.apply(
+            .init(topics: [incoming], documents: [], cards: [added]), to: db, beforeCommit: { applied in
+                XCTAssertEqual(applied.topics.map(\.id), [existing.id])
+                XCTAssertEqual(Set(try db.cardsForTopic(id: existing.id).map(\.id)), [original.id, added.id])
+                throw DatabaseError.encoding
+            }
+        ) { _, _ in .merge })
+        XCTAssertEqual(try db.cardsForTopic(id: existing.id).map(\.id), [original.id])
+    }
+
     func testImportLinksCardsToCanonicalDocumentWithoutLibraryRepair() throws {
         let db = try Database(inMemory: true)
         let existing = Document(title: "Book", filePath: "/tmp/previous.pdf", md5: "existing", totalPages: 10)

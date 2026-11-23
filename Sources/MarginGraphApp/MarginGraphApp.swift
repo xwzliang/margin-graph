@@ -365,8 +365,9 @@ final class AppModel: ObservableObject {
             decks = (try? database.allDecks()) ?? []
             deckCounts = (try? database.deckCardCounts()) ?? [:]
             dueDeckCounts = (try? database.dueDeckCardCounts()) ?? [:]
-            topicCounts = (try? database.cardCountsByTopic()) ?? [:]
-            dueTopicCounts = (try? database.dueCardCountsByTopic()) ?? [:]
+            let counts = try? database.cardCountsAndDueCountsByTopic()
+            topicCounts = counts?.total ?? [:]
+            dueTopicCounts = counts?.due ?? [:]
             deckReviews = (try? database.allDeckReviews()) ?? [:]
             documentCounts = (try? database.cardCountsByDocument()) ?? [:]
         }
@@ -636,6 +637,36 @@ final class AppModel: ObservableObject {
         }
     }
 
+    private struct StudySetData: Sendable {
+        var documents: [Document]
+        let cards: [NoteCard]
+        let links: [CardLink]
+        let dueCardIDs: Set<UUID>
+
+        init(database: Database, topicID: UUID) {
+            documents = (try? database.documentsForTopic(id: topicID)) ?? []
+            cards = (try? database.cardsForTopic(id: topicID)) ?? []
+            links = (try? database.linksForTopic(id: topicID)) ?? []
+            dueCardIDs = (try? database.dueCardIDsForTopic(id: topicID)) ?? []
+        }
+    }
+
+    private func updateStudySet(from data: StudySetData) {
+        var cards = NoteCard.filterMarginNoteDocumentRootCard(from: data.cards)
+        var topicLinks = data.links
+        if cards.count < data.cards.count {
+            let removed = Set(data.cards.map(\.id)).subtracting(cards.map(\.id))
+            topicLinks.removeAll { removed.contains($0.sourceCardId) || removed.contains($0.targetCardId) }
+        }
+        studyDocuments = data.documents
+        if !cards.isEmpty {
+            backfillHighlightTextsFromDocuments(cards: &cards, documents: studyDocuments.isEmpty ? documents : studyDocuments)
+        }
+        mindMapCards = cards
+        links = topicLinks
+        dueFlashcards = cards.filter { data.dueCardIDs.contains($0.id) }
+    }
+
     func reloadStudySet() {
         guard let topicID = selectedTopicID else {
             studyDocuments = []
@@ -644,28 +675,7 @@ final class AppModel: ObservableObject {
             dueFlashcards = []
             return
         }
-        var cards = (try? database.cardsForTopic(id: topicID)) ?? []
-        var topicLinks = (try? database.linksForTopic(id: topicID)) ?? []
-
-        let filtered = NoteCard.filterMarginNoteDocumentRootCard(from: cards)
-        if filtered.count < cards.count {
-            let filteredIDs = Set(filtered.map(\.id))
-            let removedIDs = Set(cards.map(\.id)).subtracting(filteredIDs)
-            topicLinks.removeAll { removedIDs.contains($0.sourceCardId) || removedIDs.contains($0.targetCardId) }
-            cards = filtered
-        }
-
-        studyDocuments = (try? database.documentsForTopic(id: topicID)) ?? []
-        if !cards.isEmpty {
-            backfillHighlightTextsFromDocuments(cards: &cards, documents: studyDocuments.isEmpty ? documents : studyDocuments)
-        }
-        mindMapCards = cards
-        links = topicLinks
-        dueFlashcards = (try? database.dueCardsForTopic(id: topicID)) ?? []
-        if !mindMapCards.isEmpty {
-            let validIDs = Set(mindMapCards.map(\.id))
-            dueFlashcards.removeAll { !validIDs.contains($0.id) }
-        }
+        updateStudySet(from: StudySetData(database: database, topicID: topicID))
 
         if let activeDocument, studyDocuments.contains(where: { $0.md5 == activeDocument.md5 }) {
             reloadDocumentCards()
@@ -1269,6 +1279,46 @@ final class AppModel: ObservableObject {
         self.topicMindZoom.removeAll()
     }
 
+    private struct ImportedWorkspace: Sendable {
+        let topicID: UUID
+        var studySet: StudySetData
+        var document: Document?
+        let bookmarks: Set<Int>
+        let catalog: LibraryCatalog
+
+        init?(result: MarginNoteImportResult, database: Database) throws {
+            let importedDocument = result.documents.first { !$0.filePath.isEmpty }
+            let matchingTopic = importedDocument.flatMap { document in
+                result.topics.first { topic in
+                    topic.bookMD5List.contains { Database.bookHashesMatch($0, document.md5) }
+                }
+            }
+            guard let topic = matchingTopic ?? result.topics.first else { return nil }
+            topicID = topic.id
+            studySet = StudySetData(database: database, topicID: topic.id)
+            document = studySet.documents.first { $0.id == importedDocument?.id }
+                ?? studySet.documents.first { $0.md5 == topic.lastDocumentMD5 }
+                ?? studySet.documents.first
+
+            let visitedAt = Date()
+            if var opened = document {
+                try AppModel.saveDocumentVisit(opened, topicID: topicID, at: visitedAt, in: database)
+                opened.lastVisited = visitedAt
+                document = opened
+                if let index = studySet.documents.firstIndex(where: { $0.id == opened.id }) {
+                    studySet.documents[index] = opened
+                }
+                bookmarks = (try? database.getBookmarks(for: opened.md5)) ?? []
+            } else {
+                try database.updateTopicUpdatedAt(id: topicID, date: visitedAt)
+                bookmarks = []
+            }
+            // Capture the catalog and workspace before SQLite releases its write
+            // lock and SMB may invalidate the pages the transaction just touched.
+            catalog = LibraryCatalog(database: database)
+        }
+    }
+
     func importMarginNoteOrPackage(url: URL) async {
         guard !isImportingMarginNote, !isOpeningDatabase else { return }
         flushPendingPositions()
@@ -1281,22 +1331,31 @@ final class AppModel: ObservableObject {
 
         do {
             let imported = try await Task.detached(priority: .userInitiated) {
-                let result = try MarginNoteImporter(url: url).importInto(database) { existing, imported in
+                var workspace: ImportedWorkspace?
+                _ = try MarginNoteImporter(url: url).importInto(database, beforeCommit: { result in
+                    workspace = try ImportedWorkspace(result: result, database: database)
+                }) { existing, imported in
                     // The importer asks before its write transaction holds the database lock.
                     DispatchQueue.main.sync { prompt(existing, imported) }
                 }
-                return result.map { ($0, LibraryCatalog(database: database)) }
+                return workspace.map { workspace in
+                    (workspace, workspace.document.flatMap(Self.loadPDFManager))
+                }
             }.value
-            guard let (result, catalog) = imported else { return }
-            updateLibrary(from: catalog)
-            if let firstDoc = result.documents.first(where: { !$0.filePath.isEmpty }) {
-                openDocumentInReader(document: firstDoc)
-            } else if let firstTopic = result.topics.first {
-                try? database.updateTopicUpdatedAt(id: firstTopic.id)
-                selectTopic(firstTopic)
-                workspaceMode = .splitView
-                isInStudyWorkspace = true
-            }
+            guard let (workspace, loadedPDF) = imported else { return }
+            updateLibrary(from: workspace.catalog)
+            selectedTopicID = workspace.topicID
+            selectedCardID = nil
+            jumpTarget = nil
+            activeToolbarOwner = .none
+            closeMindMapSearch()
+            activeDocument = workspace.document
+            manager = loadedPDF
+            documentBookmarks = workspace.bookmarks
+            updateStudySet(from: workspace.studySet)
+            reloadDocumentCards()
+            workspaceMode = .splitView
+            isInStudyWorkspace = true
         } catch {
             let alert = NSAlert(error: error)
             alert.runModal()
@@ -1556,7 +1615,7 @@ final class AppModel: ObservableObject {
             reloadDocumentCards()
             return
         }
-        guard let loaded = try? PDFDocumentManager(url: URL(fileURLWithPath: document.filePath), md5: document.md5) else { return }
+        guard let loaded = Self.loadPDFManager(for: document) else { return }
         activeDocument = document
         manager = loaded
         recordDocumentVisit(document)
@@ -1564,16 +1623,27 @@ final class AppModel: ObservableObject {
         reloadDocumentCards()
     }
 
+    private nonisolated static func loadPDFManager(for document: Document) -> PDFDocumentManager? {
+        let url = URL(fileURLWithPath: document.filePath)
+        let type = document.documentType.isEmpty ? MediaDocumentHelper.documentType(for: url) : document.documentType
+        guard type != "video", type != "audio" else { return nil }
+        return try? PDFDocumentManager(url: url, md5: document.md5)
+    }
+
+    private nonisolated static func saveDocumentVisit(_ document: Document, topicID: UUID?, at date: Date, in database: Database) throws {
+        try database.updateDocumentLastVisited(id: document.id, date: date)
+        if let topicID {
+            try database.updateTopicUpdatedAt(id: topicID, date: date)
+            try database.updateTopicLastDocument(id: topicID, md5: document.md5)
+        }
+    }
+
     // Opening a document changes recency, not library membership or review counts.
     // Keep the loaded library snapshot current without scanning the network database.
     private func recordDocumentVisit(_ document: Document) {
         let now = Date()
         try? database.transaction {
-            try database.updateDocumentLastVisited(id: document.id, date: now)
-            if let topicID = selectedTopicID {
-                try database.updateTopicUpdatedAt(id: topicID, date: now)
-                try database.updateTopicLastDocument(id: topicID, md5: document.md5)
-            }
+            try Self.saveDocumentVisit(document, topicID: selectedTopicID, at: now, in: database)
         }
         if let index = documents.firstIndex(where: { $0.id == document.id }) {
             documents[index].lastVisited = now
