@@ -1281,3 +1281,6 @@ Structure each entry concisely with actionable rules:
   Derive a valid default from the filtered results because SwiftUI List can clear
   its selection while the rows change. After closing the picker, focus the new
   value editor once its row exists.
+- **Reference search controls**: Share the clear button and focus behavior between
+  the bibliography list and field picker. Reserve space for the button within
+  the search bar and keep picker key handling on its input field.

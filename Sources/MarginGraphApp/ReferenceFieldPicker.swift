@@ -22,12 +22,12 @@ struct ReferenceFieldPicker: View {
             Text(entryType.isEmpty ? "Add Field" : "Add Field to @\(entryType)")
                 .font(.headline)
                 .lineLimit(1)
-            TextField("Search fields or enter a custom name", text: $query)
-                .textFieldStyle(.roundedBorder)
-                .focused($isSearchFocused)
-                .onKeyPress(.downArrow) { moveSelection(from: selected, by: 1, choices: choices) }
-                .onKeyPress(.upArrow) { moveSelection(from: selected, by: -1, choices: choices) }
-                .onSubmit { if let selected { add(selected) } }
+            ReferenceSearchBar(text: $query, focus: $isSearchFocused) {
+                TextField("Search fields or enter a custom name", text: $query)
+                    .onKeyPress(.downArrow) { moveSelection(from: selected, by: 1, choices: choices) }
+                    .onKeyPress(.upArrow) { moveSelection(from: selected, by: -1, choices: choices) }
+                    .onSubmit { if let selected { add(selected) } }
+            }
 
             if choices.isEmpty {
                 Text(emptyMessage)
