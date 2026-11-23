@@ -6,6 +6,7 @@ struct ReferencePage: View {
     @ObservedObject var workspace: ReferenceWorkspace
     @ObservedObject var model: AppModel
     @Binding var search: String
+    @FocusState private var isSearchFocused: Bool
     @State private var studyMatch: StudyMatch?
     @State private var linkEditor: LinkEditor?
     @State private var linkRevision = 0
@@ -218,11 +219,44 @@ struct ReferencePage: View {
         .disabled(workspace.busy)
     }
 
+    private var searchBar: some View {
+        HStack(spacing: 4) {
+            TextField("Search title, author, citation key, or ISBN", text: $search)
+                .textFieldStyle(.plain)
+                .focused($isSearchFocused)
+
+            if !search.isEmpty {
+                Button {
+                    search = ""
+                    isSearchFocused = true
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .help("Clear search")
+            }
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 3)
+        .frame(minHeight: 22)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
+        .overlay {
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(isSearchFocused ? Color.accentColor : Color(nsColor: .separatorColor),
+                              lineWidth: isSearchFocused ? 2 : 1)
+                .allowsHitTesting(false)
+        }
+    }
+
     private var entryList: some View {
         VStack(spacing: 0) {
             VStack(spacing: 8) {
-                TextField("Search title, author, citation key, or ISBN", text: $search)
-                    .textFieldStyle(.roundedBorder)
+                searchBar
                 HStack(spacing: 8) {
                     Button("Add Entry…") {
                         guard let file = workspace.selectedFile else { return }
