@@ -83,7 +83,7 @@ final class ReferenceWorkflowTests: XCTestCase {
         let file = folder.appendingPathComponent("old-capture.org")
         let entry = try BibTeXLibrary.entry("@book{Snyder_2005_SaveTheCat, title={Save the Cat!}}")
         let topic = Topic(title: "Notebook")
-        let first = NoteCard(topicId: topic.id, title: "Existing parent")
+        let first = NoteCard(topicId: topic.id, title: "Existing parent", tags: ["Important"])
         let sibling = NoteCard(topicId: topic.id, title: "New sibling", createdAt: Date(timeIntervalSince1970: 0))
         let child = NoteCard(topicId: topic.id, title: "New child", groupNoteId: first.id)
         let existing = """
@@ -97,7 +97,7 @@ final class ReferenceWorkflowTests: XCTestCase {
             * Save the Cat!
             Hand-edited introduction.
 
-            ** Existing parent (renamed in Emacs)
+            ** Existing parent (renamed in Emacs) :my_tag:
             :PROPERTIES:
             :ID: \(first.id.uuidString.lowercased())
             :END:
@@ -109,9 +109,9 @@ final class ReferenceWorkflowTests: XCTestCase {
         XCTAssertEqual(result.lastPathComponent, file.lastPathComponent)
         XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("new.org").path))
         let saved = try String(contentsOf: result, encoding: .utf8)
-        XCTAssertTrue(saved.hasPrefix(existing))
+        XCTAssertTrue(saved.hasPrefix(existing.replacingOccurrences(of: ":my_tag:", with: ":my_tag:Important:")))
         let headlines = saved.split(separator: "\n").filter { $0.hasPrefix("*") }.map(String.init)
-        XCTAssertEqual(headlines, ["* Save the Cat!", "** Existing parent (renamed in Emacs)", "*** New child", "** New sibling"])
+        XCTAssertEqual(headlines, ["* Save the Cat!", "** Existing parent (renamed in Emacs) :my_tag:Important:", "*** New child", "** New sibling"])
         _ = try OrgLiteratureLibrary.write(generated, reference: entry, filename: "new.org", directory: folder)
         XCTAssertEqual(try String(contentsOf: result, encoding: .utf8), saved)
     }

@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 9
+    private static let currentSchemaVersion: Int32 = 11
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -195,6 +195,9 @@ public final class Database: @unchecked Sendable {
             topic_id TEXT PRIMARY KEY REFERENCES topics(id) ON DELETE CASCADE
         );
         CREATE TABLE IF NOT EXISTS imported_comment_recovery(
+            document_md5 TEXT PRIMARY KEY REFERENCES imported_packages(document_md5) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS imported_tag_assignment_recovery(
             document_md5 TEXT PRIMARY KEY REFERENCES imported_packages(document_md5) ON DELETE CASCADE
         );
         """)
@@ -1085,7 +1088,7 @@ public final class Database: @unchecked Sendable {
         let storedLinks = try linksForTopic(id: topicID)
         var cards = storedCards
         var links = storedLinks
-        try ImportedPackageStore.recoverRichComments(in: &cards, database: self)
+        try ImportedPackageStore.recoverNoteMetadata(in: &cards, database: self)
         let groups = try legacyMergedNoteGroups(in: cards)
         let owners = MarginNoteMergedNotes.combine(cards: &cards, links: &links, groups: groups)
         MarginNoteHierarchy.restore(cards: &cards, links: &links)

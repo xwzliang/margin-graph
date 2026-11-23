@@ -407,10 +407,12 @@ public final class MarginNoteImporter {
 
         let topicRows = (try? rows(in: source, table: "ZTOPIC")) ?? []
         var topicKeyMap: [String: UUID] = [:]
+        var topicTagCatalogs: [UUID: [String: String]] = [:]
         var topics: [Topic] = topicRows.map { row in
             let rawKey = first(row, ["ZTOPICID", "ZUUID", "ZIDENTIFIER", "Z_PK"]) ?? UUID().uuidString
             let id = stableUUID(rawKey)
             topicKeyMap[rawKey] = id
+            topicTagCatalogs[id] = MarginNoteTags.catalog(first(row, ["ZHASHTAGS"]))
             var books = parseStringList(first(row, ["ZBOOKMD5LIST", "ZBOOKLIST", "ZBOOKMD5S"]))
                 .map { $0.replacingOccurrences(of: "BREAK_", with: "") }
             if let localMD5 = first(row, ["ZLOCALBOOKMD5"]), !localMD5.isEmpty {
@@ -565,7 +567,8 @@ public final class MarginNoteImporter {
                 }
             }
 
-            let notesText = first(row, ["ZNOTES_TEXT", "ZNOTESTEXT", "ZCOMMENTS"]) ?? ""
+            let assignment = MarginNoteTags.assigned(in: entries, catalog: topicTagCatalogs[topicId] ?? [:])
+            let notesText = assignment.comments(in: first(row, ["ZNOTES_TEXT", "ZNOTESTEXT", "ZCOMMENTS"]) ?? "")
             cards.append(NoteCard(
                 id: cardId,
                 topicId: topicId,
@@ -582,7 +585,10 @@ public final class MarginNoteImporter {
                 startPos: parsePoint(startPosRaw),
                 endPos: parsePoint(endPosRaw),
                 colorIndex: colorIndex,
-                tags: parseStringList(first(row, ["ZTAGS"])),
+                tags: MarginNoteTags.adding(
+                    assignment.tags,
+                    to: parseStringList(first(row, ["ZTAGS"]))
+                ),
                 highlightPicHash: picHash,
                 highlightRects: highlightRects,
                 mediaType: mediaType,
@@ -896,7 +902,12 @@ public final class MarginNoteImporter {
         }
     }
 
-    static func archivedRichComments(in archive: Data) throws -> [UUID: [RichNoteComment]] {
+    struct ArchivedNoteMetadata {
+        var richComments: [UUID: [RichNoteComment]] = [:]
+        var tags: [UUID: MarginNoteTags.Assignment] = [:]
+    }
+
+    static func archivedNoteMetadata(in archive: Data) throws -> ArchivedNoteMetadata {
         let fm = FileManager.default
         let directory = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -921,14 +932,27 @@ public final class MarginNoteImporter {
         let status = sqlite3_open_v2(notes.path, &source, SQLITE_OPEN_READONLY, nil)
         defer { sqlite3_close(source) }
         guard status == SQLITE_OK, let source else { throw DatabaseError.open("Unable to read retained MarginNote notes") }
-        let records = (try? rows(in: source, table: "ZBOOKNOTE", columns: "ZNOTEID, ZNOTES")) ?? []
-        var comments: [UUID: [RichNoteComment]] = [:]
+        let topics = (try? rows(in: source, table: "ZTOPIC", columns: "ZTOPICID, ZHASHTAGS")) ?? []
+        var catalogs = [String: [String: String]]()
+        for topic in topics {
+            if let id = topic["ZTOPICID"] ?? nil {
+                catalogs[id] = MarginNoteTags.catalog(topic["ZHASHTAGS"] ?? nil)
+            }
+        }
+        let records = (try? rows(in: source, table: "ZBOOKNOTE", columns: "ZNOTEID, ZTOPICID, ZNOTES"))
+            ?? (try? rows(in: source, table: "ZBOOKNOTE", columns: "ZNOTEID, ZNOTES")) ?? []
+        var metadata = ArchivedNoteMetadata()
         for record in records {
             guard let id = (record["ZNOTEID"] ?? nil).flatMap(UUID.init(uuidString:)) else { continue }
-            let rich = richComments(in: noteEntries(record["ZNOTES"] ?? nil))
-            if !rich.isEmpty { comments[id] = rich }
+            let entries = noteEntries(record["ZNOTES"] ?? nil)
+            let rich = richComments(in: entries)
+            if !rich.isEmpty { metadata.richComments[id] = rich }
+            if let topicID = record["ZTOPICID"] ?? nil, let catalog = catalogs[topicID] {
+                let assignment = MarginNoteTags.assigned(in: entries, catalog: catalog)
+                if !assignment.tags.isEmpty { metadata.tags[id] = assignment }
+            }
         }
-        return comments
+        return metadata
     }
 
     private func parsePoint(_ raw: String?) -> CGPoint? {

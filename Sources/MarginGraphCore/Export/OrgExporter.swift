@@ -207,7 +207,7 @@ public enum OrgExporter {
         card.mediaType == "video" || card.mediaType == "audio" || card.videoStartTime != nil
     }
 
-    private static let tagCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_@#%"))
+    static let tagCharacters = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_@#%"))
     private static let structuralLine = try! NSRegularExpression(pattern: #"^(?:\*+[ \t]|[ \t]*(?:#\+|:[\w@#%]+:[ \t]*$|%%\())"#)
 
     private static func singleLine(_ text: String) -> String {

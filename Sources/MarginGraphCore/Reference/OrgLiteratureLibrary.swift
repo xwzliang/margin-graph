@@ -119,7 +119,15 @@ public enum OrgLiteratureLibrary {
         return result
     }
 
-    /// Reuse existing card nodes and text. Insert only new headings, under the nearest known parent.
+    private static func headlineTags(_ headline: String) -> (range: Range<String.Index>, names: [String])? {
+        guard let suffix = headline.split(whereSeparator: \.isWhitespace).last,
+              suffix.first == ":", suffix.last == ":" else { return nil }
+        let names = suffix.dropFirst().dropLast().split(separator: ":", omittingEmptySubsequences: false)
+        guard names.allSatisfy({ !$0.isEmpty && $0.unicodeScalars.allSatisfy(OrgExporter.tagCharacters.contains) }) else { return nil }
+        return (suffix.startIndex..<suffix.endIndex, names.map(String.init))
+    }
+
+    /// Keep existing prose and titles. Add generated tags and new nodes by card ID.
     static func merge(existing: String, generated: String) -> String {
         let newline = existing.contains("\r\n") ? "\r\n" : "\n"
         let currentLines = existing.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
@@ -141,6 +149,7 @@ public enum OrgLiteratureLibrary {
             let level: Int
         }
         var additions: [Anchor: [String]] = [:]
+        var output = currentLines
         var parents: [(original: Int, output: Int, anchor: Anchor)] = []
         let end = Anchor(insertion: currentLines.count, level: 0)
         if let existingRoot {
@@ -153,6 +162,21 @@ public enum OrgLiteratureLibrary {
             while let parent = parents.last, parent.original >= heading.level { parents.removeLast() }
             let parent = parents.last ?? (1, 1, end)
             if let id = heading.id, let current = indexed[id] {
+                if let incoming = headlineTags(heading.title) {
+                    let headline = output[current.start]
+                    let existing = headlineTags(headline)
+                    var tags = existing?.names ?? []
+                    let missing = incoming.names.filter { !tags.contains($0) }
+                    if !missing.isEmpty {
+                        tags += missing
+                        let suffix = ":\(tags.joined(separator: ":")):"
+                        if let range = existing?.range {
+                            output[current.start].replaceSubrange(range, with: suffix)
+                        } else {
+                            output[current.start] += " " + suffix
+                        }
+                    }
+                }
                 parents.append((heading.level, current.level, Anchor(insertion: current.subtreeEnd, level: current.level)))
                 continue
             }
@@ -162,8 +186,7 @@ public enum OrgLiteratureLibrary {
             additions[parent.anchor, default: []].append(contentsOf: newLines[(heading.start + 1)..<heading.bodyEnd])
             parents.append((heading.level, level, parent.anchor))
         }
-        guard !additions.isEmpty else { return existing }
-        var output = currentLines
+        guard !additions.isEmpty || output != currentLines else { return existing }
         // Insert earlier in the array last. When two ancestors end on the same line,
         // insert the deeper parent's children before the shallower parent's siblings.
         let anchors = additions.keys.sorted {

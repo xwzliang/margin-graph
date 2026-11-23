@@ -4,6 +4,75 @@ import AppKit
 @testable import MarginGraphCore
 
 final class MarginNoteImporterTests: XCTestCase {
+    func testImportsRegisteredHashtagsAndExportsThemAsOrgHeadlineTags() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let noteURL = folder.appendingPathComponent("source.marginnotes")
+        let zipURL = folder.appendingPathComponent("source.marginpkg")
+        let topic = Topic(title: "Notebook", bookMD5List: ["book"])
+        let marked = NoteCard(topicId: topic.id, bookMD5: "book", title: "Marked", notesText: "#Important")
+        let prose = NoteCard(topicId: topic.id, bookMD5: "book", title: "Prose", notesText: "Mention #Important here.")
+        let unregistered = NoteCard(topicId: topic.id, bookMD5: "book", title: "Unregistered", notesText: "#Other")
+        let mixed = NoteCard(topicId: topic.id, bookMD5: "book", title: "Mixed", notesText: "#Important\nKeep this comment.")
+        let cards = [marked, prose, unregistered, mixed]
+
+        var source: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(noteURL.path, &source), SQLITE_OK)
+        try exec(source, """
+        CREATE TABLE ZTOPIC (ZTOPICID TEXT, ZTITLE TEXT, ZHASHTAGS TEXT);
+        INSERT INTO ZTOPIC VALUES ('\(topic.id)', 'Notebook', '#Important');
+        CREATE TABLE ZBOOKNOTE (ZNOTEID TEXT, ZTOPICID TEXT, ZBOOKMD5 TEXT, ZNOTETITLE TEXT, ZNOTES_TEXT TEXT, ZNOTES BLOB);
+        """)
+        for card in cards {
+            let entries = card.notesText.components(separatedBy: "\n").map { ["type": "TextNote", "text": $0] }
+            let archive = try NSKeyedArchiver.archivedData(withRootObject: entries,
+                                                          requiringSecureCoding: false)
+            let hex = archive.map { String(format: "%02x", $0) }.joined()
+            try exec(source, """
+            INSERT INTO ZBOOKNOTE VALUES ('\(card.id)', '\(topic.id)', 'book', '\(card.title)', '\(card.notesText)', X'\(hex)');
+            """)
+        }
+        sqlite3_close(source)
+
+        let imported = try MarginNoteImporter(url: noteURL).read()
+        let importedTags = Dictionary(uniqueKeysWithValues: imported.cards.map { ($0.id, $0.tags) })
+        XCTAssertEqual(importedTags, [marked.id: ["Important"], prose.id: [], unregistered.id: [], mixed.id: ["Important"]])
+        let expectedComments = [marked.id: "", prose.id: prose.notesText,
+                                unregistered.id: unregistered.notesText, mixed.id: "Keep this comment."]
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: imported.cards.map { ($0.id, $0.notesText) }), expectedComments)
+
+        let zip = Process()
+        zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        zip.currentDirectoryURL = folder
+        zip.arguments = ["-q", zipURL.path, noteURL.lastPathComponent]
+        try zip.run()
+        zip.waitUntilExit()
+        XCTAssertEqual(zip.terminationStatus, 0)
+        let bytes = try Data(contentsOf: zipURL)
+        let db = try Database(inMemory: true)
+        try db.insertTopic(topic)
+        for card in cards { try db.insertCard(card) }
+        try db.withStatement("INSERT INTO imported_packages VALUES('book', '[]', X'', ?)") { statement in
+            let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            _ = bytes.withUnsafeBytes { sqlite3_bind_blob(statement, 1, $0.baseAddress, Int32(bytes.count), transient) }
+            try db.requireDone(statement)
+        }
+        let recovered = try db.notebookGraph(id: topic.id).cards
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: recovered.map { ($0.id, $0.tags) }), importedTags)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: recovered.map { ($0.id, $0.notesText) }), expectedComments)
+        let org = OrgExporter.export(topic: topic, cards: recovered)
+        XCTAssertTrue(org.contains("\n** Marked :Important:\n"))
+        XCTAssertTrue(org.contains("\n** Prose\n"))
+        XCTAssertTrue(org.contains("\n** Unregistered\n"))
+        XCTAssertFalse(org.contains("\n#Important\n"))
+
+        var edited = try XCTUnwrap(db.getCard(id: marked.id))
+        edited.tags = []
+        try db.updateCard(edited)
+        XCTAssertEqual(try db.notebookGraph(id: topic.id).cards.first(where: { $0.id == marked.id })?.tags, [])
+    }
+
     func testRecoverRichCommentFromRetainedPackage() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

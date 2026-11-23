@@ -1069,6 +1069,10 @@ Structure each entry concisely with actionable rules:
   - **Trap**: `ZNOTES_TEXT` flattens a MarginNote checklist into loose lines. The `HtmlNote` entry in `ZNOTES` provides the original RTF, including its table cells and headings.
   - **Rule**: Retain the RTF alongside the searchable plain text. Recover it from the scoped native notes database in a retained package once per document, matching present-day comment text before applying it. Use TextKit table layout for both card measurement and rendering.
 
+- **Read Native MarginNote Tag Assignments**:
+  - **Trap**: A package can leave `ZBOOKTAG` empty and include its hashtag catalog in `ZTOPIC.ZHASHTAGS`. The selected tag can be a standalone archived `TextNote` in `ZNOTES`, while the flattened comment appears to contain ordinary text.
+  - **Rule**: Match complete archived tag entries against their notebook's declared catalog. Import the tag into the field used by the outline and Org headlines. Remove that entry from flattened comments only where the source identifies it as a standalone tag and the match is unambiguous. Recover older retained imports once per document so intentional tag removal prevails.
+
 - **Keep Empty Canvas Notes as Drafts**:
   - **Trap**: Inserting a free canvas note before editing creates an empty local card when the user cancels.
   - **Rule**: Open a free note as an unsaved draft and insert it only after the user saves nonblank content.
