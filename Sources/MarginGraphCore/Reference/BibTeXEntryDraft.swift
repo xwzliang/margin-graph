@@ -69,6 +69,17 @@ public struct BibTeXEntryDraft {
         return try BibTeXLibrary.entry("@\(type){\(key)\(body)}")
     }
 
+    var fieldNames: Set<String> {
+        Set(fields.map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+    }
+
+    public func fieldNameForAddition(_ input: String) throws -> String {
+        let name = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Self.validName(name) else { throw BibTeXError.invalidFieldName(name) }
+        guard !fieldNames.contains(name.lowercased()) else { throw BibTeXError.duplicateField(name) }
+        return name
+    }
+
     private static func validName(_ name: String) -> Bool {
         guard let first = name.utf8.first, (65...90).contains(first) || (97...122).contains(first) else { return false }
         return name.utf8.allSatisfy(BibTeXLibrary.isName)

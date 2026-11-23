@@ -1274,3 +1274,10 @@ Structure each entry concisely with actionable rules:
   while displaying only one line, even with a vertical axis. Use a wrapping
   TextEditor with bounded height so titles, abstracts, and pasted notes are
   readable without pushing the editor actions below the sheet.
+- **Field suggestions**: Use the draft entry type for suggestions and exclude
+  existing names case-insensitively. Treat suggestions as a convenience and
+  validate custom names with the same rules used by the saved draft. Keep the
+  picker within the editor sheet so the form and its scroll position survive.
+  Derive a valid default from the filtered results because SwiftUI List can clear
+  its selection while the rows change. After closing the picker, focus the new
+  value editor once its row exists.

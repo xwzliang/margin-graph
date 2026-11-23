@@ -9,6 +9,8 @@ struct ReferenceEntryEditor: View {
     let save: (BibTeXEntry) async throws -> Void
     @State private var error: String?
     @State private var busy = false
+    @State private var isChoosingField = false
+    @State private var addedFieldID: UUID?
     private enum EditorFocus: Hashable {
         case fieldName(UUID)
         case fieldValue(UUID)
@@ -71,8 +73,30 @@ struct ReferenceEntryEditor: View {
         .textFieldStyle(.roundedBorder)
         .padding(20)
         .frame(width: 630, height: 530)
+        .disabled(isChoosingField)
+        .accessibilityHidden(isChoosingField)
+        .overlay {
+            if isChoosingField {
+                ZStack {
+                    Rectangle().fill(.black.opacity(0.14))
+                        .accessibilityHidden(true)
+                    ReferenceFieldPicker(draft: draft, add: addField) {
+                        isChoosingField = false
+                        focus = .addField
+                    }
+                    .frame(width: 470, height: 390)
+                    .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12)
+                            .strokeBorder(Color.secondary.opacity(0.25))
+                            .allowsHitTesting(false)
+                    }
+                    .shadow(radius: 8, y: 3)
+                }
+            }
+        }
         .disabled(busy)
-        .interactiveDismissDisabled(busy)
+        .interactiveDismissDisabled(busy || isChoosingField)
     }
 
     private var fieldList: some View {
@@ -106,15 +130,13 @@ struct ReferenceEntryEditor: View {
                     .padding(.trailing, 8)
                     .padding(.vertical, 2)
                 }
-                .onChange(of: draft.fields.last?.id) { _, id in
-                    guard let id, focus == .fieldName(id) else { return }
-                    scroll.scrollTo(id, anchor: .bottom)
+                .onChange(of: addedFieldID) { _, id in
+                    if let id { scroll.scrollTo(id, anchor: .bottom) }
                 }
 
                 Button {
-                    let field = BibTeXEntryDraft.Field()
-                    draft.fields.append(field)
-                    focus = .fieldName(field.id)
+                    focus = nil
+                    isChoosingField = true
                 } label: {
                     Label("Add Field", systemImage: "plus")
                 }
@@ -124,6 +146,15 @@ struct ReferenceEntryEditor: View {
             }
         }
         .frame(maxHeight: .infinity)
+    }
+
+    private func addField(_ name: String) {
+        guard isChoosingField else { return }
+        let field = BibTeXEntryDraft.Field(name: name)
+        draft.fields.append(field)
+        addedFieldID = field.id
+        isChoosingField = false
+        error = nil
     }
 
     private func valueEditor(_ field: Binding<BibTeXEntryDraft.Field>) -> some View {
@@ -144,6 +175,13 @@ struct ReferenceEntryEditor: View {
                     .scrollContentBackground(.hidden)
                     .padding(.vertical, 1)
                     .focused($focus, equals: .fieldValue(id))
+                    .task {
+                        guard addedFieldID == id else { return }
+                        await Task.yield()
+                        guard !Task.isCancelled, addedFieldID == id else { return }
+                        focus = .fieldValue(id)
+                        addedFieldID = nil
+                    }
                     .accessibilityLabel(label.isEmpty ? "Field value" : "\(label) value")
                     .onKeyPress(.tab, phases: .down) { press in
                         if press.modifiers.contains(.shift) {
