@@ -1308,6 +1308,8 @@ Structure each entry concisely with actionable rules:
   An exact PDF attachment path can identify an entry in an open bibliography.
   Load bibliography files when the reader opens the attached sheet to keep
   lookup off the document-opening path and preserve the reader position.
+  Use the shared MarginNote hover tooltip inside each reader’s tooltip
+  container, and keep the toolbar above the document tab strip.
 - **BibTeX field editor**: Keep field identities and original UTF-8 source ranges
   while editing. Reuse the BibTeX lexer and patch only changed names, values, and
   separators. Unchanged macros and LaTeX groups must survive, even when their

@@ -13,6 +13,6 @@ struct DocumentBibliographyButton: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Linked BibTeX")
-        .help("View the document’s linked BibTeX entry")
+        .marginNoteTooltip("Linked BibTeX")
     }
 }

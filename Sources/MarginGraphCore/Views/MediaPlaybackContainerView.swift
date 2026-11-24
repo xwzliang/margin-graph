@@ -245,6 +245,8 @@ public struct MediaPlaybackContainerView: View {
                 .foregroundStyle(MarginNoteTheme.separatorColor),
             alignment: .bottom
         )
+        .tooltipContainer()
+        .zIndex(1)
     }
 
     // MARK: - Audio Player View
