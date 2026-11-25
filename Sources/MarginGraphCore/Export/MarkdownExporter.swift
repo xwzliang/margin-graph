@@ -2,7 +2,7 @@ import Foundation
 
 public enum MarkdownExporter {
     public static func export(topic: Topic, cards: [NoteCard]) -> String {
-        let grouped = Dictionary(grouping: cards, by: { $0.groupNoteId })
+        let grouped = OutlineHierarchy.group(cards)
         var lines: [String] = ["# \(escape(topic.title))", ""]
 
         func append(_ card: NoteCard, depth: Int) {
@@ -30,22 +30,16 @@ public enum MarkdownExporter {
             }
             lines.append("")
 
-            for child in (grouped[card.id] ?? []).sorted(by: cardOrder) {
+            for child in grouped[card.id] ?? [] {
                 append(child, depth: depth + 1)
             }
         }
 
-        for root in (grouped[nil] ?? []).sorted(by: cardOrder) {
+        for root in grouped[nil] ?? [] {
             append(root, depth: 0)
         }
 
         return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines) + "\n"
-    }
-
-    nonisolated private static func cardOrder(_ lhs: NoteCard, _ rhs: NoteCard) -> Bool {
-        let ly = lhs.mindPos?.y ?? CGFloat(lhs.createdAt.timeIntervalSince1970)
-        let ry = rhs.mindPos?.y ?? CGFloat(rhs.createdAt.timeIntervalSince1970)
-        return ly == ry ? lhs.createdAt < rhs.createdAt : ly < ry
     }
 
     private static func escape(_ value: String) -> String {

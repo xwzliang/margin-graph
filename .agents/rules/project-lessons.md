@@ -1333,3 +1333,5 @@ The study menu imports the file or directory selected in its open panel. Return 
 - **Reference search controls**: Share the clear button and focus behavior between
   the bibliography list and field picker. Reserve space for the button within
   the search bar and keep picker key handling on its input field.
+
+- **Markdown and OPML hierarchy**: A filtered notebook snapshot can omit a card’s parent. Promote that card to a root. In a parent cycle, cut one edge within the cycle so the attached branches keep their nesting. Verify every supplied card is emitted once.

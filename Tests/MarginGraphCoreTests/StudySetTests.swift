@@ -94,6 +94,30 @@ final class StudySetTests: XCTestCase {
         XCTAssertTrue(output.contains(relationID.uuidString))
     }
 
+    func testOutlineExportsPreserveDisconnectedBranchesOnce() {
+        let topic = Topic(title: "Imported")
+        let a = UUID(), b = UUID(), selfID = UUID()
+        let orphan = NoteCard(id: UUID(), topicId: topic.id, title: "Lost parent", groupNoteId: UUID())
+        let cards = [
+            NoteCard(id: UUID(), topicId: topic.id, title: "Cycle child", groupNoteId: a),
+            NoteCard(id: a, topicId: topic.id, title: "Cycle A", groupNoteId: b),
+            NoteCard(id: b, topicId: topic.id, title: "Cycle B", groupNoteId: a),
+            NoteCard(id: selfID, topicId: topic.id, title: "Self loop", groupNoteId: selfID),
+            NoteCard(id: UUID(), topicId: topic.id, title: "Nested note", groupNoteId: orphan.id),
+            orphan
+        ]
+        let markdown = MarkdownExporter.export(topic: topic, cards: cards)
+        let opml = OPMLExporter.export(topic: topic, cards: cards)
+        for card in cards {
+            XCTAssertEqual(markdown.components(separatedBy: card.title).count, 2)
+            XCTAssertEqual(opml.components(separatedBy: card.title).count, 2)
+        }
+        XCTAssertTrue(markdown.contains("## Lost parent"))
+        XCTAssertTrue(markdown.contains("- **Nested note**"))
+        XCTAssertTrue(markdown.contains("- **Cycle child**"))
+        XCTAssertTrue(opml.contains("text=\"Lost parent\" _note=\"\">\n      <outline text=\"Nested note\""))
+    }
+
     func testOPMLExporterProducesNestedXML() {
         let topic = Topic(title: "Research & Notes")
         let root = NoteCard(
