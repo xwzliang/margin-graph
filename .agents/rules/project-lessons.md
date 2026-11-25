@@ -1253,6 +1253,10 @@ Structure each entry concisely with actionable rules:
 - **Rule**: Use allocation-free byte switches for lexical classification, parse numeric operands only for relevant operators, and scan nested operands without creating unused strings. Preserve all-page extracted-text validation; faster exports must still remove footer text while retaining body text, vectors, navigation, and notes.
 - **Verification**: On the same 360-page Homo Deus file in a debug build, PDF processing fell from 116.38 s to 13.03 s; the complete package with 231 notes took 14.92 s. A fresh live app export succeeded, with PDF/mind map rendering and the reader More menu checked. The full 233-test suite passed, including the background 4,000-outline regression and mandatory performance/layout checks.
 
+## Cancelling the MarginNote import picker
+
+The study menu imports the file or directory selected in its open panel. Return immediately when the panel is dismissed or has no selected URL. Falling back to the standard MarginNote database on cancellation can start a full import without a selection.
+
 ## Single-Package Imports Must Stay Scoped to the Imported Notebook
 
 - **Trap**: A 132-note package had committed, but the importer still ran full-library discovery and repair on the UI thread. A stack sample showed SQLite reading unrelated card pages over SMB while collecting topic-to-book hashes. The shelf's old due-count query also read every card row.

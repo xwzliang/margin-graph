@@ -2672,22 +2672,12 @@ final class AppModel: ObservableObject {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
 
-        var sourceURL: URL?
-        if panel.runModal() == .OK, let selected = panel.url {
-            var isDirectory: ObjCBool = false
-            FileManager.default.fileExists(atPath: selected.path, isDirectory: &isDirectory)
-            sourceURL = isDirectory.boolValue
-                ? selected.appendingPathComponent("MarginNotes.sqlite")
-                : selected
-        } else {
-            let standard = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Containers/QReader.MarginStudyMac/Data/Library/Application Support/QReader.MarginNoteMac/MarginNotes.sqlite")
-            if FileManager.default.fileExists(atPath: standard.path) {
-                sourceURL = standard
-            }
-        }
-
-        guard let sourceURL else { return }
+        guard panel.runModal() == .OK, let selected = panel.url else { return }
+        var isDirectory: ObjCBool = false
+        FileManager.default.fileExists(atPath: selected.path, isDirectory: &isDirectory)
+        let sourceURL = isDirectory.boolValue
+            ? selected.appendingPathComponent("MarginNotes.sqlite")
+            : selected
         Task { await importMarginNoteOrPackage(url: sourceURL) }
     }
 
