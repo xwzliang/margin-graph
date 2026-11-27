@@ -9,6 +9,7 @@ public struct DocumentOptionsMenuView: View {
     public var onImportHighlights: (() -> Void)?
     public var onReplacePDF: (() -> Void)?
     public var onRestorePreviousPDF: (() -> Void)?
+    public var onRedoPDFReplacement: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
 
@@ -19,7 +20,8 @@ public struct DocumentOptionsMenuView: View {
         onOpenReadingAppearance: @escaping () -> Void,
         onImportHighlights: (() -> Void)? = nil,
         onReplacePDF: (() -> Void)? = nil,
-        onRestorePreviousPDF: (() -> Void)? = nil
+        onRestorePreviousPDF: (() -> Void)? = nil,
+        onRedoPDFReplacement: (() -> Void)? = nil
     ) {
         self.isReflowable = isReflowable
         self.displayMode = displayMode
@@ -28,6 +30,7 @@ public struct DocumentOptionsMenuView: View {
         self.onImportHighlights = onImportHighlights
         self.onReplacePDF = onReplacePDF
         self.onRestorePreviousPDF = onRestorePreviousPDF
+        self.onRedoPDFReplacement = onRedoPDFReplacement
     }
 
     public var body: some View {
@@ -65,7 +68,7 @@ public struct DocumentOptionsMenuView: View {
                 onSelectDisplayMode(.singlePage)
             }
 
-            if onImportHighlights != nil || onReplacePDF != nil || onRestorePreviousPDF != nil {
+            if onImportHighlights != nil || onReplacePDF != nil || onRestorePreviousPDF != nil || onRedoPDFReplacement != nil {
                 Divider()
                     .padding(.vertical, 3)
                     .padding(.horizontal, 4)
@@ -99,6 +102,16 @@ public struct DocumentOptionsMenuView: View {
                     icon: "arrow.uturn.backward",
                     isSelected: false,
                     action: onRestorePreviousPDF
+                )
+            }
+
+            if let onRedoPDFReplacement {
+                menuRow(
+                    id: "redo_pdf_replacement",
+                    title: "Redo PDF Replacement",
+                    icon: "arrow.uturn.forward",
+                    isSelected: false,
+                    action: onRedoPDFReplacement
                 )
             }
         }

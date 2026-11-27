@@ -4,7 +4,7 @@ import XCTest
 
 @MainActor
 final class PDFDocumentReplacementTests: XCTestCase {
-    func testReplacementAndRestoreUpdateOutlineAndKeepDocumentAndStudyState() throws {
+    func testRestoreAndRedoMultipleReplacementsPreserveDocumentAndStudyState() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let library = directory.appendingPathComponent("Library")
@@ -83,11 +83,91 @@ final class PDFDocumentReplacementTests: XCTestCase {
         XCTAssertNil(try PDFDocumentReplacement.previousURL(for: secondRestore.document, in: database))
         try database.syncAvailableDocuments(additionalSearchPaths: [library])
         XCTAssertEqual(try database.allDocuments().map(\.filePath), [original.path])
+
+        let next = try XCTUnwrap(PDFDocumentReplacement.history(for: secondRestore.document, in: database).next)
+        XCTAssertEqual(next, result.manager.url)
+        let firstRedo = try PDFDocumentReplacement.redo(secondRestore.document, to: next, in: database)
+        XCTAssertEqual(firstRedo.document, firstRestore.document)
+        XCTAssertEqual(firstRedo.manager.outline.first?.title, "New chapter")
+        let last = try XCTUnwrap(PDFDocumentReplacement.history(for: firstRedo.document, in: database).next)
+        XCTAssertEqual(last, later.manager.url)
+        let lastRedo = try PDFDocumentReplacement.redo(firstRedo.document, to: last, in: database)
+        XCTAssertEqual(lastRedo.document, later.document)
+        XCTAssertEqual(lastRedo.manager.outline.first?.title, "Another outline")
+        XCTAssertNil(try PDFDocumentReplacement.history(for: lastRedo.document, in: database).next)
+        XCTAssertEqual(try PDFDocumentReplacement.previousURL(for: lastRedo.document, in: database), next)
+        try database.syncAvailableDocuments(libraryRoot: library)
+        XCTAssertEqual(try database.allDocuments(), [later.document])
         XCTAssertEqual(try database.cardsForTopic(id: topic.id), cardsBeforeRestore)
         XCTAssertEqual(try database.getTopic(id: topic.id), savedTopic)
         XCTAssertEqual(try database.linksForTopic(id: topic.id), [link])
         XCTAssertEqual(try database.getBookmarks(for: hash), [1])
         XCTAssertEqual(try Data(contentsOf: result.manager.url), revisedBytes)
+    }
+
+    func testNewReplacementDiscardsRedoOnlyAfterItSucceeds() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("Book.pdf")
+        let revised = directory.appendingPathComponent("Revised.pdf")
+        let alternative = directory.appendingPathComponent("Alternative.pdf")
+        try makePDF(at: original, outline: "Original")
+        try makePDF(at: revised, outline: "First revision")
+        try makePDF(at: alternative, outline: "Different revision")
+
+        let database = try Database(inMemory: true)
+        let document = Document(title: "Book", filePath: original.path, md5: "book", totalPages: 2)
+        try database.insertDocument(document)
+        let first = try PDFDocumentReplacement.replace(document, with: revised, in: database, managedDirectory: directory)
+        _ = try PDFDocumentReplacement.restore(first.document, to: original, in: database)
+        try database.execute("""
+            CREATE TRIGGER reject_pdf_update BEFORE UPDATE OF file_path ON documents
+            BEGIN SELECT RAISE(ABORT, 'test failure'); END;
+            """)
+        XCTAssertThrowsError(try PDFDocumentReplacement.redo(document, to: first.manager.url, in: database))
+        XCTAssertThrowsError(try PDFDocumentReplacement.replace(document, with: alternative, in: database, managedDirectory: directory))
+        XCTAssertEqual(try database.getDocument(id: document.id), document)
+        XCTAssertEqual(try PDFDocumentReplacement.history(for: document, in: database).next, first.manager.url)
+        XCTAssertNil(try PDFDocumentReplacement.previousURL(for: first.document, in: database))
+        try database.execute("DROP TRIGGER reject_pdf_update")
+
+        let alternate = try PDFDocumentReplacement.replace(document, with: alternative, in: database, managedDirectory: directory)
+        XCTAssertNil(try PDFDocumentReplacement.history(for: document, in: database).next)
+        XCTAssertNil(try PDFDocumentReplacement.history(for: alternate.document, in: database).next)
+        let restored = try PDFDocumentReplacement.restore(alternate.document, to: original, in: database)
+        XCTAssertThrowsError(try PDFDocumentReplacement.redo(restored.document, to: first.manager.url, in: database))
+        XCTAssertEqual(try PDFDocumentReplacement.history(for: restored.document, in: database).next, alternate.manager.url)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: first.manager.url.path))
+    }
+
+    func testRedoCanRecoverAnEarlierRestoreWithOneRetiredReplacement() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let original = directory.appendingPathComponent("Book.pdf")
+        let managed = directory.appendingPathComponent(PDFDocumentReplacement.directoryName)
+        let revised = managed.appendingPathComponent("Revision/Book.pdf")
+        try makePDF(at: original, outline: "Original")
+        try makePDF(at: revised, outline: "First revision")
+
+        let database = try Database(inMemory: true)
+        let document = Document(title: "Book", filePath: original.path, md5: "book", totalPages: 2)
+        let ambiguous = Document(title: "Other book", filePath: "/another.pdf", md5: "other", totalPages: 2)
+        try database.insertDocument(document)
+        try database.insertDocument(ambiguous)
+        try database.recordRetiredDocumentPath(revised.path, md5: document.md5)
+        try database.recordRetiredDocumentPath(managed.appendingPathComponent("A/Another.pdf").path, md5: ambiguous.md5)
+        try database.recordRetiredDocumentPath(managed.appendingPathComponent("B/Another.pdf").path, md5: ambiguous.md5)
+        try database.createPDFReplacementRedoHistory(recoverLegacy: true)
+
+        XCTAssertNil(try PDFDocumentReplacement.history(for: ambiguous, in: database).next)
+        let next = try XCTUnwrap(PDFDocumentReplacement.history(for: document, in: database).next)
+        XCTAssertEqual(next.path, revised.standardizedFileURL.path)
+        let redone = try PDFDocumentReplacement.redo(document, to: next, in: database)
+        XCTAssertEqual(redone.manager.outline.first?.title, "First revision")
+        XCTAssertEqual(redone.document.id, document.id)
+        XCTAssertEqual(redone.document.md5, document.md5)
+        XCTAssertEqual(try PDFDocumentReplacement.previousURL(for: redone.document, in: database), original)
+        XCTAssertNil(try PDFDocumentReplacement.history(for: redone.document, in: database).next)
     }
 
     func testLegacyReplacementCanBeRestoredAfterMissingPDFIsRecovered() throws {

@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 13
+    private static let currentSchemaVersion: Int32 = 14
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -208,7 +208,8 @@ public final class Database: @unchecked Sendable {
             try execute("ALTER TABLE cards ADD COLUMN rich_comments TEXT;")
         }
         try transaction {
-            try createPDFReplacementHistory()
+            if version < 13 { try createPDFReplacementHistory() }
+            try createPDFReplacementRedoHistory(recoverLegacy: version == 13)
             try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
         }
     }

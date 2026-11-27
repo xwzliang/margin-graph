@@ -545,13 +545,24 @@ public extension Database {
             folderMap[key] = folder
         }
 
+        let restoredPDFPaths = try withStatement("""
+            SELECT redo.previous_path FROM pdf_replacement_redo AS redo
+            JOIN documents ON documents.md5 = redo.document_md5 AND documents.file_path = redo.previous_path
+            """) { statement in
+            var paths = Set<String>()
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let path = text(statement, 0) { paths.insert(path) }
+            }
+            return paths
+        }
         let allDocs = try allDocuments()
         for doc in allDocs {
             guard !doc.filePath.isEmpty else { continue }
             let docPath = doc.filePath
             let pathComponents = (docPath as NSString).pathComponents
-            // Managed PDF revisions keep the catalog folder of the original document.
-            guard !pathComponents.contains(PDFDocumentReplacement.directoryName) else { continue }
+            // Keep the catalog folder on both sides of a PDF replacement.
+            guard !pathComponents.contains(PDFDocumentReplacement.directoryName),
+                  !restoredPDFPaths.contains(docPath) else { continue }
             var folderPath: String? = nil
 
             // 1. Check if the document path is within a package bundle (*.marginbackupall or *.marginpkg)

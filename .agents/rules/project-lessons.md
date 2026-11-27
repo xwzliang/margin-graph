@@ -1357,3 +1357,11 @@ The study menu imports the file or directory selected in its open panel. Return 
 - **Discovery aliases**: Standardize both catalog and enumerated paths before
   comparing them. A restored PDF stored under `/var` can otherwise be rediscovered
   under `/private/var` as a second document.
+- Restore and Redo move the same history entry
+  between backward and forward history while switching the catalog path in
+  one transaction. A successful new replacement clears the document's forward
+  history without deleting PDF files. Validate the target again before switching.
+  For older restores, recover redo only from an unambiguous retired managed PDF
+  whose active document is back on its original path.
+  Folder repair must keep catalog placement on both sides. Consult the
+  active redo record when the restored file is outside managed storage.

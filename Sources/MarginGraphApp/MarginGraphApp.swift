@@ -1630,21 +1630,36 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func findPreviousPDF() async -> URL? {
+    func findPDFReplacementHistory() async -> PDFDocumentReplacement.History? {
         guard let document = activeDocument, document.documentType == "pdf" else { return nil }
         let sourceDatabase = database
         return await Task.detached {
-            try? PDFDocumentReplacement.previousURL(for: document, in: sourceDatabase)
+            try? PDFDocumentReplacement.history(for: document, in: sourceDatabase)
         }.value
     }
 
     func restorePreviousPDF(_ previous: URL) {
+        updatePDFVersion(status: "Restoring PDF…") { document, database in
+            try PDFDocumentReplacement.restore(document, to: previous, in: database)
+        }
+    }
+
+    func redoPDFReplacement(_ next: URL) {
+        updatePDFVersion(status: "Redoing PDF replacement…") { document, database in
+            try PDFDocumentReplacement.redo(document, to: next, in: database)
+        }
+    }
+
+    private func updatePDFVersion(
+        status: String,
+        apply: @escaping @Sendable (Document, Database) throws -> (document: Document, manager: PDFDocumentManager)
+    ) {
         guard let document = activeDocument, document.documentType == "pdf", pdfUpdateStatus == nil else { return }
         let sourceDatabase = database
         let window = NSApp.keyWindow ?? NSApp.mainWindow
         Task {
-            await updatePDF(for: document, in: sourceDatabase, window: window, status: "Restoring PDF…") {
-                try PDFDocumentReplacement.restore(document, to: previous, in: sourceDatabase)
+            await updatePDF(for: document, in: sourceDatabase, window: window, status: status) {
+                try apply(document, sourceDatabase)
             }
         }
     }
@@ -3807,8 +3822,9 @@ struct StudyWorkspaceView: View {
                     }
                 },
                 onReplacePDF: onReplacePDF,
-                onFindPreviousPDF: { await model.findPreviousPDF() },
+                onFindPDFReplacementHistory: { await model.findPDFReplacementHistory() },
                 onRestorePreviousPDF: { model.restorePreviousPDF($0) },
+                onRedoPDFReplacement: { model.redoPDFReplacement($0) },
                 onCleanPageNumbers: { [weak model] in model?.cleanExistingNotePageNumbers() },
                 onOpenBibliography: { bibliographyDocument = model.activeDocument }
             )
