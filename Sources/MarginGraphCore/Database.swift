@@ -163,7 +163,7 @@ public final class Database: @unchecked Sendable {
         }
     }
 
-    private static let currentSchemaVersion: Int32 = 12
+    private static let currentSchemaVersion: Int32 = 13
 
     private func initializeSchema() throws {
         var version: Int32 = 0
@@ -207,7 +207,10 @@ public final class Database: @unchecked Sendable {
         if try !hasColumn("rich_comments", in: "cards") {
             try execute("ALTER TABLE cards ADD COLUMN rich_comments TEXT;")
         }
-        try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
+        try transaction {
+            try createPDFReplacementHistory()
+            try execute("PRAGMA user_version = \(Self.currentSchemaVersion);")
+        }
     }
 
     private func initializeLegacySchema(from version: Int32) throws {
@@ -508,10 +511,7 @@ public final class Database: @unchecked Sendable {
     public func insertDocument(_ document: Document, deduplicateByTitle: Bool = true) throws {
         var doc = document
         // An explicit import can restore a previously retired source; discovery skips it.
-        try withStatement("DELETE FROM retired_import_documents WHERE file_path = ?") { statement in
-            bind(URL(fileURLWithPath: document.filePath).standardizedFileURL.path, to: 1, in: statement)
-            try requireDone(statement)
-        }
+        try clearRetiredDocumentPath(document.filePath)
 
         // 1. Existing by MD5: preserve canonical ID and file path if incoming is empty
         if let existing = try getDocumentByMD5(md5: document.md5) {

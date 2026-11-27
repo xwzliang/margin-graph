@@ -90,6 +90,8 @@ public struct MarginNotePDFContainerView: View {
     public var onUpdateTypography: ((TypographyOptions) -> Void)?
     public var onImportHighlights: (() -> Void)?
     public var onReplacePDF: (() -> Void)?
+    public var onFindPreviousPDF: (() async -> URL?)?
+    public var onRestorePreviousPDF: ((URL) -> Void)?
     public var onOpenBibliography: (() -> Void)?
 
     @State private var hidesPageNumbers = false
@@ -106,6 +108,7 @@ public struct MarginNotePDFContainerView: View {
     @State private var showTableOfContentsPopover: Bool = false
     @State private var showTypographyPopover: Bool = false
     @State private var showMoreOptionsPopover: Bool = false
+    @State private var previousPDF: (current: URL, previous: URL)?
     @State private var tocButtonFrame: CGRect? = nil
     @State private var bookmarksButtonFrame: CGRect? = nil
     @State private var typographyButtonFrame: CGRect? = nil
@@ -154,6 +157,8 @@ public struct MarginNotePDFContainerView: View {
         onUpdateTypography: ((TypographyOptions) -> Void)? = nil,
         onImportHighlights: (() -> Void)? = nil,
         onReplacePDF: (() -> Void)? = nil,
+        onFindPreviousPDF: (() async -> URL?)? = nil,
+        onRestorePreviousPDF: ((URL) -> Void)? = nil,
         onCleanPageNumbers: (() -> Void)? = nil,
         onOpenBibliography: (() -> Void)? = nil
     ) {
@@ -192,6 +197,8 @@ public struct MarginNotePDFContainerView: View {
         self.onUpdateTypography = onUpdateTypography
         self.onImportHighlights = onImportHighlights
         self.onReplacePDF = onReplacePDF
+        self.onFindPreviousPDF = onFindPreviousPDF
+        self.onRestorePreviousPDF = onRestorePreviousPDF
         self.onOpenBibliography = onOpenBibliography
         self.initialPageIndex = initialPageIndex
         self.onPageChanged = onPageChanged
@@ -795,8 +802,16 @@ public struct MarginNotePDFContainerView: View {
                                     }
                                     DispatchQueue.main.async { replace() }
                                 }
-                            }
+                            },
+                            onRestorePreviousPDF: restorePreviousPDFAction
                         )
+                        .task(id: manager.url) {
+                            previousPDF = nil
+                            let current = manager.url
+                            if let previous = await onFindPreviousPDF?(), !Task.isCancelled {
+                                previousPDF = (current, previous)
+                            }
+                        }
                     }
                     .transition(.opacity)
                     .zIndex(200)
@@ -949,6 +964,16 @@ public struct MarginNotePDFContainerView: View {
             withAnimation(.easeInOut(duration: 0.15)) {
                 showGoToPageDialog = true
             }
+        }
+    }
+
+    private var restorePreviousPDFAction: (() -> Void)? {
+        guard let previousPDF, previousPDF.current == manager.url, let onRestorePreviousPDF else { return nil }
+        return {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                showMoreOptionsPopover = false
+            }
+            DispatchQueue.main.async { onRestorePreviousPDF(previousPDF.previous) }
         }
     }
 

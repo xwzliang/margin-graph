@@ -8,6 +8,7 @@ public struct DocumentOptionsMenuView: View {
     public var onOpenReadingAppearance: () -> Void
     public var onImportHighlights: (() -> Void)?
     public var onReplacePDF: (() -> Void)?
+    public var onRestorePreviousPDF: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
 
@@ -17,7 +18,8 @@ public struct DocumentOptionsMenuView: View {
         onSelectDisplayMode: @escaping (PDFReaderDisplayMode) -> Void,
         onOpenReadingAppearance: @escaping () -> Void,
         onImportHighlights: (() -> Void)? = nil,
-        onReplacePDF: (() -> Void)? = nil
+        onReplacePDF: (() -> Void)? = nil,
+        onRestorePreviousPDF: (() -> Void)? = nil
     ) {
         self.isReflowable = isReflowable
         self.displayMode = displayMode
@@ -25,6 +27,7 @@ public struct DocumentOptionsMenuView: View {
         self.onOpenReadingAppearance = onOpenReadingAppearance
         self.onImportHighlights = onImportHighlights
         self.onReplacePDF = onReplacePDF
+        self.onRestorePreviousPDF = onRestorePreviousPDF
     }
 
     public var body: some View {
@@ -62,7 +65,7 @@ public struct DocumentOptionsMenuView: View {
                 onSelectDisplayMode(.singlePage)
             }
 
-            if onImportHighlights != nil || onReplacePDF != nil {
+            if onImportHighlights != nil || onReplacePDF != nil || onRestorePreviousPDF != nil {
                 Divider()
                     .padding(.vertical, 3)
                     .padding(.horizontal, 4)
@@ -86,6 +89,16 @@ public struct DocumentOptionsMenuView: View {
                     icon: "arrow.trianglehead.clockwise",
                     isSelected: false,
                     action: onReplacePDF
+                )
+            }
+
+            if let onRestorePreviousPDF {
+                menuRow(
+                    id: "restore_pdf",
+                    title: "Restore Previous PDF",
+                    icon: "arrow.uturn.backward",
+                    isSelected: false,
+                    action: onRestorePreviousPDF
                 )
             }
         }

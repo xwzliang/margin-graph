@@ -1346,3 +1346,14 @@ The study menu imports the file or directory selected in its open panel. Return 
   Update the path and page count in place, and retire the old path in the same
   transaction. Keep the document ID, book hash, folder, and all study data.
   Reload the PDFKit document and outline in the existing reader.
+
+- **Restoring a replacement**: Record each replacement's immediate predecessor
+  in the catalog transaction. On restore, consume that history entry, retire the
+  displaced path, and clear retirement for the reactivated path in the same
+  transaction. Revalidate page layout before switching. Recover older replacement
+  history only when the active PDF is a managed revision and a single retired
+  PDF with the same book hash identifies its predecessor. Keep history lookups
+  off the document-opening path.
+- **Discovery aliases**: Standardize both catalog and enumerated paths before
+  comparing them. A restored PDF stored under `/var` can otherwise be rediscovered
+  under `/private/var` as a second document.

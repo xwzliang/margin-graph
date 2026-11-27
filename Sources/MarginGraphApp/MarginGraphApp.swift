@@ -19,7 +19,7 @@ final class AppModel: ObservableObject {
     @Published var selectedMainTab: MainNavigationTab = .document
     let referenceWorkspace = ReferenceWorkspace()
     @Published var isExportingOrg = false
-    @Published var isReplacingPDF = false
+    @Published private(set) var pdfUpdateStatus: String?
     @Published var isInStudyWorkspace: Bool = false
     @Published var isOutlineVisible: Bool = false
     @Published var workspaceMode: WorkspaceViewMode = .splitView
@@ -1612,29 +1612,53 @@ final class AppModel: ObservableObject {
 
     func chooseReplacementPDF() {
         guard let document = activeDocument, document.documentType == "pdf",
-              !isReplacingPDF, let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+              pdfUpdateStatus == nil, let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
         let sourceDatabase = database
+        let destination = importedDocumentsDirectory
         let panel = NSOpenPanel()
         panel.title = "Replace PDF"
         panel.message = "Choose a PDF with the same pages in the same order so your notes and highlights stay aligned."
         panel.prompt = "Replace PDF"
         panel.allowedContentTypes = [.pdf]
         panel.beginSheetModal(for: window) { [weak self] response in
-            guard response == .OK, let source = panel.url, let self,
-                  self.database === sourceDatabase, self.activeDocument?.id == document.id else { return }
-            Task { await self.replacePDF(document, with: source, in: sourceDatabase, window: window) }
+            guard response == .OK, let source = panel.url else { return }
+            Task {
+                await self?.updatePDF(for: document, in: sourceDatabase, window: window, status: "Replacing PDF…") {
+                    try PDFDocumentReplacement.replace(document, with: source, in: sourceDatabase, managedDirectory: destination)
+                }
+            }
         }
     }
 
-    private func replacePDF(_ document: Document, with source: URL, in database: Database, window: NSWindow) async {
-        guard !isReplacingPDF else { return }
-        isReplacingPDF = true
-        defer { isReplacingPDF = false }
-        let destination = importedDocumentsDirectory
+    func findPreviousPDF() async -> URL? {
+        guard let document = activeDocument, document.documentType == "pdf" else { return nil }
+        let sourceDatabase = database
+        return await Task.detached {
+            try? PDFDocumentReplacement.previousURL(for: document, in: sourceDatabase)
+        }.value
+    }
+
+    func restorePreviousPDF(_ previous: URL) {
+        guard let document = activeDocument, document.documentType == "pdf", pdfUpdateStatus == nil else { return }
+        let sourceDatabase = database
+        let window = NSApp.keyWindow ?? NSApp.mainWindow
+        Task {
+            await updatePDF(for: document, in: sourceDatabase, window: window, status: "Restoring PDF…") {
+                try PDFDocumentReplacement.restore(document, to: previous, in: sourceDatabase)
+            }
+        }
+    }
+
+    private func updatePDF(
+        for document: Document, in database: Database, window: NSWindow?, status: String,
+        apply: @escaping @Sendable () throws -> (document: Document, manager: PDFDocumentManager)
+    ) async {
+        guard pdfUpdateStatus == nil, self.database === database,
+              activeDocument?.id == document.id, activeDocument?.filePath == document.filePath else { return }
+        pdfUpdateStatus = status
+        defer { pdfUpdateStatus = nil }
         do {
-            let result = try await Task.detached(priority: .userInitiated) {
-                try PDFDocumentReplacement.replace(document, with: source, in: database, managedDirectory: destination)
-            }.value
+            let result = try await Task.detached(priority: .userInitiated, operation: apply).value
             guard self.database === database else { return }
             if let index = documents.firstIndex(where: { $0.id == document.id }) {
                 documents[index].filePath = result.document.filePath
@@ -1651,9 +1675,13 @@ final class AppModel: ObservableObject {
             }
         } catch {
             let alert = NSAlert(error: error)
-            alert.messageText = "Unable to Replace PDF"
+            alert.messageText = "Unable to Update PDF"
             alert.informativeText = error.localizedDescription
-            alert.beginSheetModal(for: window, completionHandler: nil)
+            if let window {
+                alert.beginSheetModal(for: window, completionHandler: nil)
+            } else {
+                alert.runModal()
+            }
         }
     }
 
@@ -3779,6 +3807,8 @@ struct StudyWorkspaceView: View {
                     }
                 },
                 onReplacePDF: onReplacePDF,
+                onFindPreviousPDF: { await model.findPreviousPDF() },
+                onRestorePreviousPDF: { model.restorePreviousPDF($0) },
                 onCleanPageNumbers: { [weak model] in model?.cleanExistingNotePageNumbers() },
                 onOpenBibliography: { bibliographyDocument = model.activeDocument }
             )
@@ -4104,18 +4134,17 @@ struct MarginGraphApp: App {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                if model.isOpeningDatabase || model.isImportingMarginNote || model.isExportingDocument || model.isExportingOrg || model.isReplacingPDF {
+                if model.isOpeningDatabase || model.isImportingMarginNote || model.isExportingDocument || model.isExportingOrg || model.pdfUpdateStatus != nil {
                     ZStack {
                         Color.black.opacity(0.35)
                             .ignoresSafeArea()
                         VStack(spacing: 16) {
                             ProgressView()
                                 .controlSize(.large)
-                            Text(model.isReplacingPDF ? "Replacing PDF…" :
-                                 model.isExportingOrg ? "Preparing literature note…" :
+                            Text(model.pdfUpdateStatus ?? (model.isExportingOrg ? "Preparing literature note…" :
                                  model.isExportingDocument ? "Exporting PDF and notes…" :
                                  model.isImportingMarginNote ? "Importing MarginNote notes…" :
-                                 (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus))
+                                 (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus)))
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundColor(.white)
                         }

@@ -81,6 +81,13 @@ public extension Database {
         }
     }
 
+    internal func clearRetiredDocumentPath(_ path: String) throws {
+        try withStatement("DELETE FROM retired_import_documents WHERE file_path = ?") { statement in
+            bind(URL(fileURLWithPath: path).standardizedFileURL.path, to: 1, in: statement)
+            try requireDone(statement)
+        }
+    }
+
     func deleteDocument(id: UUID) throws {
         // First find the document's md5 to clean up associated cards
         if let doc = try allDocuments().first(where: { $0.id == id }) {
@@ -277,7 +284,7 @@ public extension Database {
             return paths
         }
         let existingDocsForScan = (try? allDocuments()) ?? []
-        var existingPaths = Set(existingDocsForScan.map(\.filePath))
+        var existingPaths = Set(existingDocsForScan.map { URL(fileURLWithPath: $0.filePath).standardizedFileURL.path })
         let existingMD5s = Set(existingDocsForScan.map(\.md5))
 
         for dir in searchDirectories where FileManager.default.fileExists(atPath: dir.path) {
@@ -297,7 +304,8 @@ public extension Database {
                 }
 
                 // If document is already registered for this physical file path, skip all heavy checks immediately!
-                if existingPaths.contains(fileURL.path) || retiredPaths.contains(fileURL.standardizedFileURL.path) {
+                let path = fileURL.standardizedFileURL.path
+                if existingPaths.contains(path) || retiredPaths.contains(path) {
                     continue
                 }
 
@@ -320,7 +328,7 @@ public extension Database {
 
                 // If already registered by MD5, update our cached set and skip
                 if let md5, existingMD5s.contains(md5) {
-                    existingPaths.insert(fileURL.path)
+                    existingPaths.insert(path)
                     continue
                 }
 
