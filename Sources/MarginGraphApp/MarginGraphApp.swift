@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     @Published var selectedMainTab: MainNavigationTab = .document
     let referenceWorkspace = ReferenceWorkspace()
     @Published var isExportingOrg = false
+    @Published var isReplacingPDF = false
     @Published var isInStudyWorkspace: Bool = false
     @Published var isOutlineVisible: Bool = false
     @Published var workspaceMode: WorkspaceViewMode = .splitView
@@ -1607,6 +1608,53 @@ final class AppModel: ObservableObject {
 
     func openPDF(url: URL, attachToTopic: Bool = false) {
         openDocument(url: url, attachToTopic: attachToTopic)
+    }
+
+    func chooseReplacementPDF() {
+        guard let document = activeDocument, document.documentType == "pdf",
+              !isReplacingPDF, let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        let sourceDatabase = database
+        let panel = NSOpenPanel()
+        panel.title = "Replace PDF"
+        panel.message = "Choose a PDF with the same pages in the same order so your notes and highlights stay aligned."
+        panel.prompt = "Replace PDF"
+        panel.allowedContentTypes = [.pdf]
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard response == .OK, let source = panel.url, let self,
+                  self.database === sourceDatabase, self.activeDocument?.id == document.id else { return }
+            Task { await self.replacePDF(document, with: source, in: sourceDatabase, window: window) }
+        }
+    }
+
+    private func replacePDF(_ document: Document, with source: URL, in database: Database, window: NSWindow) async {
+        guard !isReplacingPDF else { return }
+        isReplacingPDF = true
+        defer { isReplacingPDF = false }
+        let destination = importedDocumentsDirectory
+        do {
+            let result = try await Task.detached(priority: .userInitiated) {
+                try PDFDocumentReplacement.replace(document, with: source, in: database, managedDirectory: destination)
+            }.value
+            guard self.database === database else { return }
+            if let index = documents.firstIndex(where: { $0.id == document.id }) {
+                documents[index].filePath = result.document.filePath
+                documents[index].totalPages = result.document.totalPages
+            }
+            if let index = studyDocuments.firstIndex(where: { $0.id == document.id }) {
+                studyDocuments[index].filePath = result.document.filePath
+                studyDocuments[index].totalPages = result.document.totalPages
+            }
+            if activeDocument?.id == document.id {
+                activeDocument?.filePath = result.document.filePath
+                activeDocument?.totalPages = result.document.totalPages
+                manager = result.manager
+            }
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "Unable to Replace PDF"
+            alert.informativeText = error.localizedDescription
+            alert.beginSheetModal(for: window, completionHandler: nil)
+        }
     }
 
     func switchToDocument(_ document: Document, clearSelection: Bool = true) {
@@ -3633,6 +3681,9 @@ struct StudyWorkspaceView: View {
     @ViewBuilder
     private var pdfPane: some View {
         if let manager = model.manager {
+            let onReplacePDF: (() -> Void)? = model.activeDocument?.documentType == "pdf"
+                ? { model.chooseReplacementPDF() }
+                : nil
             MarginNotePDFContainerView(
                 manager: manager,
                 cards: model.activePDFCards,
@@ -3727,6 +3778,7 @@ struct StudyWorkspaceView: View {
                         model?.importPDFHighlightsManually(for: doc)
                     }
                 },
+                onReplacePDF: onReplacePDF,
                 onCleanPageNumbers: { [weak model] in model?.cleanExistingNotePageNumbers() },
                 onOpenBibliography: { bibliographyDocument = model.activeDocument }
             )
@@ -4052,14 +4104,15 @@ struct MarginGraphApp: App {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
 
-                if model.isOpeningDatabase || model.isImportingMarginNote || model.isExportingDocument || model.isExportingOrg {
+                if model.isOpeningDatabase || model.isImportingMarginNote || model.isExportingDocument || model.isExportingOrg || model.isReplacingPDF {
                     ZStack {
                         Color.black.opacity(0.35)
                             .ignoresSafeArea()
                         VStack(spacing: 16) {
                             ProgressView()
                                 .controlSize(.large)
-                            Text(model.isExportingOrg ? "Preparing literature note…" :
+                            Text(model.isReplacingPDF ? "Replacing PDF…" :
+                                 model.isExportingOrg ? "Preparing literature note…" :
                                  model.isExportingDocument ? "Exporting PDF and notes…" :
                                  model.isImportingMarginNote ? "Importing MarginNote notes…" :
                                  (model.databaseOpeningStatus.isEmpty ? "Opening library..." : model.databaseOpeningStatus))

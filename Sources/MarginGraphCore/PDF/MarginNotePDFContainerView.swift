@@ -89,6 +89,7 @@ public struct MarginNotePDFContainerView: View {
     public var onPositionChanged: ((Int, CGFloat) -> Void)?
     public var onUpdateTypography: ((TypographyOptions) -> Void)?
     public var onImportHighlights: (() -> Void)?
+    public var onReplacePDF: (() -> Void)?
     public var onOpenBibliography: (() -> Void)?
 
     @State private var hidesPageNumbers = false
@@ -152,6 +153,7 @@ public struct MarginNotePDFContainerView: View {
         onDeleteEmphasis: ((UUID, String, [HighlightRect]) -> Void)? = nil,
         onUpdateTypography: ((TypographyOptions) -> Void)? = nil,
         onImportHighlights: (() -> Void)? = nil,
+        onReplacePDF: (() -> Void)? = nil,
         onCleanPageNumbers: (() -> Void)? = nil,
         onOpenBibliography: (() -> Void)? = nil
     ) {
@@ -189,6 +191,7 @@ public struct MarginNotePDFContainerView: View {
         self.onDeleteEmphasis = onDeleteEmphasis
         self.onUpdateTypography = onUpdateTypography
         self.onImportHighlights = onImportHighlights
+        self.onReplacePDF = onReplacePDF
         self.onOpenBibliography = onOpenBibliography
         self.initialPageIndex = initialPageIndex
         self.onPageChanged = onPageChanged
@@ -784,6 +787,14 @@ public struct MarginNotePDFContainerView: View {
                                     }
                                     fn()
                                 }
+                            },
+                            onReplacePDF: onReplacePDF.map { replace in
+                                {
+                                    withAnimation(.easeInOut(duration: 0.15)) {
+                                        showMoreOptionsPopover = false
+                                    }
+                                    DispatchQueue.main.async { replace() }
+                                }
                             }
                         )
                     }
@@ -905,8 +916,10 @@ public struct MarginNotePDFContainerView: View {
             if hidesPageNumbers { onCleanPageNumbers?() }
         }
         .onAppear {
-            totalPageCount = manager.pageCount
             bookmarkedPages = bookmarks
+        }
+        .onChange(of: manager.pageCount, initial: true) { _, pageCount in
+            totalPageCount = pageCount
         }
         .onChange(of: bookmarks) { _, newBookmarks in
             bookmarkedPages = newBookmarks

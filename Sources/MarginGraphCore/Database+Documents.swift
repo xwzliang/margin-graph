@@ -64,17 +64,21 @@ public extension Database {
             topic.bookMD5List.contains(where: matches) || topic.lastDocumentMD5.map(matches) == true
         }) else { return false }
         if !doc.filePath.isEmpty {
-            try withStatement("INSERT OR REPLACE INTO retired_import_documents(file_path,md5) VALUES(?,?)") { statement in
-                bind(URL(fileURLWithPath: doc.filePath).standardizedFileURL.path, to: 1, in: statement)
-                bind(doc.md5, to: 2, in: statement)
-                try requireDone(statement)
-            }
+            try recordRetiredDocumentPath(doc.filePath, md5: doc.md5)
         }
         try withStatement("DELETE FROM documents WHERE id = ?") { statement in
             bind(id.uuidString, to: 1, in: statement)
             try requireDone(statement)
         }
         return true
+    }
+
+    internal func recordRetiredDocumentPath(_ path: String, md5: String) throws {
+        try withStatement("INSERT OR REPLACE INTO retired_import_documents(file_path,md5) VALUES(?,?)") { statement in
+            bind(URL(fileURLWithPath: path).standardizedFileURL.path, to: 1, in: statement)
+            bind(md5, to: 2, in: statement)
+            try requireDone(statement)
+        }
     }
 
     func deleteDocument(id: UUID) throws {
@@ -538,6 +542,8 @@ public extension Database {
             guard !doc.filePath.isEmpty else { continue }
             let docPath = doc.filePath
             let pathComponents = (docPath as NSString).pathComponents
+            // Managed PDF revisions keep the catalog folder of the original document.
+            guard !pathComponents.contains(PDFDocumentReplacement.directoryName) else { continue }
             var folderPath: String? = nil
 
             // 1. Check if the document path is within a package bundle (*.marginbackupall or *.marginpkg)

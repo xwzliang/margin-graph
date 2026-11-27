@@ -7,6 +7,7 @@ public struct DocumentOptionsMenuView: View {
     public var onSelectDisplayMode: (PDFReaderDisplayMode) -> Void
     public var onOpenReadingAppearance: () -> Void
     public var onImportHighlights: (() -> Void)?
+    public var onReplacePDF: (() -> Void)?
 
     @State private var hoveredItem: String? = nil
 
@@ -15,13 +16,15 @@ public struct DocumentOptionsMenuView: View {
         displayMode: PDFReaderDisplayMode,
         onSelectDisplayMode: @escaping (PDFReaderDisplayMode) -> Void,
         onOpenReadingAppearance: @escaping () -> Void,
-        onImportHighlights: (() -> Void)? = nil
+        onImportHighlights: (() -> Void)? = nil,
+        onReplacePDF: (() -> Void)? = nil
     ) {
         self.isReflowable = isReflowable
         self.displayMode = displayMode
         self.onSelectDisplayMode = onSelectDisplayMode
         self.onOpenReadingAppearance = onOpenReadingAppearance
         self.onImportHighlights = onImportHighlights
+        self.onReplacePDF = onReplacePDF
     }
 
     public var body: some View {
@@ -59,11 +62,13 @@ public struct DocumentOptionsMenuView: View {
                 onSelectDisplayMode(.singlePage)
             }
 
-            if let onImportHighlights {
+            if onImportHighlights != nil || onReplacePDF != nil {
                 Divider()
                     .padding(.vertical, 3)
                     .padding(.horizontal, 4)
+            }
 
+            if let onImportHighlights {
                 menuRow(
                     id: "import_highlights",
                     title: "Import PDF Highlights…",
@@ -72,6 +77,16 @@ public struct DocumentOptionsMenuView: View {
                 ) {
                     onImportHighlights()
                 }
+            }
+
+            if let onReplacePDF {
+                menuRow(
+                    id: "replace_pdf",
+                    title: "Replace PDF…",
+                    icon: "arrow.trianglehead.clockwise",
+                    isSelected: false,
+                    action: onReplacePDF
+                )
             }
         }
         .padding(6)

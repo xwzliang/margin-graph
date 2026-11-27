@@ -1335,3 +1335,14 @@ The study menu imports the file or directory selected in its open panel. Return 
   the search bar and keep picker key handling on its input field.
 
 - **Markdown and OPML hierarchy**: A filtered notebook snapshot can omit a card’s parent. Promote that card to a root. In a parent cycle, cut one edge within the cycle so the attached branches keep their nesting. Verify every supplied card is emitted once.
+
+## Replacing a Reader PDF with Existing Notes
+
+- **Trap**: Reimporting a revised PDF can compute a new book hash, detach page
+  excerpts or bookmarks, or let a later library scan rediscover the old file.
+  The catalog's page total can also differ from the active PDF.
+- **Rule**: Compare page count, crop bounds, and rotation against the existing
+  PDF. Store the revised bytes in a managed directory skipped by discovery.
+  Update the path and page count in place, and retire the old path in the same
+  transaction. Keep the document ID, book hash, folder, and all study data.
+  Reload the PDFKit document and outline in the existing reader.
